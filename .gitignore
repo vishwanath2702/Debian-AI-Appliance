@@ -1,0 +1,25 @@
+# Rust
+/engine/target/
+
+# Build artifacts and archives
+*.iso
+*.img
+*.qcow2
+*.tar
+*.tar.gz
+*.zip
+
+# Temporary and backup files
+*.orig
+*.rej
+*.bak
+*~
+.daia-shellcheck-backup-*/
+
+# Virtual machine firmware state
+OVMF_VARS.fd
+
+# Editors and operating systems
+.vscode/
+.idea/
+.DS_Store

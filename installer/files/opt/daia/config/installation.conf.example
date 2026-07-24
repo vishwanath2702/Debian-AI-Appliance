@@ -1,0 +1,132 @@
+#!/bin/bash
+#
+# DAIA Installation Configuration
+#
+# This file records user intent.
+# It may be produced by the installation wizard or supplied for
+# unattended installation.
+#
+# Installation modules must consume validated values and must not
+# prompt the user directly.
+#
+
+############################################################
+# Configuration Metadata
+############################################################
+
+DAIA_CONFIG_VERSION="1"
+
+############################################################
+# Installation Profile
+############################################################
+
+# Supported values:
+# minimal
+# standard
+# developer
+# custom
+
+DAIA_INSTALL_PROFILE="standard"
+
+############################################################
+# Desktop Environment
+############################################################
+
+# Supported values:
+# xfce
+# kde
+# gnome
+# cinnamon
+# mate
+# lxqt
+# none
+
+DAIA_DESKTOP="xfce"
+
+############################################################
+# Container Platform
+############################################################
+
+# Supported values:
+# docker
+# podman
+# none
+
+DAIA_CONTAINER_PLATFORM="docker"
+
+############################################################
+# AI Engine
+############################################################
+
+# Supported values:
+# ollama
+# docker-model-runner
+# llama-cpp
+# vllm
+
+DAIA_AI_ENGINE="ollama"
+
+# Supported values depend on the selected engine:
+# native
+# container
+
+DAIA_AI_RUNTIME="container"
+
+############################################################
+# Model Provider
+############################################################
+
+# Supported values:
+# ollama-library
+# huggingface
+# local
+# none
+
+DAIA_MODEL_PROVIDER="ollama-library"
+
+############################################################
+# AI Interface
+############################################################
+
+# Supported values:
+# open-webui
+# librechat
+# anythingllm
+# lobechat
+# none
+
+DAIA_AI_INTERFACE="open-webui"
+
+############################################################
+# AI Models
+############################################################
+
+DAIA_MODELS=()
+
+############################################################
+# Optional Services
+############################################################
+
+DAIA_OPTIONAL_SERVICES=()
+
+############################################################
+# Developer Tools
+############################################################
+
+DAIA_DEVELOPER_TOOLS=()
+
+############################################################
+# Network and Access
+############################################################
+
+DAIA_ENGINE_BIND_ADDRESS="127.0.0.1"
+DAIA_ENGINE_PORT="11434"
+
+DAIA_INTERFACE_BIND_ADDRESS="0.0.0.0"
+DAIA_INTERFACE_PORT="3000"
+
+# Supported values:
+# local
+# lan
+
+DAIA_ACCESS_SCOPE="lan"

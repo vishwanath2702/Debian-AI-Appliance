@@ -1,0 +1,15 @@
+[Unit]
+Description=DAIA first-boot initialization
+Wants=network-online.target
+After=network-online.target
+ConditionPathExists=!/var/lib/daia/firstboot-complete
+
+[Service]
+Type=oneshot
+ExecStart=/opt/daia/bootstrap.sh
+RemainAfterExit=yes
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

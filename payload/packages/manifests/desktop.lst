@@ -1,0 +1,47 @@
+# ==========================================================
+# DAIA - Debian AI Assistant
+#
+# Manifest   : Desktop Foundation
+# Milestone  : M4.1
+# Codename   : Pragna
+#
+# Purpose
+# -------
+# Install the XFCE desktop foundation and the supporting
+# services required for a dependable graphical workstation.
+#
+# Format
+# ------
+# - One package per line.
+# - Blank lines are ignored.
+# - Lines beginning with # are comments.
+# ==========================================================
+
+# XFCE desktop environment
+xfce4
+xfce4-goodies
+
+# X.Org graphical display system
+xserver-xorg
+
+# Display manager and graphical login screen
+lightdm
+lightdm-gtk-greeter
+
+# Desktop session integration
+dbus-x11
+
+# Network management
+network-manager
+network-manager-gnome
+
+# Privilege-elevation authentication dialogs
+mate-polkit
+
+# Removable media and virtual filesystem integration
+gvfs
+gvfs-backends
+udisks2
+
+# Laptop and power-management support
+upower

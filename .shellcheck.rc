@@ -1,0 +1,7 @@
+# Follow sourced files
+external-sources=true
+
+# Search relative to the script being checked
+source-path=SCRIPTDIR
+source-path=SCRIPTDIR/..
+source-path=SCRIPTDIR/../hardware
