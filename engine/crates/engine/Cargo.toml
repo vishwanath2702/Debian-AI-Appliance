@@ -7,6 +7,10 @@ license.workspace = true
 publish.workspace = true
 
 [dependencies]
+model = { path = "../model" }
+planner = { path = "../planner" }
+registry = { path = "../registry" }
+resolver = { path = "../resolver" }
 
 [lints]
 workspace = true

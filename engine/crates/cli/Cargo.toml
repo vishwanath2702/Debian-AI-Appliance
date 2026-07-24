@@ -1,3 +1,7 @@
+[[bin]]
+name = "daia"
+path = "src/main.rs"
+
 [package]
 name = "cli"
 version.workspace = true
@@ -7,6 +11,9 @@ license.workspace = true
 publish.workspace = true
 
 [dependencies]
+engine = { path = "../engine" }
+model = { path = "../model" }
+registry = { path = "../registry" }
 
 [lints]
 workspace = true
