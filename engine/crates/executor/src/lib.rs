@@ -2,6 +2,19 @@
 
 use model::{Action, Plan};
 
+/// Error returned when plan execution fails.
+#[derive(Debug)]
+pub struct ExecuteError<E> {
+    /// Zero-based index of the failed step.
+    pub step: usize,
+
+    /// Action that failed.
+    pub action: Action,
+
+    /// Error returned by the action runner.
+    pub source: E,
+}
+
 /// Executes one action from a plan.
 pub trait ActionRunner {
     /// Error returned when an action cannot be executed.
@@ -45,9 +58,15 @@ where
     /// # Errors
     ///
     /// Returns the first error produced by the runner.
-    pub fn execute(&mut self, plan: &Plan) -> Result<(), R::Error> {
-        for step in &plan.steps {
-            self.runner.run(&step.action)?;
+    pub fn execute(&mut self, plan: &Plan) -> Result<(), ExecuteError<R::Error>> {
+        for (step, plan_step) in plan.steps.iter().enumerate() {
+            self.runner
+                .run(&plan_step.action)
+                .map_err(|source| ExecuteError {
+                    step,
+                    action: plan_step.action.clone(),
+                    source,
+                })?;
         }
 
         Ok(())
@@ -71,6 +90,16 @@ mod tests {
         fn run(&mut self, action: &Action) -> Result<(), Self::Error> {
             self.actions.push(action.clone());
             Ok(())
+        }
+    }
+
+    struct FailingRunner;
+
+    impl ActionRunner for FailingRunner {
+        type Error = &'static str;
+
+        fn run(&mut self, _: &Action) -> Result<(), Self::Error> {
+            Err("boom")
         }
     }
 
@@ -110,5 +139,23 @@ mod tests {
         executor.execute(&plan).expect("empty plan should execute");
 
         assert!(executor.runner().actions.is_empty());
+    }
+
+    #[test]
+    fn returns_execution_context_when_runner_fails() {
+        let plan = plan_with_steps(vec![PlanStep::new(Action::InstallPackageManifest(
+            "desktop".to_owned(),
+        ))]);
+
+        let mut executor = Executor::new(FailingRunner);
+
+        let error = executor.execute(&plan).expect_err("execution should fail");
+
+        assert_eq!(error.step, 0);
+        assert_eq!(
+            error.action,
+            Action::InstallPackageManifest("desktop".to_owned())
+        );
+        assert_eq!(error.source, "boom");
     }
 }
