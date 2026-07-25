@@ -1,6 +1,9 @@
 //! Execution of planned system actions.
-use model::{Action, Plan};
+use std::fs;
+use std::io;
 use std::path::PathBuf;
+
+use model::{Action, Plan};
 
 /// Error returned when plan execution fails.
 #[derive(Debug)]
@@ -38,15 +41,26 @@ impl RootfsRunner {
     pub const fn new(rootfs: PathBuf) -> Self {
         Self { rootfs }
     }
-}
 
+    /// Ensures the target root filesystem directory exists.
+    ///
+    /// # Errors
+    ///
+    /// Returns any I/O error encountered while creating the directory.
+    pub fn prepare(&self) -> io::Result<()> {
+        fs::create_dir_all(&self.rootfs)?;
+        Ok(())
+    }
+}
 impl ActionRunner for RootfsRunner {
     type Error = std::convert::Infallible;
+
     fn run(&mut self, action: &Action) -> Result<(), Self::Error> {
         println!(
             "executing action in rootfs {}: {action:?}",
             self.rootfs.display()
         );
+
         Ok(())
     }
 }
@@ -98,10 +112,11 @@ where
 
 #[cfg(test)]
 mod tests {
-    use model::{Action, Capability, Plan, PlanStep, ProviderId};
-    use std::path::PathBuf;
-
     use super::{ActionRunner, Executor, RootfsRunner};
+    use model::{Action, Capability, Plan, PlanStep, ProviderId};
+    use std::fs;
+    use std::path::PathBuf;
+    use std::time::{SystemTime, UNIX_EPOCH};
     #[derive(Default)]
     struct RecordingRunner {
         actions: Vec<Action>,
@@ -188,5 +203,23 @@ mod tests {
         runner
             .run(&Action::InstallPackageManifest("desktop".to_owned()))
             .expect("rootfs runner should succeed");
+    }
+
+    #[test]
+    fn prepare_creates_rootfs_directory() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+
+        let path = std::env::temp_dir().join(format!("daia-rootfs-{unique}"));
+
+        let runner = RootfsRunner::new(path.clone());
+
+        runner.prepare().expect("prepare should succeed");
+
+        assert!(path.is_dir());
+
+        fs::remove_dir_all(path).unwrap();
     }
 }
