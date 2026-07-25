@@ -145,6 +145,99 @@ steps:
   - enable_service: display-manager
 ";
 
+    const SSH_PROVIDER_YAML: &str = r"
+id: ssh
+capability: remote-access
+steps:
+  - install_package_manifest: ssh
+  - enable_service: ssh
+";
+
+    #[test]
+    fn directory_loads_multiple_providers() {
+        let directory = tempfile::tempdir().expect("temporary directory should exist");
+
+        fs::write(directory.path().join("desktop.yaml"), DESKTOP_PROVIDER_YAML)
+            .expect("desktop provider YAML should be written");
+
+        fs::write(directory.path().join("ssh.yml"), SSH_PROVIDER_YAML)
+            .expect("SSH provider YAML should be written");
+
+        let registry =
+            Registry::from_directory(directory.path()).expect("provider directory should load");
+
+        assert_eq!(registry.providers().len(), 2);
+
+        let desktop = registry
+            .provider_for(&Capability::new("desktop"))
+            .expect("desktop provider should exist");
+
+        assert_eq!(desktop.id, ProviderId::new("desktop"));
+
+        let ssh = registry
+            .provider_for(&Capability::new("remote-access"))
+            .expect("SSH provider should exist");
+
+        assert_eq!(ssh.id, ProviderId::new("ssh"));
+        assert_eq!(
+            ssh.steps,
+            vec![
+                PlanStep::new(Action::InstallPackageManifest("ssh".to_owned(),)),
+                PlanStep::new(Action::EnableService("ssh".to_owned())),
+            ]
+        );
+    }
+
+    #[test]
+    fn malformed_provider_in_directory_returns_parse_error() {
+        let directory = tempfile::tempdir().expect("temporary directory should exist");
+
+        fs::write(
+            directory.path().join("desktop.yaml"),
+            "id: desktop\ncapability: [",
+        )
+        .unwrap();
+
+        let error =
+            Registry::from_directory(directory.path()).expect_err("invalid YAML should fail");
+
+        assert!(matches!(error, RegistryError::Parse(_)));
+    }
+
+    #[test]
+    fn missing_directory_returns_io_error() {
+        let directory = tempfile::tempdir().expect("temporary directory should exist");
+
+        let path = directory.path().join("does-not-exist");
+
+        let error = Registry::from_directory(path).expect_err("missing directory should fail");
+
+        assert!(matches!(error, RegistryError::Io(_)));
+    }
+
+    #[test]
+    fn non_yaml_files_are_ignored() {
+        let directory = tempfile::tempdir().expect("temporary directory should exist");
+
+        fs::write(directory.path().join("README.md"), "# Example").unwrap();
+
+        fs::write(directory.path().join("desktop.yaml"), DESKTOP_PROVIDER_YAML).unwrap();
+
+        let registry = Registry::from_directory(directory.path()).expect("directory should load");
+
+        assert_eq!(registry, Registry::built_in());
+    }
+
+    #[test]
+    fn empty_directory_creates_empty_registry() {
+        let directory = tempfile::tempdir().expect("temporary directory should exist");
+
+        let registry =
+            Registry::from_directory(directory.path()).expect("empty directory should load");
+
+        assert!(registry.providers().is_empty());
+    }
+
     #[test]
     fn registry_can_be_created_from_directory() {
         let directory = tempfile::tempdir().expect("temporary directory should exist");
