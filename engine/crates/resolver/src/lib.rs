@@ -68,6 +68,7 @@ mod tests {
                 PlanStep::new(Action::EnableService("display-manager".to_owned())),
             ],
         }])
+        .expect("desktop test registry should be valid")
     }
 
     #[test]
@@ -110,8 +111,8 @@ mod tests {
             steps: Vec::<PlanStep>::new(),
         };
 
-        let registry = Registry::from_providers(vec![provider.clone()]);
-
+        let registry = Registry::from_providers(vec![provider.clone()])
+            .expect("test registry should be valid");
         let resolver = Resolver::new(registry);
 
         let resolved_provider = resolver

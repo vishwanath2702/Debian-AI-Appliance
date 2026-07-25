@@ -4,6 +4,8 @@ use std::{
     io,
 };
 
+use model::{CapabilityId, ProviderId};
+
 /// Error returned while loading provider registry data.
 #[derive(Debug)]
 pub enum RegistryError {
@@ -15,6 +17,12 @@ pub enum RegistryError {
 
     /// The provider document parsed successfully but contained invalid data.
     InvalidProvider(String),
+
+    /// More than one provider used the same provider identifier.
+    DuplicateProviderId(ProviderId),
+
+    /// More than one provider supplied the same capability.
+    DuplicateCapability(CapabilityId),
 }
 
 impl Display for RegistryError {
@@ -29,6 +37,12 @@ impl Display for RegistryError {
             Self::InvalidProvider(message) => {
                 write!(formatter, "invalid provider: {message}")
             }
+            Self::DuplicateProviderId(provider_id) => {
+                write!(formatter, "duplicate provider id: {provider_id}")
+            }
+            Self::DuplicateCapability(capability_id) => {
+                write!(formatter, "duplicate capability: {capability_id}")
+            }
         }
     }
 }
@@ -38,7 +52,9 @@ impl Error for RegistryError {
         match self {
             Self::Io(error) => Some(error),
             Self::Parse(error) => Some(error),
-            Self::InvalidProvider(_) => None,
+            Self::InvalidProvider(_)
+            | Self::DuplicateProviderId(_)
+            | Self::DuplicateCapability(_) => None,
         }
     }
 }
@@ -58,6 +74,8 @@ impl From<serde_yaml::Error> for RegistryError {
 #[cfg(test)]
 mod tests {
     use std::io;
+
+    use model::{CapabilityId, ProviderId};
 
     use super::RegistryError;
 
@@ -95,5 +113,19 @@ mod tests {
             error.to_string(),
             "invalid provider: provider id must not be empty"
         );
+    }
+
+    #[test]
+    fn formats_duplicate_provider_id_error() {
+        let error = RegistryError::DuplicateProviderId(ProviderId::new("desktop"));
+
+        assert_eq!(error.to_string(), "duplicate provider id: desktop");
+    }
+
+    #[test]
+    fn formats_duplicate_capability_error() {
+        let error = RegistryError::DuplicateCapability(CapabilityId::new("desktop"));
+
+        assert_eq!(error.to_string(), "duplicate capability: desktop");
     }
 }

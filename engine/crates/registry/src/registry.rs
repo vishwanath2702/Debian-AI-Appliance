@@ -1,4 +1,4 @@
-use std::{fs, path::Path};
+use std::{collections::HashSet, fs, path::Path};
 
 use model::{Capability, CapabilityId, Provider};
 
@@ -20,11 +20,32 @@ impl Registry {
     }
 
     /// Creates a registry from an existing collection of providers.
-    #[must_use]
-    pub const fn from_providers(providers: Vec<Provider>) -> Self {
-        Self { providers }
-    }
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RegistryError::DuplicateProviderId`] if two providers use the
+    /// same identifier.
+    ///
+    /// Returns [`RegistryError::DuplicateCapability`] if two providers supply the
+    /// same capability.
+    pub fn from_providers(providers: Vec<Provider>) -> Result<Self, RegistryError> {
+        let mut provider_ids = HashSet::new();
+        let mut capability_ids = HashSet::new();
 
+        for provider in &providers {
+            if !provider_ids.insert(provider.id.clone()) {
+                return Err(RegistryError::DuplicateProviderId(provider.id.clone()));
+            }
+
+            if !capability_ids.insert(provider.capability.clone()) {
+                return Err(RegistryError::DuplicateCapability(
+                    provider.capability.clone(),
+                ));
+            }
+        }
+
+        Ok(Self { providers })
+    }
     /// Creates a registry from one YAML provider document.
     ///
     /// # Errors
@@ -34,7 +55,7 @@ impl Registry {
     pub fn from_yaml_str(yaml: &str) -> Result<Self, RegistryError> {
         let provider = provider_from_yaml(yaml)?;
 
-        Ok(Self::from_providers(vec![provider]))
+        Self::from_providers(vec![provider])
     }
 
     /// Creates a registry from one provider YAML file.
@@ -83,7 +104,7 @@ impl Registry {
             providers.extend(registry.providers);
         }
 
-        Ok(Self::from_providers(providers))
+        Self::from_providers(providers)
     }
 
     /// Returns every provider in the registry.
@@ -253,7 +274,8 @@ steps:
 
     #[test]
     fn provider_for_finds_matching_provider() {
-        let registry = Registry::from_providers(vec![valid_provider()]);
+        let registry =
+            Registry::from_providers(vec![valid_provider()]).expect("valid provider registry");
         let capability = Capability::new("desktop");
 
         let provider = registry
@@ -265,7 +287,8 @@ steps:
 
     #[test]
     fn provider_for_id_finds_matching_provider() {
-        let registry = Registry::from_providers(vec![valid_provider()]);
+        let registry =
+            Registry::from_providers(vec![valid_provider()]).expect("valid provider registry");
         let capability_id = CapabilityId::new("desktop");
 
         let provider = registry
@@ -277,7 +300,8 @@ steps:
 
     #[test]
     fn provider_for_returns_none_for_unknown_capability() {
-        let registry = Registry::from_providers(vec![valid_provider()]);
+        let registry =
+            Registry::from_providers(vec![valid_provider()]).expect("valid provider registry");
         let capability = Capability::new("does-not-exist");
 
         assert!(registry.provider_for(&capability).is_none());
@@ -290,7 +314,8 @@ steps:
             steps: Vec::new(),
         };
 
-        let registry = Registry::from_providers(vec![provider.clone()]);
+        let registry =
+            Registry::from_providers(vec![provider.clone()]).expect("valid provider registry");
 
         assert_eq!(registry.providers(), &[provider]);
     }
