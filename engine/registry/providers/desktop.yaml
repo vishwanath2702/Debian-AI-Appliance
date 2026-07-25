@@ -1,0 +1,5 @@
+id: desktop
+capability: desktop
+steps:
+  - install_package_manifest: desktop
+  - enable_service: display-manager

@@ -71,10 +71,19 @@ mod tests {
     use resolver::{ResolveError, Resolver};
 
     use super::{PlanError, Planner};
-
+    fn desktop_registry() -> Registry {
+        Registry::from_providers(vec![Provider {
+            id: ProviderId::new("desktop"),
+            capability: CapabilityId::new("desktop"),
+            steps: vec![
+                PlanStep::new(Action::InstallPackageManifest("desktop".to_owned())),
+                PlanStep::new(Action::EnableService("display-manager".to_owned())),
+            ],
+        }])
+    }
     #[test]
     fn builds_plan_for_builtin_provider() {
-        let registry = Registry::built_in();
+        let registry = desktop_registry();
         let resolver = Resolver::new(registry);
         let planner = Planner::new(resolver);
 
@@ -96,7 +105,7 @@ mod tests {
 
     #[test]
     fn returns_error_for_unknown_capability() {
-        let registry = Registry::built_in();
+        let registry = desktop_registry();
         let resolver = Resolver::new(registry);
         let planner = Planner::new(resolver);
 

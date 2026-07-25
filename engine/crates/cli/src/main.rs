@@ -6,6 +6,8 @@ use std::process::ExitCode;
 use engine::Engine;
 use model::Capability;
 
+mod provider_registry;
+
 fn main() -> ExitCode {
     let mut args = env::args();
 
@@ -21,7 +23,15 @@ fn main() -> ExitCode {
         return ExitCode::FAILURE;
     };
 
-    let engine = Engine::new();
+    let registry = match provider_registry::load() {
+        Ok(registry) => registry,
+        Err(error) => {
+            eprintln!("Error loading provider registry: {error}");
+            return ExitCode::FAILURE;
+        }
+    };
+
+    let engine = Engine::from_registry(registry);
 
     match engine.plan(&Capability::new(capability_name)) {
         Ok(plan) => {

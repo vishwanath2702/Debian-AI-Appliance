@@ -1,9 +1,7 @@
 //! Provider resolution for the DAIA engine.
-
-use std::fmt;
-
 use model::{Capability, Provider};
 use registry::Registry;
+use std::fmt;
 
 /// Errors that can occur during provider resolution.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -56,15 +54,25 @@ impl Resolver {
 
 #[cfg(test)]
 mod tests {
-    use model::{Capability, CapabilityId, PlanStep, Provider, ProviderId};
+    use model::{Action, Capability, CapabilityId, PlanStep, Provider, ProviderId};
     use registry::Registry;
 
     use super::{ResolveError, Resolver};
 
+    fn desktop_registry() -> Registry {
+        Registry::from_providers(vec![Provider {
+            id: ProviderId::new("desktop"),
+            capability: CapabilityId::new("desktop"),
+            steps: vec![
+                PlanStep::new(Action::InstallPackageManifest("desktop".to_owned())),
+                PlanStep::new(Action::EnableService("display-manager".to_owned())),
+            ],
+        }])
+    }
+
     #[test]
     fn resolves_existing_provider() {
-        let resolver = Resolver::new(Registry::built_in());
-
+        let resolver = Resolver::new(desktop_registry());
         let provider = resolver
             .resolve(&Capability::new("desktop"))
             .expect("desktop provider should resolve");
@@ -75,8 +83,7 @@ mod tests {
 
     #[test]
     fn returns_error_for_unknown_capability() {
-        let resolver = Resolver::new(Registry::built_in());
-
+        let resolver = Resolver::new(desktop_registry());
         let result = resolver.resolve(&Capability::new("unknown"));
 
         assert_eq!(

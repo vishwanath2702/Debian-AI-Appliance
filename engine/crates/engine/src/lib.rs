@@ -12,17 +12,7 @@ pub struct Engine {
 }
 
 impl Engine {
-    /// Creates an engine using the built-in provider registry.
-    #[must_use]
-    pub fn new() -> Self {
-        let registry = Registry::built_in();
-        let resolver = Resolver::new(registry);
-        let planner = Planner::new(resolver);
-
-        Self { planner }
-    }
-
-    /// Creates an engine from a custom registry.
+    /// Creates an engine from a provider registry.
     #[must_use]
     pub const fn from_registry(registry: Registry) -> Self {
         let resolver = Resolver::new(registry);
@@ -42,12 +32,6 @@ impl Engine {
     }
 }
 
-impl Default for Engine {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use model::{Action, Capability, CapabilityId, PlanStep, Provider, ProviderId};
@@ -55,9 +39,20 @@ mod tests {
 
     use super::Engine;
 
+    fn desktop_registry() -> Registry {
+        Registry::from_providers(vec![Provider {
+            id: ProviderId::new("desktop"),
+            capability: CapabilityId::new("desktop"),
+            steps: vec![
+                PlanStep::new(Action::InstallPackageManifest("desktop".to_owned())),
+                PlanStep::new(Action::EnableService("display-manager".to_owned())),
+            ],
+        }])
+    }
+
     #[test]
-    fn builds_builtin_desktop_plan() {
-        let engine = Engine::new();
+    fn builds_desktop_plan() {
+        let engine = Engine::from_registry(desktop_registry());
 
         let plan = engine
             .plan(&Capability::new("desktop"))
@@ -69,8 +64,8 @@ mod tests {
         assert_eq!(
             plan.steps,
             vec![
-                PlanStep::new(Action::InstallPackageManifest("desktop".to_owned(),)),
-                PlanStep::new(Action::EnableService("display-manager".to_owned(),)),
+                PlanStep::new(Action::InstallPackageManifest("desktop".to_owned())),
+                PlanStep::new(Action::EnableService("display-manager".to_owned())),
             ]
         );
     }
@@ -93,13 +88,13 @@ mod tests {
         assert_eq!(plan.provider, ProviderId::new("custom"));
         assert_eq!(
             plan.steps,
-            vec![PlanStep::new(Action::EnableService("customd".to_owned(),))]
+            vec![PlanStep::new(Action::EnableService("customd".to_owned()))]
         );
     }
 
     #[test]
     fn returns_error_for_unknown_capability() {
-        let engine = Engine::new();
+        let engine = Engine::from_registry(desktop_registry());
 
         assert!(engine.plan(&Capability::new("does-not-exist")).is_err());
     }

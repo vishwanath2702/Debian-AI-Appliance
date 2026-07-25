@@ -1,6 +1,6 @@
 use std::{fs, path::Path};
 
-use model::{Action, Capability, CapabilityId, PlanStep, Provider, ProviderId};
+use model::{Capability, CapabilityId, Provider};
 
 use crate::{RegistryError, dto::provider_from_yaml};
 
@@ -16,14 +16,6 @@ impl Registry {
     pub const fn new() -> Self {
         Self {
             providers: Vec::new(),
-        }
-    }
-
-    /// Creates a registry containing the built-in DAIA providers.
-    #[must_use]
-    pub fn built_in() -> Self {
-        Self {
-            providers: vec![desktop_provider()],
         }
     }
 
@@ -115,23 +107,10 @@ impl Registry {
     }
 }
 
-/// Creates the built-in desktop provider.
-fn desktop_provider() -> Provider {
-    Provider {
-        id: ProviderId::new("desktop"),
-        capability: CapabilityId::new("desktop"),
-        steps: vec![
-            PlanStep::new(Action::InstallPackageManifest("desktop".to_owned())),
-            PlanStep::new(Action::EnableService("display-manager".to_owned())),
-        ],
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    use std::fs;
-
     use model::{Action, Capability, CapabilityId, PlanStep, Provider, ProviderId};
+    use std::{fs, path::Path};
 
     use crate::RegistryError;
 
@@ -152,6 +131,28 @@ steps:
   - install_package_manifest: ssh
   - enable_service: ssh
 ";
+
+    #[test]
+    fn repository_provider_directory_contains_desktop_provider() {
+        let provider_directory =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../registry/providers");
+
+        let registry = Registry::from_directory(provider_directory)
+            .expect("repository provider directory should load");
+
+        let provider = registry
+            .provider_for(&Capability::new("desktop"))
+            .expect("desktop provider should exist");
+
+        assert_eq!(provider.id, ProviderId::new("desktop"));
+        assert_eq!(
+            provider.steps,
+            vec![
+                PlanStep::new(Action::InstallPackageManifest("desktop".to_owned(),)),
+                PlanStep::new(Action::EnableService("display-manager".to_owned(),)),
+            ]
+        );
+    }
 
     #[test]
     fn directory_loads_multiple_providers() {
@@ -224,8 +225,13 @@ steps:
         fs::write(directory.path().join("desktop.yaml"), DESKTOP_PROVIDER_YAML).unwrap();
 
         let registry = Registry::from_directory(directory.path()).expect("directory should load");
+        assert_eq!(registry.providers().len(), 1);
 
-        assert_eq!(registry, Registry::built_in());
+        let provider = registry
+            .provider_for(&Capability::new("desktop"))
+            .expect("desktop provider should exist");
+
+        assert_eq!(provider.id, ProviderId::new("desktop"));
     }
 
     #[test]
@@ -239,19 +245,6 @@ steps:
     }
 
     #[test]
-    fn registry_can_be_created_from_directory() {
-        let directory = tempfile::tempdir().expect("temporary directory should exist");
-
-        fs::write(directory.path().join("desktop.yaml"), DESKTOP_PROVIDER_YAML)
-            .expect("provider YAML should be written");
-
-        let registry =
-            Registry::from_directory(directory.path()).expect("directory should load successfully");
-
-        assert_eq!(registry, Registry::built_in());
-    }
-
-    #[test]
     fn new_registry_is_empty() {
         let registry = Registry::new();
 
@@ -259,66 +252,36 @@ steps:
     }
 
     #[test]
-    fn built_in_registry_contains_desktop_provider() {
-        let registry = Registry::built_in();
-
-        assert_eq!(registry.providers().len(), 1);
-
-        let provider = &registry.providers()[0];
-
-        assert_eq!(provider.id, ProviderId::new("desktop"));
-        assert_eq!(provider.capability, CapabilityId::new("desktop"));
-    }
-
-    #[test]
-    fn desktop_provider_contains_expected_steps() {
-        let registry = Registry::built_in();
-
-        let provider = registry
-            .provider_for(&Capability::new("desktop"))
-            .expect("desktop provider should exist");
-
-        assert_eq!(
-            provider.steps,
-            vec![
-                PlanStep::new(Action::InstallPackageManifest("desktop".to_owned(),)),
-                PlanStep::new(Action::EnableService("display-manager".to_owned(),)),
-            ]
-        );
-    }
-
-    #[test]
     fn provider_for_finds_matching_provider() {
-        let registry = Registry::built_in();
+        let registry = Registry::from_providers(vec![valid_provider()]);
         let capability = Capability::new("desktop");
 
         let provider = registry
             .provider_for(&capability)
-            .expect("desktop provider should exist");
+            .expect("provider should exist");
 
         assert_eq!(provider.id, ProviderId::new("desktop"));
     }
 
     #[test]
     fn provider_for_id_finds_matching_provider() {
-        let registry = Registry::built_in();
+        let registry = Registry::from_providers(vec![valid_provider()]);
         let capability_id = CapabilityId::new("desktop");
 
         let provider = registry
             .provider_for_id(&capability_id)
-            .expect("desktop provider should exist");
+            .expect("provider should exist");
 
         assert_eq!(provider.id, ProviderId::new("desktop"));
     }
 
     #[test]
     fn provider_for_returns_none_for_unknown_capability() {
-        let registry = Registry::built_in();
-        let capability = Capability::new("unknown");
+        let registry = Registry::from_providers(vec![valid_provider()]);
+        let capability = Capability::new("does-not-exist");
 
         assert!(registry.provider_for(&capability).is_none());
     }
-
     #[test]
     fn registry_can_be_created_from_providers() {
         let provider = Provider {
@@ -363,8 +326,14 @@ steps:
 
         let registry =
             Registry::from_yaml_file(&path).expect("desktop provider YAML file should be valid");
+        assert_eq!(registry.providers().len(), 1);
 
-        assert_eq!(registry, Registry::built_in());
+        let provider = registry
+            .provider_for(&Capability::new("desktop"))
+            .expect("desktop provider should exist");
+
+        assert_eq!(provider.id, ProviderId::new("desktop"));
+        assert_eq!(provider.capability, CapabilityId::new("desktop"));
     }
 
     #[test]
@@ -388,14 +357,6 @@ steps:
         let error = Registry::from_yaml_file(path).expect_err("invalid provider YAML should fail");
 
         assert!(matches!(error, RegistryError::Parse(_)));
-    }
-
-    #[test]
-    fn yaml_provider_matches_builtin_provider() {
-        let yaml_registry = Registry::from_yaml_str(DESKTOP_PROVIDER_YAML)
-            .expect("desktop provider YAML should be valid");
-
-        assert_eq!(yaml_registry, Registry::built_in());
     }
 
     #[test]
@@ -511,5 +472,16 @@ steps:
             error.to_string(),
             "invalid provider: service name must not be empty"
         );
+    }
+
+    fn valid_provider() -> Provider {
+        Provider {
+            id: ProviderId::new("desktop"),
+            capability: CapabilityId::new("desktop"),
+            steps: vec![
+                PlanStep::new(Action::InstallPackageManifest("desktop".to_owned())),
+                PlanStep::new(Action::EnableService("display-manager".to_owned())),
+            ],
+        }
     }
 }
