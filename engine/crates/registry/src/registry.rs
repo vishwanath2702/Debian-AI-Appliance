@@ -1,3 +1,5 @@
+use std::{fs, path::Path};
+
 use model::{Action, Capability, CapabilityId, PlanStep, Provider, ProviderId};
 
 use crate::{RegistryError, dto::provider_from_yaml};
@@ -43,6 +45,18 @@ impl Registry {
         Ok(Self::from_providers(vec![provider]))
     }
 
+    /// Creates a registry from one provider YAML file.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`RegistryError`] if the file cannot be read, the
+    /// YAML cannot be parsed, or the provider definition is invalid.
+    pub fn from_yaml_file(path: impl AsRef<Path>) -> Result<Self, RegistryError> {
+        let yaml = fs::read_to_string(path)?;
+
+        Self::from_yaml_str(&yaml)
+    }
+
     /// Returns every provider in the registry.
     #[must_use]
     pub fn providers(&self) -> &[Provider] {
@@ -78,6 +92,8 @@ fn desktop_provider() -> Provider {
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
+
     use model::{Action, Capability, CapabilityId, PlanStep, Provider, ProviderId};
 
     use crate::RegistryError;
@@ -193,6 +209,42 @@ steps:
                 PlanStep::new(Action::EnableService("display-manager".to_owned(),)),
             ]
         );
+    }
+
+    #[test]
+    fn registry_can_be_created_from_yaml_file() {
+        let directory = tempfile::tempdir().expect("temporary directory should exist");
+        let path = directory.path().join("desktop.yaml");
+
+        fs::write(&path, DESKTOP_PROVIDER_YAML).expect("provider YAML file should be written");
+
+        let registry =
+            Registry::from_yaml_file(&path).expect("desktop provider YAML file should be valid");
+
+        assert_eq!(registry, Registry::built_in());
+    }
+
+    #[test]
+    fn missing_yaml_file_returns_io_error() {
+        let directory = tempfile::tempdir().expect("temporary directory should exist");
+        let path = directory.path().join("missing.yaml");
+
+        let error = Registry::from_yaml_file(path).expect_err("missing provider file should fail");
+
+        assert!(matches!(error, RegistryError::Io(_)));
+    }
+
+    #[test]
+    fn invalid_yaml_file_returns_parse_error() {
+        let directory = tempfile::tempdir().expect("temporary directory should exist");
+        let path = directory.path().join("invalid.yaml");
+
+        fs::write(&path, "id: desktop\ncapability: [")
+            .expect("invalid YAML file should be written");
+
+        let error = Registry::from_yaml_file(path).expect_err("invalid provider YAML should fail");
+
+        assert!(matches!(error, RegistryError::Parse(_)));
     }
 
     #[test]
