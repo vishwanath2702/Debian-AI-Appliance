@@ -9,6 +9,7 @@ model = { path = "../model" }
 registry = { path = "../registry" }
 resolver = { path = "../resolver" }
 planner = { path = "../planner" }
+tempfile = "3"
 
 [lints]
 workspace = true

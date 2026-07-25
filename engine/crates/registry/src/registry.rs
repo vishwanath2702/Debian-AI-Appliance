@@ -130,8 +130,9 @@ impl Registry {
 
 #[cfg(test)]
 mod tests {
-    use model::{Action, Capability, CapabilityId, PlanStep, Provider, ProviderId};
     use std::{fs, path::Path};
+
+    use model::{Action, Capability, CapabilityId, PlanStep, Provider, ProviderId};
 
     use crate::RegistryError;
 
