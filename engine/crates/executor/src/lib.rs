@@ -1,6 +1,6 @@
 //! Execution of planned system actions.
-
 use model::{Action, Plan};
+use std::path::PathBuf;
 
 /// Error returned when plan execution fails.
 #[derive(Debug)]
@@ -29,13 +29,24 @@ pub trait ActionRunner {
 }
 
 #[derive(Debug, Default)]
-pub struct RootfsRunner;
+pub struct RootfsRunner {
+    rootfs: PathBuf,
+}
+
+impl RootfsRunner {
+    #[must_use]
+    pub const fn new(rootfs: PathBuf) -> Self {
+        Self { rootfs }
+    }
+}
 
 impl ActionRunner for RootfsRunner {
     type Error = std::convert::Infallible;
-
     fn run(&mut self, action: &Action) -> Result<(), Self::Error> {
-        println!("executing action: {action:?}");
+        println!(
+            "executing action in rootfs {}: {action:?}",
+            self.rootfs.display()
+        );
         Ok(())
     }
 }
@@ -88,6 +99,7 @@ where
 #[cfg(test)]
 mod tests {
     use model::{Action, Capability, Plan, PlanStep, ProviderId};
+    use std::path::PathBuf;
 
     use super::{ActionRunner, Executor, RootfsRunner};
     #[derive(Default)]
@@ -172,8 +184,7 @@ mod tests {
 
     #[test]
     fn rootfs_runner_accepts_actions() {
-        let mut runner = RootfsRunner::default();
-
+        let mut runner = RootfsRunner::new(PathBuf::from("/tmp/daia-rootfs"));
         runner
             .run(&Action::InstallPackageManifest("desktop".to_owned()))
             .expect("rootfs runner should succeed");
