@@ -2,6 +2,7 @@
 use std::fs;
 use std::io;
 use std::path::PathBuf;
+use std::process::Command;
 
 use model::{Action, Plan};
 
@@ -51,7 +52,30 @@ impl RootfsRunner {
         fs::create_dir_all(&self.rootfs)?;
         Ok(())
     }
+
+    /// Bootstraps a minimal Debian root filesystem.
+    ///
+    /// # Errors
+    ///
+    /// Returns an I/O error if `debootstrap` cannot be started or exits
+    /// unsuccessfully.
+    pub fn bootstrap(&self) -> io::Result<()> {
+        let status = Command::new("debootstrap")
+            .arg("--variant=minbase")
+            .arg("bookworm")
+            .arg(&self.rootfs)
+            .status()?;
+
+        if status.success() {
+            Ok(())
+        } else {
+            Err(io::Error::other(format!(
+                "debootstrap exited with status {status}"
+            )))
+        }
+    }
 }
+
 impl ActionRunner for RootfsRunner {
     type Error = std::convert::Infallible;
 
