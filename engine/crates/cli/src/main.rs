@@ -1,71 +1,46 @@
+//! DAIA command-line interface.
+
 use std::env;
 use std::process::ExitCode;
 
 use engine::Engine;
 use model::Capability;
-use registry::Registry;
 
-#[allow(clippy::missing_const_for_fn)]
 fn main() -> ExitCode {
-    match run() {
-        Ok(()) => ExitCode::SUCCESS,
-        Err(message) => {
-            eprintln!("error: {message}");
-            ExitCode::FAILURE
-        }
-    }
-}
-
-fn run() -> Result<(), String> {
     let mut args = env::args();
 
-    let _program = args.next();
+    // Skip executable name.
+    let _ = args.next();
 
-    match args.next().as_deref() {
-        Some("plan") => {
-            let capability = args
-                .next()
-                .ok_or_else(|| String::from("missing capability"))?;
+    let Some(capability_name) = args.next() else {
+        eprintln!("Usage:");
+        eprintln!("    daia <capability>");
+        eprintln!();
+        eprintln!("Example:");
+        eprintln!("    daia desktop");
+        return ExitCode::FAILURE;
+    };
 
-            if args.next().is_some() {
-                return Err(String::from("too many arguments"));
-            }
+    let engine = Engine::new();
 
-            let registry = Registry::built_in();
-            let engine = Engine::new(registry);
-
-            let plan = engine
-                .plan(Capability::new(capability))
-                .map_err(|error| error.to_string())?;
-
-            println!("Execution plan");
+    match engine.plan(&Capability::new(capability_name)) {
+        Ok(plan) => {
+            println!("Capability : {}", plan.capability);
+            println!("Provider   : {}", plan.provider);
             println!();
-            println!("Capability:");
-            println!("  {}", plan.capability);
-            println!();
-            println!("Provider:");
-            println!("  {}", plan.provider);
-            println!();
-            println!("Steps:");
+
+            println!("Plan:");
 
             for (index, step) in plan.steps.iter().enumerate() {
                 println!("  {}. {}", index + 1, step);
             }
 
-            println!();
-            println!("{} step(s) planned.", plan.steps.len());
-
-            Ok(())
+            ExitCode::SUCCESS
         }
 
-        Some("help") | None => {
-            println!("Usage:");
-            println!("  daia plan <capability>");
-            println!("  daia help");
-
-            Ok(())
+        Err(error) => {
+            eprintln!("Error: {error}");
+            ExitCode::FAILURE
         }
-
-        Some(command) => Err(format!("unknown command '{command}'")),
     }
 }

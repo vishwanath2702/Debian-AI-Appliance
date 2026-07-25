@@ -1,58 +1,147 @@
-//! Desired-state comparison and execution planning.
+//! Execution plan generation for the DAIA engine.
 
-use model::{Capability, Plan, Provider};
+use std::fmt;
 
-/// Builds deterministic execution plans.
-#[derive(Debug, Default)]
-pub struct Planner;
+use model::{Capability, Plan};
+use resolver::{ResolveError, Resolver};
+
+/// Errors that can occur while generating a plan.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum PlanError {
+    /// Provider resolution failed.
+    Resolve(ResolveError),
+}
+
+impl fmt::Display for PlanError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Resolve(error) => error.fmt(formatter),
+        }
+    }
+}
+
+impl std::error::Error for PlanError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Resolve(error) => Some(error),
+        }
+    }
+}
+
+impl From<ResolveError> for PlanError {
+    fn from(error: ResolveError) -> Self {
+        Self::Resolve(error)
+    }
+}
+
+/// Builds execution plans from requested capabilities.
+#[derive(Clone, Debug)]
+pub struct Planner {
+    resolver: Resolver,
+}
 
 impl Planner {
-    /// Creates a planner.
+    /// Creates a planner using the supplied resolver.
     #[must_use]
-    pub const fn new() -> Self {
-        Self
+    pub const fn new(resolver: Resolver) -> Self {
+        Self { resolver }
     }
 
-    /// Builds a plan from a requested capability and its resolved provider.
-    #[must_use]
-    pub fn plan(capability: Capability, provider: &Provider) -> Plan {
-        Plan {
-            capability,
-            provider: provider.name.clone(),
-            steps: provider.steps.clone(),
-        }
+    /// Builds an execution plan for a requested capability.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PlanError::Resolve`] when no provider can be
+    /// resolved for the requested capability.
+    pub fn build(&self, capability: &Capability) -> Result<Plan, PlanError> {
+        let provider = self.resolver.resolve(capability)?;
+
+        Ok(Plan {
+            capability: capability.clone(),
+            provider: provider.id,
+            steps: provider.steps,
+        })
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::Planner;
-    use model::{Capability, Plan, PlanStep, Provider};
+    use model::{Action, Capability, CapabilityId, PlanStep, Provider, ProviderId};
+    use registry::Registry;
+    use resolver::{ResolveError, Resolver};
+
+    use super::{PlanError, Planner};
 
     #[test]
-    fn builds_plan_from_resolved_provider() {
-        let capability = Capability::new("desktop");
-        let provider = Provider {
-            name: "desktop".to_owned(),
-            capability: capability.clone(),
-            steps: vec![
-                PlanStep::InstallPackageManifest("desktop".to_owned()),
-                PlanStep::EnableService("display-manager".to_owned()),
-            ],
-        };
+    fn builds_plan_for_builtin_provider() {
+        let registry = Registry::built_in();
+        let resolver = Resolver::new(registry);
+        let planner = Planner::new(resolver);
 
-        let plan = Planner::plan(capability.clone(), &provider);
+        let plan = planner
+            .build(&Capability::new("desktop"))
+            .expect("desktop plan should build");
+
+        assert_eq!(plan.capability, Capability::new("desktop"));
+        assert_eq!(plan.provider, ProviderId::new("desktop"));
 
         assert_eq!(
-            plan,
-            Plan {
-                capability,
-                provider: "desktop".to_owned(),
-                steps: vec![
-                    PlanStep::InstallPackageManifest("desktop".to_owned()),
-                    PlanStep::EnableService("display-manager".to_owned()),
-                ],
-            }
+            plan.steps,
+            vec![
+                PlanStep::new(Action::InstallPackageManifest("desktop".to_owned(),)),
+                PlanStep::new(Action::EnableService("display-manager".to_owned(),)),
+            ]
+        );
+    }
+
+    #[test]
+    fn returns_error_for_unknown_capability() {
+        let registry = Registry::built_in();
+        let resolver = Resolver::new(registry);
+        let planner = Planner::new(resolver);
+
+        let result = planner.build(&Capability::new("unknown"));
+
+        assert_eq!(
+            result,
+            Err(PlanError::Resolve(ResolveError::ProviderNotFound(
+                Capability::new("unknown"),
+            ),))
+        );
+    }
+
+    #[test]
+    fn formats_resolution_error() {
+        let error = PlanError::Resolve(ResolveError::ProviderNotFound(Capability::new("unknown")));
+
+        assert_eq!(
+            error.to_string(),
+            "no provider found for capability \"unknown\""
+        );
+    }
+
+    #[test]
+    fn builds_plan_from_custom_provider() {
+        let provider = Provider {
+            id: ProviderId::new("custom"),
+            capability: CapabilityId::new("custom"),
+            steps: vec![PlanStep::new(Action::EnableService("customd".to_owned()))],
+        };
+
+        let registry = Registry::from_providers(vec![provider]);
+        let resolver = Resolver::new(registry);
+        let planner = Planner::new(resolver);
+
+        let plan = planner
+            .build(&Capability::new("custom"))
+            .expect("custom plan should build");
+
+        assert_eq!(plan.capability, Capability::new("custom"));
+        assert_eq!(plan.provider, ProviderId::new("custom"));
+
+        assert_eq!(
+            plan.steps,
+            vec![PlanStep::new(Action::EnableService("customd".to_owned(),))]
         );
     }
 }

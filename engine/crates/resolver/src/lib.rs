@@ -1,15 +1,14 @@
-//! Capability expansion and provider resolution.
+//! Provider resolution for the DAIA engine.
 
-use std::error::Error;
 use std::fmt;
 
 use model::{Capability, Provider};
 use registry::Registry;
 
-/// Failure to resolve a requested capability.
+/// Errors that can occur during provider resolution.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ResolveError {
-    /// No registered provider supplies the requested capability.
+    /// No provider exists for the requested capability.
     ProviderNotFound(Capability),
 }
 
@@ -17,77 +16,101 @@ impl fmt::Display for ResolveError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::ProviderNotFound(capability) => {
-                write!(formatter, "no provider found for capability '{capability}'")
+                write!(
+                    formatter,
+                    "no provider found for capability \"{capability}\""
+                )
             }
         }
     }
 }
 
-impl Error for ResolveError {}
+impl std::error::Error for ResolveError {}
 
-/// Resolves capabilities against a provider registry.
-#[derive(Debug)]
-pub struct Resolver<'registry> {
-    registry: &'registry Registry,
+/// Resolves capabilities into providers.
+#[derive(Clone, Debug)]
+pub struct Resolver {
+    registry: Registry,
 }
 
-impl<'registry> Resolver<'registry> {
-    /// Creates a resolver backed by the supplied registry.
+impl Resolver {
+    /// Creates a resolver using the supplied registry.
     #[must_use]
-    pub const fn new(registry: &'registry Registry) -> Self {
+    pub const fn new(registry: Registry) -> Self {
         Self { registry }
     }
 
-    /// Resolves a capability to its registered provider.
+    /// Resolves a capability into a provider.
     ///
     /// # Errors
     ///
-    /// Returns [`ResolveError::ProviderNotFound`] when no provider supplies the
-    /// requested capability.
-    pub fn resolve(&self, capability: &Capability) -> Result<&Provider, ResolveError> {
+    /// Returns [`ResolveError::ProviderNotFound`] when the registry
+    /// contains no provider for the requested capability.
+    pub fn resolve(&self, capability: &Capability) -> Result<Provider, ResolveError> {
         self.registry
-            .providers()
-            .iter()
-            .find(|provider| provider.capability == *capability)
+            .provider_for(capability)
+            .cloned()
             .ok_or_else(|| ResolveError::ProviderNotFound(capability.clone()))
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{ResolveError, Resolver};
-    use model::Capability;
+    use model::{Capability, CapabilityId, PlanStep, Provider, ProviderId};
     use registry::Registry;
 
+    use super::{ResolveError, Resolver};
+
     #[test]
-    fn resolves_desktop_capability() {
-        let registry = Registry::built_in();
-        let resolver = Resolver::new(&registry);
+    fn resolves_existing_provider() {
+        let resolver = Resolver::new(Registry::built_in());
 
         let provider = resolver
             .resolve(&Capability::new("desktop"))
-            .expect("desktop provider should exist");
+            .expect("desktop provider should resolve");
 
-        assert_eq!(provider.name, "desktop");
+        assert_eq!(provider.id, ProviderId::new("desktop"));
+        assert_eq!(provider.capability, CapabilityId::new("desktop"));
     }
 
     #[test]
-    fn rejects_unknown_capability() {
-        let registry = Registry::built_in();
-        let resolver = Resolver::new(&registry);
-        let capability = Capability::new("unknown");
+    fn returns_error_for_unknown_capability() {
+        let resolver = Resolver::new(Registry::built_in());
 
-        let error = resolver
-            .resolve(&capability)
-            .expect_err("unknown capability should fail");
+        let result = resolver.resolve(&Capability::new("unknown"));
 
         assert_eq!(
-            error,
-            ResolveError::ProviderNotFound(Capability::new("unknown"))
+            result,
+            Err(ResolveError::ProviderNotFound(Capability::new("unknown"),))
         );
+    }
+
+    #[test]
+    fn formats_provider_not_found_error() {
+        let error = ResolveError::ProviderNotFound(Capability::new("unknown"));
+
         assert_eq!(
             error.to_string(),
-            "no provider found for capability 'unknown'"
+            "no provider found for capability \"unknown\""
         );
+    }
+
+    #[test]
+    fn resolves_custom_registry_provider() {
+        let provider = Provider {
+            id: ProviderId::new("custom"),
+            capability: CapabilityId::new("custom"),
+            steps: Vec::<PlanStep>::new(),
+        };
+
+        let registry = Registry::from_providers(vec![provider.clone()]);
+
+        let resolver = Resolver::new(registry);
+
+        let resolved_provider = resolver
+            .resolve(&Capability::new("custom"))
+            .expect("custom provider should resolve");
+
+        assert_eq!(resolved_provider, provider);
     }
 }

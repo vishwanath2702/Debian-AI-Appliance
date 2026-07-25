@@ -1,13 +1,11 @@
 [workspace]
 resolver = "3"
+
 members = [
     "crates/model",
     "crates/registry",
-    "crates/facts",
     "crates/resolver",
     "crates/planner",
-    "crates/state",
-    "crates/executor",
     "crates/engine",
     "crates/cli",
 ]
@@ -15,9 +13,7 @@ members = [
 [workspace.package]
 version = "0.1.0"
 edition = "2024"
-rust-version = "1.97"
-license = "Apache-2.0"
-publish = false
+license = "MIT"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

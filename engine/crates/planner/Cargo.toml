@@ -2,13 +2,14 @@
 name = "planner"
 version.workspace = true
 edition.workspace = true
-rust-version.workspace = true
 license.workspace = true
-publish.workspace = true
 
 [dependencies]
 model = { path = "../model" }
+resolver = { path = "../resolver" }
 
+[dev-dependencies]
+registry = { path = "../registry" }
 
 [lints]
 workspace = true
