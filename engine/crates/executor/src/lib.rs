@@ -18,7 +18,22 @@ pub struct ExecuteError<E> {
     /// Error returned by the action runner.
     pub source: E,
 }
+/// Manages the lifecycle of an execution environment.
+pub trait ExecutionEnvironment {
+    /// Prepares the execution environment.
+    ///
+    /// # Errors
+    ///
+    /// Returns any I/O error encountered while preparing the environment.
+    fn prepare(&self) -> io::Result<()>;
 
+    /// Bootstraps the execution environment.
+    ///
+    /// # Errors
+    ///
+    /// Returns any I/O error encountered while bootstrapping the environment.
+    fn bootstrap(&self) -> io::Result<()>;
+}
 /// Executes one action from a plan.
 pub trait ActionRunner {
     /// Error returned when an action cannot be executed.
@@ -42,24 +57,15 @@ impl RootfsRunner {
     pub const fn new(rootfs: PathBuf) -> Self {
         Self { rootfs }
     }
+}
 
-    /// Ensures the target root filesystem directory exists.
-    ///
-    /// # Errors
-    ///
-    /// Returns any I/O error encountered while creating the directory.
-    pub fn prepare(&self) -> io::Result<()> {
+impl ExecutionEnvironment for RootfsRunner {
+    fn prepare(&self) -> io::Result<()> {
         fs::create_dir_all(&self.rootfs)?;
         Ok(())
     }
 
-    /// Bootstraps a minimal Debian root filesystem.
-    ///
-    /// # Errors
-    ///
-    /// Returns an I/O error if `debootstrap` cannot be started or exits
-    /// unsuccessfully.
-    pub fn bootstrap(&self) -> io::Result<()> {
+    fn bootstrap(&self) -> io::Result<()> {
         let status = Command::new("debootstrap")
             .arg("--variant=minbase")
             .arg("bookworm")
@@ -75,7 +81,6 @@ impl RootfsRunner {
         }
     }
 }
-
 impl ActionRunner for RootfsRunner {
     type Error = std::convert::Infallible;
 
@@ -137,6 +142,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::{ActionRunner, Executor, RootfsRunner};
+    use crate::ExecutionEnvironment;
     use model::{Action, Capability, Plan, PlanStep, ProviderId};
     use std::fs;
     use std::path::PathBuf;
