@@ -28,6 +28,18 @@ pub trait ActionRunner {
     fn run(&mut self, action: &Action) -> Result<(), Self::Error>;
 }
 
+#[derive(Debug, Default)]
+pub struct RootfsRunner;
+
+impl ActionRunner for RootfsRunner {
+    type Error = std::convert::Infallible;
+
+    fn run(&mut self, action: &Action) -> Result<(), Self::Error> {
+        println!("executing action: {action:?}");
+        Ok(())
+    }
+}
+
 /// Executes every action in a plan in its declared order.
 pub struct Executor<R> {
     runner: R,
@@ -77,8 +89,7 @@ where
 mod tests {
     use model::{Action, Capability, Plan, PlanStep, ProviderId};
 
-    use super::{ActionRunner, Executor};
-
+    use super::{ActionRunner, Executor, RootfsRunner};
     #[derive(Default)]
     struct RecordingRunner {
         actions: Vec<Action>,
@@ -157,5 +168,14 @@ mod tests {
             Action::InstallPackageManifest("desktop".to_owned())
         );
         assert_eq!(error.source, "boom");
+    }
+
+    #[test]
+    fn rootfs_runner_accepts_actions() {
+        let mut runner = RootfsRunner::default();
+
+        runner
+            .run(&Action::InstallPackageManifest("desktop".to_owned()))
+            .expect("rootfs runner should succeed");
     }
 }
