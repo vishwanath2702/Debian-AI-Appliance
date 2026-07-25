@@ -57,6 +57,43 @@ impl Registry {
         Self::from_yaml_str(&yaml)
     }
 
+    /// Creates a registry from all provider YAML files in a directory.
+    ///
+    /// Files ending in `.yaml` or `.yml` are loaded. All other files are
+    /// ignored.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`RegistryError`] if the directory cannot be read, a
+    /// provider file cannot be read, the YAML cannot be parsed, or a
+    /// provider definition is invalid.
+    pub fn from_directory(path: impl AsRef<Path>) -> Result<Self, RegistryError> {
+        let mut providers = Vec::new();
+
+        for entry in fs::read_dir(path)? {
+            let entry = entry?;
+            let path = entry.path();
+
+            if !path.is_file() {
+                continue;
+            }
+
+            let Some(extension) = path.extension() else {
+                continue;
+            };
+
+            if extension != "yaml" && extension != "yml" {
+                continue;
+            }
+
+            let registry = Self::from_yaml_file(&path)?;
+
+            providers.extend(registry.providers);
+        }
+
+        Ok(Self::from_providers(providers))
+    }
+
     /// Returns every provider in the registry.
     #[must_use]
     pub fn providers(&self) -> &[Provider] {
@@ -107,6 +144,19 @@ steps:
   - install_package_manifest: desktop
   - enable_service: display-manager
 ";
+
+    #[test]
+    fn registry_can_be_created_from_directory() {
+        let directory = tempfile::tempdir().expect("temporary directory should exist");
+
+        fs::write(directory.path().join("desktop.yaml"), DESKTOP_PROVIDER_YAML)
+            .expect("provider YAML should be written");
+
+        let registry =
+            Registry::from_directory(directory.path()).expect("directory should load successfully");
+
+        assert_eq!(registry, Registry::built_in());
+    }
 
     #[test]
     fn new_registry_is_empty() {
