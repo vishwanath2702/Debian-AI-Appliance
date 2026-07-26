@@ -1,33 +1,35 @@
 //! High-level orchestration for the DAIA engine.
 use std::path::PathBuf;
 
-use executor::{AptInstaller, ExecuteError, Executor, RootfsRunError, RootfsRunner};
+use executor::{
+    ActionRunner, AptInstaller, ExecuteError, ExecutionEnvironment, Executor, RootfsRunError,
+    RootfsRunner,
+};
 use model::{Capability, Plan};
 use planner::{PlanError, Planner};
 use registry::{PackageRepository, Registry};
 use resolver::Resolver;
 /// Error returned when an appliance build cannot be completed.
 #[derive(Debug)]
-pub enum BuildError {
+pub enum BuildError<E> {
     /// An execution plan could not be produced.
     Plan(PlanError),
 
     /// The generated plan could not be executed.
-    Execute(ExecuteError<RootfsRunError>),
+    Execute(ExecuteError<E>),
 }
 
-impl From<PlanError> for BuildError {
+impl<E> From<PlanError> for BuildError<E> {
     fn from(error: PlanError) -> Self {
         Self::Plan(error)
     }
 }
 
-impl From<ExecuteError<RootfsRunError>> for BuildError {
-    fn from(error: ExecuteError<RootfsRunError>) -> Self {
+impl<E> From<ExecuteError<E>> for BuildError<E> {
+    fn from(error: ExecuteError<E>) -> Self {
         Self::Execute(error)
     }
 }
-
 /// High-level orchestration entry point.
 #[derive(Clone, Debug)]
 pub struct Engine {
@@ -54,6 +56,27 @@ impl Engine {
         self.planner.build(capability)
     }
 
+    /// Builds and executes an appliance plan using the supplied runner.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`BuildError`] if planning or execution fails.
+    pub fn build_with_runner<R>(
+        &self,
+        capability: &Capability,
+        runner: R,
+    ) -> Result<Plan, BuildError<R::Error>>
+    where
+        R: ActionRunner + ExecutionEnvironment,
+    {
+        let plan = self.plan(capability)?;
+        let mut executor = Executor::new(runner);
+
+        executor.execute(&plan)?;
+
+        Ok(plan)
+    }
+
     /// Builds and executes an appliance plan inside a root filesystem.
     ///
     /// # Errors
@@ -64,16 +87,11 @@ impl Engine {
         capability: &Capability,
         rootfs: PathBuf,
         package_repository: PackageRepository,
-    ) -> Result<Plan, BuildError> {
-        let plan = self.plan(capability)?;
-
+    ) -> Result<Plan, BuildError<RootfsRunError>> {
         let runner =
             RootfsRunner::with_installer(rootfs, package_repository, Box::new(AptInstaller::new()));
-        let mut executor = Executor::new(runner);
 
-        executor.execute(&plan)?;
-
-        Ok(plan)
+        self.build_with_runner(capability, runner)
     }
 }
 #[cfg(test)]
@@ -81,7 +99,7 @@ mod tests {
     use model::{Action, Capability, CapabilityId, PlanStep, Provider, ProviderId};
     use registry::Registry;
 
-    use super::{BuildError, Engine};
+    use super::{BuildError, Engine, RootfsRunError};
     fn desktop_registry() -> Registry {
         Registry::from_providers(vec![Provider {
             id: ProviderId::new("desktop"),
@@ -151,17 +169,17 @@ mod tests {
             .plan(&Capability::new("does-not-exist"))
             .expect_err("unknown capability should fail");
 
-        let build_error = BuildError::from(plan_error);
+        let build_error: BuildError<RootfsRunError> = BuildError::from(plan_error);
 
         assert!(matches!(build_error, BuildError::Plan(_)));
     }
 
     #[test]
     fn converts_execution_error_into_build_error() {
-        let execution_error =
+        let execution_error: executor::ExecuteError<RootfsRunError> =
             executor::ExecuteError::Environment(std::io::Error::other("prepare failed"));
 
-        let build_error = BuildError::from(execution_error);
+        let build_error: BuildError<RootfsRunError> = BuildError::from(execution_error);
 
         assert!(matches!(build_error, BuildError::Execute(_)));
     }
