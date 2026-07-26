@@ -132,6 +132,7 @@ where
     /// Returns the first error produced by the runner.
     pub fn execute(&mut self, plan: &Plan) -> Result<(), ExecuteError<R::Error>> {
         self.runner.prepare().map_err(ExecuteError::Environment)?;
+        self.runner.bootstrap().map_err(ExecuteError::Environment)?;
 
         for (step, plan_step) in plan.steps.iter().enumerate() {
             self.runner
