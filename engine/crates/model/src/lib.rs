@@ -141,6 +141,39 @@ pub struct Provider {
     pub steps: Vec<PlanStep>,
 }
 
+/// A named collection of operating-system packages.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PackageManifest {
+    /// Logical name used to reference this manifest.
+    pub name: String,
+
+    /// Packages installed by this manifest.
+    pub packages: Vec<String>,
+}
+
+impl PackageManifest {
+    /// Creates a package manifest.
+    #[must_use]
+    pub fn new(name: impl Into<String>, packages: Vec<String>) -> Self {
+        Self {
+            name: name.into(),
+            packages,
+        }
+    }
+
+    /// Returns the manifest name.
+    #[must_use]
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    /// Returns the packages declared by this manifest.
+    #[must_use]
+    pub fn packages(&self) -> &[String] {
+        &self.packages
+    }
+}
+
 /// A deterministic execution plan.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Plan {
@@ -153,11 +186,9 @@ pub struct Plan {
     /// Ordered actions required by the provider.
     pub steps: Vec<PlanStep>,
 }
-
 #[cfg(test)]
 mod tests {
-    use super::{Action, Capability, CapabilityId, PlanStep, ProviderId};
-
+    use super::{Action, Capability, CapabilityId, PackageManifest, PlanStep, ProviderId};
     #[test]
     fn capability_id_exposes_its_identifier() {
         let capability_id = CapabilityId::new("desktop");
@@ -182,7 +213,17 @@ mod tests {
         assert_eq!(capability.as_str(), "desktop");
         assert_eq!(capability.to_string(), "desktop");
     }
+    #[test]
+    fn package_manifest_exposes_its_name_and_packages() {
+        let manifest =
+            PackageManifest::new("desktop", vec!["gnome-shell".to_owned(), "gdm3".to_owned()]);
 
+        assert_eq!(manifest.name(), "desktop");
+        assert_eq!(
+            manifest.packages(),
+            &["gnome-shell".to_owned(), "gdm3".to_owned()]
+        );
+    }
     #[test]
     fn actions_have_human_readable_descriptions() {
         assert_eq!(

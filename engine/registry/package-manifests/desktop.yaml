@@ -1,0 +1,4 @@
+name: desktop
+packages:
+  - gnome-shell
+  - gdm3

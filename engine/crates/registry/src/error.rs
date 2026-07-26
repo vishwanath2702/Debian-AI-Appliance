@@ -6,42 +6,54 @@ use std::{
 
 use model::{CapabilityId, ProviderId};
 
-/// Error returned while loading provider registry data.
+/// Error returned while loading registry data.
 #[derive(Debug)]
 pub enum RegistryError {
-    /// A provider YAML file could not be read.
+    /// A registry YAML file or directory could not be read.
     Io(io::Error),
 
-    /// The provider document could not be parsed as YAML.
+    /// A registry document could not be parsed as YAML.
     Parse(serde_yaml::Error),
 
-    /// The provider document parsed successfully but contained invalid data.
+    /// A provider document parsed successfully but contained invalid data.
     InvalidProvider(String),
+
+    /// A package-manifest document parsed successfully but contained invalid data.
+    InvalidPackageManifest(String),
 
     /// More than one provider used the same provider identifier.
     DuplicateProviderId(ProviderId),
 
     /// More than one provider supplied the same capability.
     DuplicateCapability(CapabilityId),
+
+    /// More than one package manifest used the same name.
+    DuplicatePackageManifest(String),
 }
 
 impl Display for RegistryError {
     fn fmt(&self, formatter: &mut Formatter<'_>) -> fmt::Result {
         match self {
             Self::Io(error) => {
-                write!(formatter, "failed to read provider YAML: {error}")
+                write!(formatter, "failed to read registry data: {error}")
             }
             Self::Parse(error) => {
-                write!(formatter, "failed to parse provider YAML: {error}")
+                write!(formatter, "failed to parse registry YAML: {error}")
             }
             Self::InvalidProvider(message) => {
                 write!(formatter, "invalid provider: {message}")
+            }
+            Self::InvalidPackageManifest(message) => {
+                write!(formatter, "invalid package manifest: {message}")
             }
             Self::DuplicateProviderId(provider_id) => {
                 write!(formatter, "duplicate provider id: {provider_id}")
             }
             Self::DuplicateCapability(capability_id) => {
                 write!(formatter, "duplicate capability: {capability_id}")
+            }
+            Self::DuplicatePackageManifest(name) => {
+                write!(formatter, "duplicate package manifest: {name}")
             }
         }
     }
@@ -53,8 +65,10 @@ impl Error for RegistryError {
             Self::Io(error) => Some(error),
             Self::Parse(error) => Some(error),
             Self::InvalidProvider(_)
+            | Self::InvalidPackageManifest(_)
             | Self::DuplicateProviderId(_)
-            | Self::DuplicateCapability(_) => None,
+            | Self::DuplicateCapability(_)
+            | Self::DuplicatePackageManifest(_) => None,
         }
     }
 }
@@ -88,7 +102,7 @@ mod tests {
 
         assert_eq!(
             error.to_string(),
-            concat!("failed to read provider YAML: ", "provider file not found")
+            concat!("failed to read registry data: ", "provider file not found")
         );
     }
 
@@ -101,7 +115,7 @@ mod tests {
         assert!(
             error
                 .to_string()
-                .starts_with("failed to parse provider YAML:")
+                .starts_with("failed to parse registry YAML:")
         );
     }
 
@@ -114,7 +128,16 @@ mod tests {
             "invalid provider: provider id must not be empty"
         );
     }
+    #[test]
+    fn formats_invalid_package_manifest_error() {
+        let error =
+            RegistryError::InvalidPackageManifest("manifest name must not be empty".to_owned());
 
+        assert_eq!(
+            error.to_string(),
+            "invalid package manifest: manifest name must not be empty"
+        );
+    }
     #[test]
     fn formats_duplicate_provider_id_error() {
         let error = RegistryError::DuplicateProviderId(ProviderId::new("desktop"));
@@ -127,5 +150,11 @@ mod tests {
         let error = RegistryError::DuplicateCapability(CapabilityId::new("desktop"));
 
         assert_eq!(error.to_string(), "duplicate capability: desktop");
+    }
+    #[test]
+    fn formats_duplicate_package_manifest_error() {
+        let error = RegistryError::DuplicatePackageManifest("desktop".to_owned());
+
+        assert_eq!(error.to_string(), "duplicate package manifest: desktop");
     }
 }

@@ -41,6 +41,30 @@ pub trait ExecutionEnvironment {
     /// Returns any I/O error encountered while bootstrapping the environment.
     fn bootstrap(&self) -> io::Result<()>;
 }
+/// Installs packages into a root filesystem.
+pub trait PackageInstaller {
+    /// Error returned when package installation fails.
+    type Error;
+
+    /// Installs the requested packages into the supplied root filesystem.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when package installation cannot be completed.
+    fn install(&self, rootfs: &std::path::Path, packages: &[String]) -> Result<(), Self::Error>;
+}
+
+/// Package installer that performs no work.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct NoopPackageInstaller;
+
+impl PackageInstaller for NoopPackageInstaller {
+    type Error = std::convert::Infallible;
+
+    fn install(&self, _rootfs: &std::path::Path, _packages: &[String]) -> Result<(), Self::Error> {
+        Ok(())
+    }
+}
 /// Executes one action from a plan.
 pub trait ActionRunner {
     /// Error returned when an action cannot be executed.
@@ -54,15 +78,22 @@ pub trait ActionRunner {
     fn run(&mut self, action: &Action) -> Result<(), Self::Error>;
 }
 
-#[derive(Debug, Default)]
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct RootfsRunner {
     rootfs: PathBuf,
+    package_repository: registry::PackageRepository,
+    package_installer: NoopPackageInstaller,
 }
 
 impl RootfsRunner {
+    /// Creates a root filesystem action runner.
     #[must_use]
-    pub const fn new(rootfs: PathBuf) -> Self {
-        Self { rootfs }
+    pub const fn new(rootfs: PathBuf, package_repository: registry::PackageRepository) -> Self {
+        Self {
+            rootfs,
+            package_repository,
+            package_installer: NoopPackageInstaller,
+        }
     }
 }
 
@@ -88,19 +119,38 @@ impl ExecutionEnvironment for RootfsRunner {
         }
     }
 }
+/// Error returned when a root filesystem action cannot be executed.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum RootfsRunError {
+    /// The requested package manifest does not exist.
+    PackageManifestNotFound(String),
+}
+
 impl ActionRunner for RootfsRunner {
-    type Error = std::convert::Infallible;
+    type Error = RootfsRunError;
 
     fn run(&mut self, action: &Action) -> Result<(), Self::Error> {
-        println!(
-            "executing action in rootfs {}: {action:?}",
-            self.rootfs.display()
-        );
+        match action {
+            Action::InstallPackageManifest(name) => {
+                let manifest = self
+                    .package_repository
+                    .manifest(name)
+                    .ok_or_else(|| RootfsRunError::PackageManifestNotFound(name.clone()))?;
+                self.package_installer
+                    .install(&self.rootfs, manifest.packages())
+                    .unwrap_or_else(|error| match error {});
+            }
+            Action::EnableService(service) => {
+                println!(
+                    "enabling service in rootfs {}: {service}",
+                    self.rootfs.display()
+                );
+            }
+        }
 
         Ok(())
     }
 }
-
 /// Executes every action in a plan in its declared order.
 pub struct Executor<R> {
     runner: R,
@@ -152,7 +202,7 @@ where
 mod tests {
     use super::{ActionRunner, Executor, RootfsRunner};
     use crate::ExecutionEnvironment;
-    use model::{Action, Capability, Plan, PlanStep, ProviderId};
+    use model::{Action, Capability, PackageManifest, Plan, PlanStep, ProviderId};
     use std::fs;
     use std::path::PathBuf;
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -266,10 +316,32 @@ mod tests {
 
     #[test]
     fn rootfs_runner_accepts_actions() {
-        let mut runner = RootfsRunner::new(PathBuf::from("/tmp/daia-rootfs"));
+        let repository = registry::PackageRepository::from_manifests(vec![PackageManifest::new(
+            "desktop",
+            vec!["vim".to_owned(), "curl".to_owned()],
+        )])
+        .expect("package repository should be valid");
+
+        let mut runner = RootfsRunner::new(PathBuf::from("/tmp/daia-rootfs"), repository);
         runner
             .run(&Action::InstallPackageManifest("desktop".to_owned()))
             .expect("rootfs runner should succeed");
+    }
+    #[test]
+    fn rootfs_runner_returns_error_for_unknown_manifest() {
+        let mut runner = RootfsRunner::new(
+            PathBuf::from("/tmp/daia-rootfs"),
+            registry::PackageRepository::new(),
+        );
+
+        let error = runner
+            .run(&Action::InstallPackageManifest("desktop".to_owned()))
+            .expect_err("unknown package manifest should fail");
+
+        assert_eq!(
+            error,
+            super::RootfsRunError::PackageManifestNotFound("desktop".to_owned())
+        );
     }
 
     #[test]
@@ -281,7 +353,7 @@ mod tests {
 
         let path = std::env::temp_dir().join(format!("daia-rootfs-{unique}"));
 
-        let runner = RootfsRunner::new(path.clone());
+        let runner = RootfsRunner::new(path.clone(), registry::PackageRepository::new());
 
         runner.prepare().expect("prepare should succeed");
 
