@@ -5,10 +5,11 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+executor = { path = "../executor" }
 model = { path = "../model" }
+planner = { path = "../planner" }
 registry = { path = "../registry" }
 resolver = { path = "../resolver" }
-planner = { path = "../planner" }
 tempfile = "3"
 
 [lints]
