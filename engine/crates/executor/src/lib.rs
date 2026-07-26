@@ -84,25 +84,33 @@ pub trait ActionRunner {
     fn run(&mut self, action: &Action) -> Result<(), Self::Error>;
 }
 
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct RootfsRunner {
     rootfs: PathBuf,
     package_repository: registry::PackageRepository,
-    package_installer: NoopPackageInstaller,
+    package_installer: Box<dyn PackageInstaller>,
 }
 
 impl RootfsRunner {
-    /// Creates a root filesystem action runner.
+    /// Creates a root filesystem action runner using the no-op package installer.
     #[must_use]
-    pub const fn new(rootfs: PathBuf, package_repository: registry::PackageRepository) -> Self {
+    pub fn new(rootfs: PathBuf, package_repository: registry::PackageRepository) -> Self {
+        Self::with_installer(rootfs, package_repository, Box::new(NoopPackageInstaller))
+    }
+
+    /// Creates a root filesystem action runner using the supplied package installer.
+    #[must_use]
+    pub fn with_installer(
+        rootfs: PathBuf,
+        package_repository: registry::PackageRepository,
+        package_installer: Box<dyn PackageInstaller>,
+    ) -> Self {
         Self {
             rootfs,
             package_repository,
-            package_installer: NoopPackageInstaller,
+            package_installer,
         }
     }
 }
-
 impl ExecutionEnvironment for RootfsRunner {
     fn prepare(&self) -> io::Result<()> {
         fs::create_dir_all(&self.rootfs)?;

@@ -1,9 +1,11 @@
 //! APT-based package installation.
 
+use std::cell::Cell;
 use std::io;
 use std::path::Path;
 
 use crate::PackageInstaller;
+
 /// Error returned when APT package installation fails.
 #[derive(Debug)]
 pub enum AptInstallerError {
@@ -13,19 +15,34 @@ pub enum AptInstallerError {
     /// The installer command exited unsuccessfully.
     CommandFailed(std::process::ExitStatus),
 }
+
 impl From<io::Error> for AptInstallerError {
     fn from(error: io::Error) -> Self {
         Self::Io(error)
     }
 }
+
 /// Installs packages using APT.
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub struct AptInstaller;
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct AptInstaller {
+    updated: Cell<bool>,
+}
 
 impl AptInstaller {
-    fn command_args(rootfs: &Path, packages: &[String]) -> Vec<String> {
+    /// Creates an APT package installer.
+    #[must_use]
+    pub const fn new() -> Self {
+        Self {
+            updated: Cell::new(false),
+        }
+    }
+
+    fn update_command_args() -> Vec<String> {
+        vec![String::from("apt-get"), String::from("update")]
+    }
+
+    fn install_command_args(packages: &[String]) -> Vec<String> {
         let mut args = vec![
-            rootfs.display().to_string(),
             String::from("apt-get"),
             String::from("install"),
             String::from("--yes"),
@@ -36,17 +53,11 @@ impl AptInstaller {
         args
     }
 
-    fn command(rootfs: &Path, packages: &[String]) -> std::process::Command {
-        let mut command = std::process::Command::new("chroot");
-        command.args(Self::command_args(rootfs, packages));
-
-        command
-    }
-}
-
-impl PackageInstaller for AptInstaller {
-    fn install(&self, rootfs: &Path, packages: &[String]) -> Result<(), AptInstallerError> {
-        let status = Self::command(rootfs, packages).status()?;
+    fn run_in_rootfs(rootfs: &Path, args: &[String]) -> Result<(), AptInstallerError> {
+        let status = std::process::Command::new("chroot")
+            .arg(rootfs)
+            .args(args)
+            .status()?;
 
         if !status.success() {
             return Err(AptInstallerError::CommandFailed(status));
@@ -54,23 +65,48 @@ impl PackageInstaller for AptInstaller {
 
         Ok(())
     }
+
+    fn update_once(&self, rootfs: &Path) -> Result<(), AptInstallerError> {
+        if self.updated.get() {
+            return Ok(());
+        }
+
+        let args = Self::update_command_args();
+        Self::run_in_rootfs(rootfs, &args)?;
+        self.updated.set(true);
+
+        Ok(())
+    }
+}
+
+impl PackageInstaller for AptInstaller {
+    fn install(&self, rootfs: &Path, packages: &[String]) -> Result<(), AptInstallerError> {
+        self.update_once(rootfs)?;
+
+        let args = Self::install_command_args(packages);
+        Self::run_in_rootfs(rootfs, &args)
+    }
 }
 #[cfg(test)]
 mod tests {
-    use std::path::Path;
 
     use super::AptInstaller;
 
     #[test]
-    fn builds_expected_command_arguments() {
+    fn builds_expected_update_command_arguments() {
+        let args = AptInstaller::update_command_args();
+
+        assert_eq!(args, vec![String::from("apt-get"), String::from("update")]);
+    }
+    #[test]
+    fn builds_expected_install_command_arguments() {
         let packages = vec![String::from("vim"), String::from("curl")];
 
-        let args = AptInstaller::command_args(Path::new("/tmp/rootfs"), &packages);
+        let args = AptInstaller::install_command_args(&packages);
 
         assert_eq!(
             args,
             vec![
-                String::from("/tmp/rootfs"),
                 String::from("apt-get"),
                 String::from("install"),
                 String::from("--yes"),
