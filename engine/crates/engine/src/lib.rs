@@ -2,8 +2,7 @@
 use std::path::PathBuf;
 
 use executor::{
-    ActionRunner, AptInstaller, ExecuteError, ExecutionEnvironment, Executor, RootfsRunError,
-    RootfsRunner,
+    ActionRunner, AptInstaller, ExecuteError, ExecutionEnvironment, RootfsRunError, RootfsRunner,
 };
 use model::{Capability, Plan};
 use planner::{PlanError, Planner};
@@ -30,45 +29,12 @@ impl<E> From<ExecuteError<E>> for BuildError<E> {
         Self::Execute(error)
     }
 }
+mod backend;
+
+pub use backend::{BuildBackend, RunnerBackend};
+
 /// High-level orchestration entry point.
-/// Builds an appliance artifact from an execution plan.
-pub trait BuildBackend {
-    /// Error returned when a backend action cannot be completed.
-    type Error;
 
-    /// Executes the supplied plan using this backend.
-    ///
-    /// # Errors
-    ///
-    /// Returns an execution error if the backend cannot complete the plan.
-    fn build(&mut self, plan: &Plan) -> Result<(), ExecuteError<Self::Error>>;
-}
-
-/// Adapts an action runner into a build backend.
-pub struct RunnerBackend<R> {
-    executor: Executor<R>,
-}
-
-impl<R> RunnerBackend<R> {
-    /// Creates a backend using the supplied action runner.
-    #[must_use]
-    pub const fn new(runner: R) -> Self {
-        Self {
-            executor: Executor::new(runner),
-        }
-    }
-}
-
-impl<R> BuildBackend for RunnerBackend<R>
-where
-    R: ActionRunner + ExecutionEnvironment,
-{
-    type Error = R::Error;
-
-    fn build(&mut self, plan: &Plan) -> Result<(), ExecuteError<Self::Error>> {
-        self.executor.execute(plan)
-    }
-}
 #[derive(Clone, Debug)]
 pub struct Engine {
     planner: Planner,
