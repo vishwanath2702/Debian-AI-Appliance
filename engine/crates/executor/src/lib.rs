@@ -1,4 +1,7 @@
 //! Execution of planned system actions.
+mod apt_installer;
+
+pub use apt_installer::{AptInstaller, AptInstallerError};
 use std::fs;
 use std::io;
 use std::path::PathBuf;
@@ -43,15 +46,16 @@ pub trait ExecutionEnvironment {
 }
 /// Installs packages into a root filesystem.
 pub trait PackageInstaller {
-    /// Error returned when package installation fails.
-    type Error;
-
     /// Installs the requested packages into the supplied root filesystem.
     ///
     /// # Errors
     ///
     /// Returns an error when package installation cannot be completed.
-    fn install(&self, rootfs: &std::path::Path, packages: &[String]) -> Result<(), Self::Error>;
+    fn install(
+        &self,
+        rootfs: &std::path::Path,
+        packages: &[String],
+    ) -> Result<(), AptInstallerError>;
 }
 
 /// Package installer that performs no work.
@@ -59,9 +63,11 @@ pub trait PackageInstaller {
 pub struct NoopPackageInstaller;
 
 impl PackageInstaller for NoopPackageInstaller {
-    type Error = std::convert::Infallible;
-
-    fn install(&self, _rootfs: &std::path::Path, _packages: &[String]) -> Result<(), Self::Error> {
+    fn install(
+        &self,
+        _rootfs: &std::path::Path,
+        _packages: &[String],
+    ) -> Result<(), AptInstallerError> {
         Ok(())
     }
 }
@@ -120,12 +126,14 @@ impl ExecutionEnvironment for RootfsRunner {
     }
 }
 /// Error returned when a root filesystem action cannot be executed.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Debug)]
 pub enum RootfsRunError {
     /// The requested package manifest does not exist.
     PackageManifestNotFound(String),
-}
 
+    /// Package installation failed.
+    PackageInstall(AptInstallerError),
+}
 impl ActionRunner for RootfsRunner {
     type Error = RootfsRunError;
 
@@ -138,7 +146,7 @@ impl ActionRunner for RootfsRunner {
                     .ok_or_else(|| RootfsRunError::PackageManifestNotFound(name.clone()))?;
                 self.package_installer
                     .install(&self.rootfs, manifest.packages())
-                    .unwrap_or_else(|error| match error {});
+                    .map_err(RootfsRunError::PackageInstall)?;
             }
             Action::EnableService(service) => {
                 println!(
@@ -338,12 +346,15 @@ mod tests {
             .run(&Action::InstallPackageManifest("desktop".to_owned()))
             .expect_err("unknown package manifest should fail");
 
-        assert_eq!(
-            error,
-            super::RootfsRunError::PackageManifestNotFound("desktop".to_owned())
-        );
+        match error {
+            super::RootfsRunError::PackageManifestNotFound(name) => {
+                assert_eq!(name, "desktop");
+            }
+            other @ super::RootfsRunError::PackageInstall(_) => {
+                panic!("expected PackageManifestNotFound, got {other:?}");
+            }
+        }
     }
-
     #[test]
     fn prepare_creates_rootfs_directory() {
         let unique = SystemTime::now()
