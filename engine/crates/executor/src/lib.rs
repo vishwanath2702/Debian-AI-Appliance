@@ -8,16 +8,23 @@ use model::{Action, Plan};
 
 /// Error returned when plan execution fails.
 #[derive(Debug)]
-pub struct ExecuteError<E> {
-    /// Zero-based index of the failed step.
-    pub step: usize,
+pub enum ExecuteError<E> {
+    /// The execution environment could not be prepared.
+    Environment(io::Error),
 
-    /// Action that failed.
-    pub action: Action,
+    /// An action could not be executed.
+    Action {
+        /// Zero-based index of the failed step.
+        step: usize,
 
-    /// Error returned by the action runner.
-    pub source: E,
+        /// Action that failed.
+        action: Action,
+
+        /// Error returned by the action runner.
+        source: E,
+    },
 }
+
 /// Manages the lifecycle of an execution environment.
 pub trait ExecutionEnvironment {
     /// Prepares the execution environment.
@@ -112,10 +119,9 @@ impl<R> Executor<R> {
         &self.runner
     }
 }
-
 impl<R> Executor<R>
 where
-    R: ActionRunner,
+    R: ActionRunner + ExecutionEnvironment,
 {
     /// Executes every step in the supplied plan.
     ///
@@ -125,10 +131,12 @@ where
     ///
     /// Returns the first error produced by the runner.
     pub fn execute(&mut self, plan: &Plan) -> Result<(), ExecuteError<R::Error>> {
+        self.runner.prepare().map_err(ExecuteError::Environment)?;
+
         for (step, plan_step) in plan.steps.iter().enumerate() {
             self.runner
                 .run(&plan_step.action)
-                .map_err(|source| ExecuteError {
+                .map_err(|source| ExecuteError::Action {
                     step,
                     action: plan_step.action.clone(),
                     source,
@@ -152,6 +160,16 @@ mod tests {
         actions: Vec<Action>,
     }
 
+    impl ExecutionEnvironment for RecordingRunner {
+        fn prepare(&self) -> std::io::Result<()> {
+            Ok(())
+        }
+
+        fn bootstrap(&self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
     impl ActionRunner for RecordingRunner {
         type Error = ();
 
@@ -162,6 +180,16 @@ mod tests {
     }
 
     struct FailingRunner;
+
+    impl ExecutionEnvironment for FailingRunner {
+        fn prepare(&self) -> std::io::Result<()> {
+            Ok(())
+        }
+
+        fn bootstrap(&self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
 
     impl ActionRunner for FailingRunner {
         type Error = &'static str;
@@ -219,12 +247,20 @@ mod tests {
 
         let error = executor.execute(&plan).expect_err("execution should fail");
 
-        assert_eq!(error.step, 0);
-        assert_eq!(
-            error.action,
-            Action::InstallPackageManifest("desktop".to_owned())
-        );
-        assert_eq!(error.source, "boom");
+        match error {
+            crate::ExecuteError::Action {
+                step,
+                action,
+                source,
+            } => {
+                assert_eq!(step, 0);
+                assert_eq!(action, Action::InstallPackageManifest("desktop".to_owned()));
+                assert_eq!(source, "boom");
+            }
+            crate::ExecuteError::Environment(_) => {
+                panic!("expected action execution error");
+            }
+        }
     }
 
     #[test]
