@@ -31,6 +31,44 @@ impl<E> From<ExecuteError<E>> for BuildError<E> {
     }
 }
 /// High-level orchestration entry point.
+/// Builds an appliance artifact from an execution plan.
+pub trait BuildBackend {
+    /// Error returned when a backend action cannot be completed.
+    type Error;
+
+    /// Executes the supplied plan using this backend.
+    ///
+    /// # Errors
+    ///
+    /// Returns an execution error if the backend cannot complete the plan.
+    fn build(&mut self, plan: &Plan) -> Result<(), ExecuteError<Self::Error>>;
+}
+
+/// Adapts an action runner into a build backend.
+pub struct RunnerBackend<R> {
+    executor: Executor<R>,
+}
+
+impl<R> RunnerBackend<R> {
+    /// Creates a backend using the supplied action runner.
+    #[must_use]
+    pub const fn new(runner: R) -> Self {
+        Self {
+            executor: Executor::new(runner),
+        }
+    }
+}
+
+impl<R> BuildBackend for RunnerBackend<R>
+where
+    R: ActionRunner + ExecutionEnvironment,
+{
+    type Error = R::Error;
+
+    fn build(&mut self, plan: &Plan) -> Result<(), ExecuteError<Self::Error>> {
+        self.executor.execute(plan)
+    }
+}
 #[derive(Clone, Debug)]
 pub struct Engine {
     planner: Planner,
@@ -56,6 +94,26 @@ impl Engine {
         self.planner.build(capability)
     }
 
+    /// Builds and executes an appliance plan using the supplied backend.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`BuildError`] if planning or backend execution fails.
+    pub fn build_with_backend<B>(
+        &self,
+        capability: &Capability,
+        mut backend: B,
+    ) -> Result<Plan, BuildError<B::Error>>
+    where
+        B: BuildBackend,
+    {
+        let plan = self.plan(capability)?;
+
+        backend.build(&plan)?;
+
+        Ok(plan)
+    }
+
     /// Builds and executes an appliance plan using the supplied runner.
     ///
     /// # Errors
@@ -69,14 +127,8 @@ impl Engine {
     where
         R: ActionRunner + ExecutionEnvironment,
     {
-        let plan = self.plan(capability)?;
-        let mut executor = Executor::new(runner);
-
-        executor.execute(&plan)?;
-
-        Ok(plan)
+        self.build_with_backend(capability, RunnerBackend::new(runner))
     }
-
     /// Builds and executes an appliance plan inside a root filesystem.
     ///
     /// # Errors
