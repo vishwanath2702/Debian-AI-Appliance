@@ -107,6 +107,23 @@ impl Engine {
 
         self.build_with_backend(capability, backend)
     }
+    /// Builds and executes an appliance plan as a bootable ISO image.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`BuildError`] if planning or ISO generation fails.
+    pub fn build_iso(
+        &self,
+        capability: &Capability,
+        rootfs: PathBuf,
+        source_iso: PathBuf,
+        work_directory: PathBuf,
+        output_iso: PathBuf,
+    ) -> Result<Plan, BuildError<std::io::Error>> {
+        let backend = IsoBackend::new(rootfs, source_iso, work_directory, output_iso);
+
+        self.build_with_backend(capability, backend)
+    }
 }
 #[cfg(test)]
 mod tests {
