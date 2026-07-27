@@ -37,6 +37,22 @@ impl KernelStage {
         find_kernel(&boot_directory)
     }
 }
+/// Discovers the initramfs in the prepared root filesystem.
+pub struct InitramfsStage;
+
+impl InitramfsStage {
+    /// Finds the initramfs under the root filesystem's `/boot` directory.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the boot directory cannot be read, no initramfs is
+    /// found, or more than one initramfs is present.
+    pub fn run(context: &IsoContext) -> io::Result<PathBuf> {
+        let boot_directory = context.config.layout.root().join("boot");
+
+        find_initramfs(&boot_directory)
+    }
+}
 
 fn find_kernel(boot_directory: &Path) -> io::Result<PathBuf> {
     let mut kernels = fs::read_dir(boot_directory)?
@@ -65,10 +81,43 @@ fn find_kernel(boot_directory: &Path) -> io::Result<PathBuf> {
     }
 }
 
+fn find_initramfs(boot_directory: &Path) -> io::Result<PathBuf> {
+    let mut initramfs_images = fs::read_dir(boot_directory)?
+        .filter_map(|entry| match entry {
+            Ok(entry) if is_initramfs_name(&entry.file_name()) => Some(Ok(entry.path())),
+            Ok(_) => None,
+            Err(error) => Some(Err(error)),
+        })
+        .collect::<io::Result<Vec<_>>>()?;
+
+    initramfs_images.sort();
+
+    match initramfs_images.as_slice() {
+        [initramfs] => Ok(initramfs.clone()),
+        [] => Err(io::Error::new(
+            io::ErrorKind::NotFound,
+            format!("no initramfs was found in {}", boot_directory.display()),
+        )),
+        _ => Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!(
+                "multiple initramfs images were found in {}",
+                boot_directory.display()
+            ),
+        )),
+    }
+}
+
 fn is_kernel_name(file_name: &OsStr) -> bool {
     file_name
         .to_str()
         .is_some_and(|name| name.starts_with("vmlinuz-"))
+}
+
+fn is_initramfs_name(file_name: &OsStr) -> bool {
+    file_name
+        .to_str()
+        .is_some_and(|name| name.starts_with("initrd.img-"))
 }
 
 #[cfg(test)]
@@ -79,7 +128,7 @@ mod tests {
         sync::atomic::{AtomicUsize, Ordering},
     };
 
-    use super::find_kernel;
+    use super::{find_initramfs, find_kernel};
 
     static NEXT_DIRECTORY_ID: AtomicUsize = AtomicUsize::new(0);
 
@@ -153,6 +202,43 @@ mod tests {
 
         let error = find_kernel(boot_directory.path())
             .expect_err("multiple kernels should return an error");
+
+        assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
+    }
+    #[test]
+    fn finds_single_initramfs() {
+        let boot_directory = TestDirectory::create();
+        let expected = boot_directory.create_file("initrd.img-6.12.0-amd64");
+
+        boot_directory.create_file("vmlinuz-6.12.0-amd64");
+        boot_directory.create_file("config-6.12.0-amd64");
+
+        let initramfs = find_initramfs(boot_directory.path()).expect("initramfs should be found");
+
+        assert_eq!(initramfs, expected);
+    }
+
+    #[test]
+    fn returns_error_when_initramfs_is_missing() {
+        let boot_directory = TestDirectory::create();
+
+        boot_directory.create_file("vmlinuz-6.12.0-amd64");
+
+        let error = find_initramfs(boot_directory.path())
+            .expect_err("missing initramfs should return an error");
+
+        assert_eq!(error.kind(), std::io::ErrorKind::NotFound);
+    }
+
+    #[test]
+    fn returns_error_when_multiple_initramfs_images_exist() {
+        let boot_directory = TestDirectory::create();
+
+        boot_directory.create_file("initrd.img-6.12.0-amd64");
+        boot_directory.create_file("initrd.img-6.13.0-amd64");
+
+        let error = find_initramfs(boot_directory.path())
+            .expect_err("multiple initramfs images should return an error");
 
         assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
     }

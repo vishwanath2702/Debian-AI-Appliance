@@ -8,7 +8,7 @@ mod stage;
 pub use context::{IsoConfig, IsoContext};
 pub use layout::Layout;
 pub use pipeline::IsoPipeline;
-pub use stage::{KernelStage, WorkspaceStage};
+pub use stage::{InitramfsStage, KernelStage, WorkspaceStage};
 
 use executor::ExecuteError;
 use model::Plan;
@@ -101,6 +101,7 @@ mod tests {
 
         std::fs::create_dir_all(&boot_directory).unwrap();
         std::fs::File::create(boot_directory.join("vmlinuz-test")).unwrap();
+        std::fs::File::create(boot_directory.join("initrd.img-test")).unwrap();
         backend.build(&plan).unwrap();
 
         let layout = backend.layout();
