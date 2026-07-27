@@ -67,6 +67,7 @@ impl BuildBackend for IsoBackend {
     fn build(&mut self, _plan: &Plan) -> Result<(), ExecuteError<Self::Error>> {
         let context = IsoContext {
             config: IsoConfig {
+                rootfs: self.rootfs.clone(),
                 layout: self.layout(),
             },
         };
@@ -97,7 +98,7 @@ mod tests {
             steps: Vec::new(),
         };
 
-        let boot_directory = backend.layout().root().join("boot");
+        let boot_directory = backend.rootfs().join("boot");
 
         std::fs::create_dir_all(&boot_directory).unwrap();
         std::fs::File::create(boot_directory.join("vmlinuz-test")).unwrap();

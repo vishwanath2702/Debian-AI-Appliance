@@ -33,7 +33,7 @@ impl KernelStage {
     /// Returns an error if the boot directory cannot be read, no kernel is
     /// found, or more than one kernel is present.
     pub fn run(context: &IsoContext) -> io::Result<PathBuf> {
-        let boot_directory = context.config.layout.root().join("boot");
+        let boot_directory = context.config.rootfs.join("boot");
         find_kernel(&boot_directory)
     }
 }
@@ -48,76 +48,51 @@ impl InitramfsStage {
     /// Returns an error if the boot directory cannot be read, no initramfs is
     /// found, or more than one initramfs is present.
     pub fn run(context: &IsoContext) -> io::Result<PathBuf> {
-        let boot_directory = context.config.layout.root().join("boot");
+        let boot_directory = context.config.rootfs.join("boot");
 
         find_initramfs(&boot_directory)
     }
 }
 
 fn find_kernel(boot_directory: &Path) -> io::Result<PathBuf> {
-    let mut kernels = fs::read_dir(boot_directory)?
-        .filter_map(|entry| match entry {
-            Ok(entry) if is_kernel_name(&entry.file_name()) => Some(Ok(entry.path())),
-            Ok(_) => None,
-            Err(error) => Some(Err(error)),
-        })
-        .collect::<io::Result<Vec<_>>>()?;
-
-    kernels.sort();
-
-    match kernels.as_slice() {
-        [kernel] => Ok(kernel.clone()),
-        [] => Err(io::Error::new(
-            io::ErrorKind::NotFound,
-            format!("no Linux kernel was found in {}", boot_directory.display()),
-        )),
-        _ => Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            format!(
-                "multiple Linux kernels were found in {}",
-                boot_directory.display()
-            ),
-        )),
-    }
+    find_single_file(boot_directory, "vmlinuz-", "Linux kernel")
 }
 
 fn find_initramfs(boot_directory: &Path) -> io::Result<PathBuf> {
-    let mut initramfs_images = fs::read_dir(boot_directory)?
+    find_single_file(boot_directory, "initrd.img-", "initramfs")
+}
+
+fn find_single_file(directory: &Path, prefix: &str, artifact_name: &str) -> io::Result<PathBuf> {
+    let mut matching_files = fs::read_dir(directory)?
         .filter_map(|entry| match entry {
-            Ok(entry) if is_initramfs_name(&entry.file_name()) => Some(Ok(entry.path())),
+            Ok(entry) if has_prefix(&entry.file_name(), prefix) => Some(Ok(entry.path())),
             Ok(_) => None,
             Err(error) => Some(Err(error)),
         })
         .collect::<io::Result<Vec<_>>>()?;
 
-    initramfs_images.sort();
+    matching_files.sort();
 
-    match initramfs_images.as_slice() {
-        [initramfs] => Ok(initramfs.clone()),
+    match matching_files.as_slice() {
+        [path] => Ok(path.clone()),
         [] => Err(io::Error::new(
             io::ErrorKind::NotFound,
-            format!("no initramfs was found in {}", boot_directory.display()),
+            format!("no {artifact_name} was found in {}", directory.display()),
         )),
         _ => Err(io::Error::new(
             io::ErrorKind::InvalidData,
             format!(
-                "multiple initramfs images were found in {}",
-                boot_directory.display()
+                "multiple {artifact_name} files were found in {}",
+                directory.display()
             ),
         )),
     }
 }
 
-fn is_kernel_name(file_name: &OsStr) -> bool {
+fn has_prefix(file_name: &OsStr, prefix: &str) -> bool {
     file_name
         .to_str()
-        .is_some_and(|name| name.starts_with("vmlinuz-"))
-}
-
-fn is_initramfs_name(file_name: &OsStr) -> bool {
-    file_name
-        .to_str()
-        .is_some_and(|name| name.starts_with("initrd.img-"))
+        .is_some_and(|name| name.starts_with(prefix))
 }
 
 #[cfg(test)]
