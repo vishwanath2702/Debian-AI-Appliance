@@ -28,10 +28,8 @@ impl<E> From<ExecuteError<E>> for BuildError<E> {
     }
 }
 mod backend;
-mod rootfs_backend;
 
-pub use backend::{BuildBackend, RunnerBackend};
-pub use rootfs_backend::RootfsBackend;
+pub use backend::{BuildBackend, RootfsBackend, RunnerBackend};
 
 /// High-level orchestration entry point.
 

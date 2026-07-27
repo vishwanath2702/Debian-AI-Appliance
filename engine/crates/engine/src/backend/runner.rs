@@ -1,20 +1,9 @@
-//! Build backends.
+//! Runner-backed build backend.
 
 use executor::{ActionRunner, ExecuteError, ExecutionEnvironment, Executor};
 use model::Plan;
 
-/// Backend responsible for producing a build artifact.
-pub trait BuildBackend {
-    /// Backend-specific error.
-    type Error;
-
-    /// Builds the requested artifact from a plan.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the backend cannot complete the build.
-    fn build(&mut self, plan: &Plan) -> Result<(), ExecuteError<Self::Error>>;
-}
+use super::BuildBackend;
 
 /// Adapts an execution environment into a build backend.
 pub struct RunnerBackend<R> {
@@ -30,6 +19,7 @@ impl<R> RunnerBackend<R> {
         }
     }
 }
+
 impl<R> BuildBackend for RunnerBackend<R>
 where
     R: ActionRunner + ExecutionEnvironment,
