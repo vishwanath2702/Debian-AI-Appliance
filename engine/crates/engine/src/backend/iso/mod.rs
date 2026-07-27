@@ -1,8 +1,12 @@
 //! ISO build backend.
 
+mod context;
 mod layout;
+mod pipeline;
 
+pub use context::{IsoConfig, IsoContext};
 pub use layout::Layout;
+pub use pipeline::IsoPipeline;
 
 use executor::ExecuteError;
 use model::Plan;
@@ -59,7 +63,12 @@ impl BuildBackend for IsoBackend {
     type Error = std::io::Error;
 
     fn build(&mut self, _plan: &Plan) -> Result<(), ExecuteError<Self::Error>> {
-        self.layout().create().map_err(ExecuteError::Environment)?;
+        let context = IsoContext {
+            config: IsoConfig {
+                layout: self.layout(),
+            },
+        };
+        IsoPipeline::run(&context).map_err(ExecuteError::Environment)?;
 
         Ok(())
     }
