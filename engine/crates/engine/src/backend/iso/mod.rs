@@ -64,3 +64,35 @@ impl BuildBackend for IsoBackend {
         Ok(())
     }
 }
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use model::{Capability, Plan, ProviderId};
+    use tempfile::tempdir;
+
+    #[test]
+    fn build_creates_workspace_layout() {
+        let temp = tempdir().unwrap();
+
+        let mut backend = IsoBackend::new(
+            temp.path().join("rootfs"),
+            temp.path().join("work"),
+            temp.path().join("image.iso"),
+        );
+
+        let plan = Plan {
+            capability: Capability::new("test"),
+            provider: ProviderId::new("test"),
+            steps: Vec::new(),
+        };
+
+        backend.build(&plan).unwrap();
+
+        let layout = backend.layout();
+
+        assert!(layout.boot_grub().is_dir());
+        assert!(layout.efi_boot().is_dir());
+        assert!(layout.live().is_dir());
+        assert!(layout.staging().is_dir());
+    }
+}
