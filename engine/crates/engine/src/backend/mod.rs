@@ -6,6 +6,7 @@ mod runner;
 use executor::ExecuteError;
 use model::Plan;
 
+pub use iso::IsoBackend;
 pub use rootfs::RootfsBackend;
 pub use runner::RunnerBackend;
 

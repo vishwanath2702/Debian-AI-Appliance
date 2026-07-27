@@ -29,8 +29,7 @@ impl<E> From<ExecuteError<E>> for BuildError<E> {
 }
 mod backend;
 
-pub use backend::{BuildBackend, RootfsBackend, RunnerBackend};
-
+pub use backend::{BuildBackend, IsoBackend, RootfsBackend, RunnerBackend};
 /// High-level orchestration entry point.
 
 #[derive(Clone, Debug)]
