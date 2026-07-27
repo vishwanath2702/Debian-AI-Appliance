@@ -2,7 +2,7 @@
 
 use std::io;
 
-use super::{IsoContext, WorkspaceStage};
+use super::{IsoContext, KernelStage, WorkspaceStage};
 
 /// Coordinates the ISO build process.
 pub struct IsoPipeline;
@@ -14,6 +14,10 @@ impl IsoPipeline {
     ///
     /// Returns an error if an ISO build stage fails.
     pub fn run(context: &IsoContext) -> io::Result<()> {
-        WorkspaceStage::run(context)
+        WorkspaceStage::run(context)?;
+
+        let _kernel = KernelStage::run(context)?;
+
+        Ok(())
     }
 }

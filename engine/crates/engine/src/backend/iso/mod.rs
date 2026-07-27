@@ -5,11 +5,10 @@ mod layout;
 mod pipeline;
 mod stage;
 
-use stage::WorkspaceStage;
-
 pub use context::{IsoConfig, IsoContext};
 pub use layout::Layout;
 pub use pipeline::IsoPipeline;
+pub use stage::{KernelStage, WorkspaceStage};
 
 use executor::ExecuteError;
 use model::Plan;
@@ -98,6 +97,10 @@ mod tests {
             steps: Vec::new(),
         };
 
+        let boot_directory = backend.layout().root().join("boot");
+
+        std::fs::create_dir_all(&boot_directory).unwrap();
+        std::fs::File::create(boot_directory.join("vmlinuz-test")).unwrap();
         backend.build(&plan).unwrap();
 
         let layout = backend.layout();
