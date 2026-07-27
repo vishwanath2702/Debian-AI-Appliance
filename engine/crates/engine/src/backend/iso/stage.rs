@@ -8,7 +8,34 @@ use std::{
 };
 
 use super::IsoContext;
+/// Validates the source ISO before the build begins.
+pub struct SourceIsoStage;
 
+impl SourceIsoStage {
+    /// Validates that the configured source ISO exists, is a regular file and
+    /// is readable.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the source ISO does not exist, is not a regular
+    /// file, or cannot be opened for reading.
+    pub fn run(context: &IsoContext) -> io::Result<()> {
+        let source_iso = &context.config.source_iso;
+
+        let metadata = fs::metadata(source_iso)?;
+
+        if !metadata.is_file() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("source ISO is not a regular file: {}", source_iso.display()),
+            ));
+        }
+
+        fs::File::open(source_iso)?;
+
+        Ok(())
+    }
+}
 /// Creates the ISO workspace layout.
 pub struct WorkspaceStage;
 

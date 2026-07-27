@@ -9,10 +9,9 @@ pub use context::{IsoConfig, IsoContext};
 pub use layout::Layout;
 pub use pipeline::IsoPipeline;
 pub use stage::{
-    BootArtifactsStage, GrubConfigStage, InitramfsStage, IsoImageStage, KernelStage, SquashFsStage,
-    WorkspaceStage,
+    BootArtifactsStage, GrubConfigStage, InitramfsStage, IsoImageStage, KernelStage,
+    SourceIsoStage, SquashFsStage, WorkspaceStage,
 };
-
 use std::path::{Path, PathBuf};
 
 use executor::ExecuteError;

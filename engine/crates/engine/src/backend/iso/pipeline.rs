@@ -4,7 +4,7 @@ use std::io;
 
 use super::{
     BootArtifactsStage, GrubConfigStage, InitramfsStage, IsoContext, IsoImageStage, KernelStage,
-    SquashFsStage, WorkspaceStage,
+    SourceIsoStage, SquashFsStage, WorkspaceStage,
 };
 
 /// Coordinates the ISO build process.
@@ -17,6 +17,7 @@ impl IsoPipeline {
     ///
     /// Returns an error if an ISO build stage fails.
     pub fn run(context: &IsoContext) -> io::Result<()> {
+        SourceIsoStage::run(context)?;
         WorkspaceStage::run(context)?;
 
         let kernel = KernelStage::run(context)?;
