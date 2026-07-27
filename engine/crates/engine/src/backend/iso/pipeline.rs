@@ -2,7 +2,7 @@
 
 use std::io;
 
-use super::IsoContext;
+use super::{IsoContext, WorkspaceStage};
 
 /// Coordinates the ISO build process.
 pub struct IsoPipeline;
@@ -12,8 +12,8 @@ impl IsoPipeline {
     ///
     /// # Errors
     ///
-    /// Returns an error if the workspace cannot be prepared.
+    /// Returns an error if an ISO build stage fails.
     pub fn run(context: &IsoContext) -> io::Result<()> {
-        context.config.layout.create()
+        WorkspaceStage::run(context)
     }
 }

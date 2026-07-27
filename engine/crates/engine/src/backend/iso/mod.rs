@@ -3,6 +3,9 @@
 mod context;
 mod layout;
 mod pipeline;
+mod stage;
+
+use stage::WorkspaceStage;
 
 pub use context::{IsoConfig, IsoContext};
 pub use layout::Layout;
