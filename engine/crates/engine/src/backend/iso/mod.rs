@@ -4,8 +4,11 @@ mod layout;
 
 pub use layout::Layout;
 
+use executor::ExecuteError;
+use model::Plan;
 use std::path::{Path, PathBuf};
 
+use super::BuildBackend;
 /// Backend responsible for producing a bootable ISO image.
 pub struct IsoBackend {
     rootfs: PathBuf,
@@ -15,10 +18,6 @@ pub struct IsoBackend {
 
 impl IsoBackend {
     /// Creates an ISO backend.
-    #[must_use]
-    pub fn layout(&self) -> Layout {
-        Layout::new(self.work_directory.join("iso"))
-    }
     #[must_use]
     pub fn new(
         rootfs: impl Into<PathBuf>,
@@ -48,5 +47,20 @@ impl IsoBackend {
     #[must_use]
     pub fn output_path(&self) -> &Path {
         &self.output_path
+    }
+
+    #[must_use]
+    pub fn layout(&self) -> Layout {
+        Layout::new(self.work_directory.join("iso"))
+    }
+}
+
+impl BuildBackend for IsoBackend {
+    type Error = std::io::Error;
+
+    fn build(&mut self, _plan: &Plan) -> Result<(), ExecuteError<Self::Error>> {
+        self.layout().create().map_err(ExecuteError::Environment)?;
+
+        Ok(())
     }
 }
