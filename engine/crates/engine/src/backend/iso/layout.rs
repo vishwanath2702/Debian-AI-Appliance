@@ -47,6 +47,10 @@ impl Layout {
     pub fn staging(&self) -> PathBuf {
         self.root.join("staging")
     }
+    #[must_use]
+    pub fn filesystem_squashfs(&self) -> PathBuf {
+        self.live().join("filesystem.squashfs")
+    }
 }
 #[cfg(test)]
 mod tests {
@@ -69,6 +73,10 @@ mod tests {
         assert_eq!(
             layout.staging(),
             std::path::Path::new("/tmp/work/iso/staging")
+        );
+        assert_eq!(
+            layout.filesystem_squashfs(),
+            std::path::Path::new("/tmp/work/iso/live/filesystem.squashfs")
         );
     }
 }

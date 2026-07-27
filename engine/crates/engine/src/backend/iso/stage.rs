@@ -60,7 +60,7 @@ impl SquashFsStage {
     /// Returns the path where the `SquashFS` image will be written.
     #[must_use]
     pub fn run(context: &IsoContext) -> PathBuf {
-        context.config.layout.live().join("filesystem.squashfs")
+        context.config.layout.filesystem_squashfs()
     }
 }
 fn find_kernel(boot_directory: &Path) -> io::Result<PathBuf> {
