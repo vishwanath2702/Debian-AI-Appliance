@@ -1,9 +1,7 @@
 //! High-level orchestration for the DAIA engine.
 use std::path::PathBuf;
 
-use executor::{
-    ActionRunner, AptInstaller, ExecuteError, ExecutionEnvironment, RootfsRunError, RootfsRunner,
-};
+use executor::{ActionRunner, ExecuteError, ExecutionEnvironment, RootfsRunError};
 use model::{Capability, Plan};
 use planner::{PlanError, Planner};
 use registry::{PackageRepository, Registry};
@@ -30,8 +28,10 @@ impl<E> From<ExecuteError<E>> for BuildError<E> {
     }
 }
 mod backend;
+mod rootfs_backend;
 
 pub use backend::{BuildBackend, RunnerBackend};
+pub use rootfs_backend::RootfsBackend;
 
 /// High-level orchestration entry point.
 
@@ -106,10 +106,9 @@ impl Engine {
         rootfs: PathBuf,
         package_repository: PackageRepository,
     ) -> Result<Plan, BuildError<RootfsRunError>> {
-        let runner =
-            RootfsRunner::with_installer(rootfs, package_repository, Box::new(AptInstaller::new()));
+        let backend = RootfsBackend::new(rootfs, package_repository);
 
-        self.build_with_runner(capability, runner)
+        self.build_with_backend(capability, backend)
     }
 }
 #[cfg(test)]
