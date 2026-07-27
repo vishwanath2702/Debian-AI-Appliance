@@ -54,6 +54,51 @@ impl InitramfsStage {
         find_initramfs(&boot_directory)
     }
 }
+
+/// Copies boot artifacts into the ISO live directory.
+pub struct BootArtifactsStage;
+
+impl BootArtifactsStage {
+    /// Copies and renames the discovered kernel and initramfs.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if either boot artifact cannot be copied.
+    pub fn run(context: &IsoContext, kernel: &Path, initramfs: &Path) -> io::Result<()> {
+        fs::copy(kernel, context.config.layout.live_kernel())?;
+        fs::copy(initramfs, context.config.layout.live_initramfs())?;
+
+        Ok(())
+    }
+}
+/// Generates the GRUB boot menu configuration.
+pub struct GrubConfigStage;
+
+impl GrubConfigStage {
+    /// Writes the GRUB configuration into the ISO boot directory.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the GRUB configuration cannot be written.
+    pub fn run(context: &IsoContext) -> io::Result<PathBuf> {
+        let output = context.config.layout.grub_config();
+
+        fs::write(
+            &output,
+            concat!(
+                "set default=0\n",
+                "set timeout=5\n",
+                "\n",
+                "menuentry \"Debian AI Appliance\" {\n",
+                "    linux /live/vmlinuz boot=live quiet\n",
+                "    initrd /live/initrd.img\n",
+                "}\n",
+            ),
+        )?;
+
+        Ok(output)
+    }
+}
 /// Determines the location of the `SquashFS` image.
 /// Builds the compressed root filesystem image.
 pub struct SquashFsStage;
@@ -81,6 +126,62 @@ impl SquashFsStage {
         }
 
         Ok(output)
+    }
+}
+/// Produces the final ISO while replaying boot metadata from a source ISO.
+pub struct IsoImageStage;
+
+impl IsoImageStage {
+    /// Builds the final ISO image from the prepared ISO workspace.
+    ///
+    /// The source ISO supplies the existing BIOS and UEFI boot metadata. The
+    /// prepared workspace is mapped over the source ISO filesystem tree.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the output directory cannot be prepared,
+    /// `xorriso` cannot be started, `xorriso` exits unsuccessfully, or the
+    /// command completes without creating the requested output image.
+    pub fn run(context: &IsoContext) -> io::Result<PathBuf> {
+        let output = &context.config.output_iso;
+
+        if let Some(parent) = output
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+        {
+            fs::create_dir_all(parent)?;
+        }
+
+        if output.exists() {
+            fs::remove_file(output)?;
+        }
+
+        let status = Command::new(&context.config.xorriso_command)
+            .arg("-indev")
+            .arg(&context.config.source_iso)
+            .arg("-outdev")
+            .arg(output)
+            .args(["-boot_image", "any", "replay"])
+            .arg("-map")
+            .arg(context.config.layout.root())
+            .arg("/")
+            .arg("-commit")
+            .status()?;
+
+        if !status.success() {
+            return Err(io::Error::other(format!(
+                "xorriso failed with status {status}"
+            )));
+        }
+
+        if !output.is_file() {
+            return Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                format!("xorriso completed without producing {}", output.display()),
+            ));
+        }
+
+        Ok(output.clone())
     }
 }
 fn find_kernel(boot_directory: &Path) -> io::Result<PathBuf> {

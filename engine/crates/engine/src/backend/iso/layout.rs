@@ -34,6 +34,10 @@ impl Layout {
     }
 
     #[must_use]
+    pub fn grub_config(&self) -> PathBuf {
+        self.boot_grub().join("grub.cfg")
+    }
+    #[must_use]
     pub fn efi_boot(&self) -> PathBuf {
         self.root.join("EFI").join("BOOT")
     }
@@ -51,6 +55,15 @@ impl Layout {
     pub fn filesystem_squashfs(&self) -> PathBuf {
         self.live().join("filesystem.squashfs")
     }
+    #[must_use]
+    pub fn live_kernel(&self) -> PathBuf {
+        self.live().join("vmlinuz")
+    }
+
+    #[must_use]
+    pub fn live_initramfs(&self) -> PathBuf {
+        self.live().join("initrd.img")
+    }
 }
 #[cfg(test)]
 mod tests {
@@ -66,6 +79,10 @@ mod tests {
             std::path::Path::new("/tmp/work/iso/boot/grub")
         );
         assert_eq!(
+            layout.grub_config(),
+            std::path::Path::new("/tmp/work/iso/boot/grub/grub.cfg")
+        );
+        assert_eq!(
             layout.efi_boot(),
             std::path::Path::new("/tmp/work/iso/EFI/BOOT")
         );
@@ -77,6 +94,15 @@ mod tests {
         assert_eq!(
             layout.filesystem_squashfs(),
             std::path::Path::new("/tmp/work/iso/live/filesystem.squashfs")
+        );
+        assert_eq!(
+            layout.live_kernel(),
+            std::path::Path::new("/tmp/work/iso/live/vmlinuz")
+        );
+
+        assert_eq!(
+            layout.live_initramfs(),
+            std::path::Path::new("/tmp/work/iso/live/initrd.img")
         );
     }
 }
