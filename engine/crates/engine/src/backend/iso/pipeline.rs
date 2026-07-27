@@ -18,7 +18,7 @@ impl IsoPipeline {
 
         let _kernel = KernelStage::run(context)?;
         let _initramfs = InitramfsStage::run(context)?;
-        let _squashfs = SquashFsStage::run(context);
+        let _squashfs = SquashFsStage::run(context)?;
 
         Ok(())
     }

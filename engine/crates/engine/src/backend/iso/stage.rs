@@ -4,6 +4,7 @@ use std::{
     ffi::OsStr,
     fs, io,
     path::{Path, PathBuf},
+    process::Command,
 };
 
 use super::IsoContext;
@@ -54,13 +55,32 @@ impl InitramfsStage {
     }
 }
 /// Determines the location of the `SquashFS` image.
+/// Builds the compressed root filesystem image.
 pub struct SquashFsStage;
 
 impl SquashFsStage {
-    /// Returns the path where the `SquashFS` image will be written.
-    #[must_use]
-    pub fn run(context: &IsoContext) -> PathBuf {
-        context.config.layout.filesystem_squashfs()
+    /// Builds the `SquashFS` image from the prepared root filesystem.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `mksquashfs` cannot be started or exits
+    /// unsuccessfully.
+    pub fn run(context: &IsoContext) -> io::Result<PathBuf> {
+        let output = context.config.layout.filesystem_squashfs();
+
+        let status = Command::new("mksquashfs")
+            .arg(&context.config.rootfs)
+            .arg(&output)
+            .args(["-comp", "xz", "-noappend", "-e", "boot"])
+            .status()?;
+
+        if !status.success() {
+            return Err(io::Error::other(format!(
+                "mksquashfs failed with status {status}"
+            )));
+        }
+
+        Ok(output)
     }
 }
 fn find_kernel(boot_directory: &Path) -> io::Result<PathBuf> {

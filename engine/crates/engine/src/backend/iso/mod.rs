@@ -111,5 +111,6 @@ mod tests {
         assert!(layout.efi_boot().is_dir());
         assert!(layout.live().is_dir());
         assert!(layout.staging().is_dir());
+        assert!(layout.filesystem_squashfs().is_file());
     }
 }
