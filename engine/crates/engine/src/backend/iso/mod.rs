@@ -8,7 +8,7 @@ mod stage;
 pub use context::{IsoConfig, IsoContext};
 pub use layout::Layout;
 pub use pipeline::IsoPipeline;
-pub use stage::{InitramfsStage, KernelStage, WorkspaceStage};
+pub use stage::{InitramfsStage, KernelStage, SquashFsStage, WorkspaceStage};
 
 use executor::ExecuteError;
 use model::Plan;

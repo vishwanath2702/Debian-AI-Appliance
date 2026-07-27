@@ -53,7 +53,16 @@ impl InitramfsStage {
         find_initramfs(&boot_directory)
     }
 }
+/// Determines the location of the `SquashFS` image.
+pub struct SquashFsStage;
 
+impl SquashFsStage {
+    /// Returns the path where the `SquashFS` image will be written.
+    #[must_use]
+    pub fn run(context: &IsoContext) -> PathBuf {
+        context.config.layout.live().join("filesystem.squashfs")
+    }
+}
 fn find_kernel(boot_directory: &Path) -> io::Result<PathBuf> {
     find_single_file(boot_directory, "vmlinuz-", "Linux kernel")
 }

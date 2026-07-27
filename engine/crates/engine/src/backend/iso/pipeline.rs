@@ -2,7 +2,7 @@
 
 use std::io;
 
-use super::{InitramfsStage, IsoContext, KernelStage, WorkspaceStage};
+use super::{InitramfsStage, IsoContext, KernelStage, SquashFsStage, WorkspaceStage};
 
 /// Coordinates the ISO build process.
 pub struct IsoPipeline;
@@ -18,6 +18,7 @@ impl IsoPipeline {
 
         let _kernel = KernelStage::run(context)?;
         let _initramfs = InitramfsStage::run(context)?;
+        let _squashfs = SquashFsStage::run(context);
 
         Ok(())
     }
