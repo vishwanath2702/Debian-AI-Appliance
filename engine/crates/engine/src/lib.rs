@@ -1,11 +1,37 @@
 //! High-level orchestration for the DAIA engine.
+use std::path::PathBuf;
 
+use executor::{ActionRunner, ExecuteError, ExecutionEnvironment, RootfsRunError};
 use model::{Capability, Plan};
 use planner::{PlanError, Planner};
-use registry::Registry;
+use registry::{PackageRepository, Registry};
 use resolver::Resolver;
+/// Error returned when an appliance build cannot be completed.
+#[derive(Debug)]
+pub enum BuildError<E> {
+    /// An execution plan could not be produced.
+    Plan(PlanError),
 
+    /// The generated plan could not be executed.
+    Execute(ExecuteError<E>),
+}
+
+impl<E> From<PlanError> for BuildError<E> {
+    fn from(error: PlanError) -> Self {
+        Self::Plan(error)
+    }
+}
+
+impl<E> From<ExecuteError<E>> for BuildError<E> {
+    fn from(error: ExecuteError<E>) -> Self {
+        Self::Execute(error)
+    }
+}
+mod backend;
+
+pub use backend::{BuildBackend, IsoBackend, RootfsBackend, RunnerBackend};
 /// High-level orchestration entry point.
+
 #[derive(Clone, Debug)]
 pub struct Engine {
     planner: Planner,
@@ -30,15 +56,81 @@ impl Engine {
     pub fn plan(&self, capability: &Capability) -> Result<Plan, PlanError> {
         self.planner.build(capability)
     }
-}
 
+    /// Builds and executes an appliance plan using the supplied backend.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`BuildError`] if planning or backend execution fails.
+    pub fn build_with_backend<B>(
+        &self,
+        capability: &Capability,
+        mut backend: B,
+    ) -> Result<Plan, BuildError<B::Error>>
+    where
+        B: BuildBackend,
+    {
+        let plan = self.plan(capability)?;
+
+        backend.build(&plan)?;
+
+        Ok(plan)
+    }
+
+    /// Builds and executes an appliance plan using the supplied runner.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`BuildError`] if planning or execution fails.
+    pub fn build_with_runner<R>(
+        &self,
+        capability: &Capability,
+        runner: R,
+    ) -> Result<Plan, BuildError<R::Error>>
+    where
+        R: ActionRunner + ExecutionEnvironment,
+    {
+        self.build_with_backend(capability, RunnerBackend::new(runner))
+    }
+    /// Builds and executes an appliance plan inside a root filesystem.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`BuildError`] if planning or execution fails.
+    pub fn build(
+        &self,
+        capability: &Capability,
+        rootfs: PathBuf,
+        package_repository: PackageRepository,
+    ) -> Result<Plan, BuildError<RootfsRunError>> {
+        let backend = RootfsBackend::new(rootfs, package_repository);
+
+        self.build_with_backend(capability, backend)
+    }
+    /// Builds and executes an appliance plan as a bootable ISO image.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`BuildError`] if planning or ISO generation fails.
+    pub fn build_iso(
+        &self,
+        capability: &Capability,
+        rootfs: PathBuf,
+        source_iso: PathBuf,
+        work_directory: PathBuf,
+        output_iso: PathBuf,
+    ) -> Result<Plan, BuildError<std::io::Error>> {
+        let backend = IsoBackend::new(rootfs, source_iso, work_directory, output_iso);
+
+        self.build_with_backend(capability, backend)
+    }
+}
 #[cfg(test)]
 mod tests {
     use model::{Action, Capability, CapabilityId, PlanStep, Provider, ProviderId};
     use registry::Registry;
 
-    use super::Engine;
-
+    use super::{BuildError, Engine, RootfsRunError};
     fn desktop_registry() -> Registry {
         Registry::from_providers(vec![Provider {
             id: ProviderId::new("desktop"),
@@ -99,5 +191,27 @@ mod tests {
         let engine = Engine::from_registry(desktop_registry());
 
         assert!(engine.plan(&Capability::new("does-not-exist")).is_err());
+    }
+    #[test]
+    fn converts_plan_error_into_build_error() {
+        let engine = Engine::from_registry(desktop_registry());
+
+        let plan_error = engine
+            .plan(&Capability::new("does-not-exist"))
+            .expect_err("unknown capability should fail");
+
+        let build_error: BuildError<RootfsRunError> = BuildError::from(plan_error);
+
+        assert!(matches!(build_error, BuildError::Plan(_)));
+    }
+
+    #[test]
+    fn converts_execution_error_into_build_error() {
+        let execution_error: executor::ExecuteError<RootfsRunError> =
+            executor::ExecuteError::Environment(std::io::Error::other("prepare failed"));
+
+        let build_error: BuildError<RootfsRunError> = BuildError::from(execution_error);
+
+        assert!(matches!(build_error, BuildError::Execute(_)));
     }
 }
