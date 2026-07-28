@@ -151,7 +151,7 @@ mod tests {
     use std::{fs, os::unix::fs::PermissionsExt, path::Path};
 
     use model::{Capability, Plan, ProviderId};
-    use tempfile::tempdir;
+    use tempfile::{TempDir, tempdir};
 
     use super::*;
 
@@ -198,8 +198,8 @@ mod tests {
         permissions.set_mode(0o755);
         fs::set_permissions(path, permissions).unwrap();
     }
-    #[test]
-    fn build_creates_bootable_iso_workspace_and_output_image() {
+
+    fn create_test_backend() -> (TempDir, IsoBackend) {
         let temp = tempdir().unwrap();
         let source_iso = temp.path().join("source.iso");
         let output_iso = temp.path().join("output").join("image.iso");
@@ -209,7 +209,8 @@ mod tests {
         fs::write(&source_iso, b"source ISO").unwrap();
         create_fake_mksquashfs(&fake_mksquashfs);
         create_fake_xorriso(&fake_xorriso);
-        let mut backend = IsoBackend::new(
+
+        let backend = IsoBackend::new(
             temp.path().join("rootfs"),
             &source_iso,
             temp.path().join("work"),
@@ -218,25 +219,32 @@ mod tests {
         .with_mksquashfs_command(&fake_mksquashfs)
         .with_xorriso_command(&fake_xorriso);
 
-        let plan = Plan {
-            capability: Capability::new("test"),
-            provider: ProviderId::new("test"),
-            steps: Vec::new(),
-        };
-
         let boot_directory = backend.rootfs().join("boot");
 
         fs::create_dir_all(&boot_directory).unwrap();
         fs::write(boot_directory.join("vmlinuz-test"), b"test kernel").unwrap();
         fs::write(boot_directory.join("initrd.img-test"), b"test initramfs").unwrap();
 
-        backend.build(&plan).unwrap();
+        (temp, backend)
+    }
+
+    fn test_plan() -> Plan {
+        Plan {
+            capability: Capability::new("test"),
+            provider: ProviderId::new("test"),
+            steps: Vec::new(),
+        }
+    }
+    #[test]
+    fn build_creates_bootable_iso_workspace_and_output_image() {
+        let (_temp, mut backend) = create_test_backend();
+
+        backend.build(&test_plan()).unwrap();
 
         let layout = backend.layout();
 
-        assert_eq!(backend.source_iso(), source_iso);
-        assert_eq!(backend.output_path(), output_iso);
-
+        assert!(backend.source_iso().is_file());
+        assert!(backend.output_path().is_file());
         assert!(layout.boot_grub().is_dir());
         assert!(layout.efi_boot().is_dir());
         assert!(layout.live().is_dir());
@@ -245,7 +253,6 @@ mod tests {
         assert!(layout.live_kernel().is_file());
         assert!(layout.live_initramfs().is_file());
         assert!(layout.grub_config().is_file());
-        assert!(backend.output_path().is_file());
 
         assert_eq!(fs::read(layout.live_kernel()).unwrap(), b"test kernel");
 
@@ -262,6 +269,31 @@ mod tests {
                 "\n",
                 "menuentry \"Debian AI Appliance\" {\n",
                 "    linux /live/vmlinuz boot=live quiet\n",
+                "    initrd /live/initrd.img\n",
+                "}\n",
+            )
+        );
+    }
+
+    #[test]
+    fn build_uses_custom_grub_configuration() {
+        let (_temp, backend) = create_test_backend();
+        let mut backend = backend.with_grub_config(GrubConfig {
+            menu_title: "Custom Appliance".to_owned(),
+            timeout: 12,
+            kernel_command_line: "boot=live debug splash".to_owned(),
+        });
+
+        backend.build(&test_plan()).unwrap();
+
+        assert_eq!(
+            fs::read_to_string(backend.layout().grub_config()).unwrap(),
+            concat!(
+                "set default=0\n",
+                "set timeout=12\n",
+                "\n",
+                "menuentry \"Custom Appliance\" {\n",
+                "    linux /live/vmlinuz boot=live debug splash\n",
                 "    initrd /live/initrd.img\n",
                 "}\n",
             )
