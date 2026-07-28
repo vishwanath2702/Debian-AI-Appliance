@@ -188,6 +188,7 @@ mod tests {
                 "if [ \"$#\" -lt 2 ]; then\n",
                 "    exit 2\n",
                 "fi\n",
+                "printf '%s\\n' \"$@\" > \"${0}.args\"\n",
                 ": > \"$2\"\n",
                 "exit 0\n",
             ),
@@ -198,7 +199,6 @@ mod tests {
         permissions.set_mode(0o755);
         fs::set_permissions(path, permissions).unwrap();
     }
-
     fn create_test_backend() -> (TempDir, IsoBackend) {
         let temp = tempdir().unwrap();
         let source_iso = temp.path().join("source.iso");
@@ -296,6 +296,30 @@ mod tests {
                 "    linux /live/vmlinuz boot=live debug splash\n",
                 "    initrd /live/initrd.img\n",
                 "}\n",
+            )
+        );
+    }
+
+    #[test]
+    fn build_uses_custom_squashfs_configuration() {
+        let (temp, backend) = create_test_backend();
+        let mut backend = backend.with_squashfs_config(SquashFsConfig {
+            compression: "gzip".to_owned(),
+            exclusions: vec![
+                "boot".to_owned(),
+                "usr/share/doc".to_owned(),
+                "var/cache".to_owned(),
+            ],
+        });
+
+        backend.build(&test_plan()).unwrap();
+
+        assert_eq!(
+            fs::read_to_string(temp.path().join("mksquashfs.args")).unwrap(),
+            format!(
+                "{}\n{}\n-comp\ngzip\n-noappend\n-e\nboot\nusr/share/doc\nvar/cache\n",
+                backend.rootfs().display(),
+                backend.layout().filesystem_squashfs().display(),
             )
         );
     }
