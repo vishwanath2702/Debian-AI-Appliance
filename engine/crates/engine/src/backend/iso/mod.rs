@@ -5,7 +5,7 @@ mod layout;
 mod pipeline;
 mod stage;
 
-pub use context::{IsoConfig, IsoContext};
+pub use context::{GrubConfig, IsoConfig, IsoContext, SquashFsConfig};
 pub use layout::Layout;
 pub use pipeline::IsoPipeline;
 pub use stage::{
@@ -27,8 +27,9 @@ pub struct IsoBackend {
     output_path: PathBuf,
     mksquashfs_command: PathBuf,
     xorriso_command: PathBuf,
+    grub: GrubConfig,
+    squashfs: SquashFsConfig,
 }
-
 impl IsoBackend {
     /// Creates an ISO backend.
     #[must_use]
@@ -45,6 +46,15 @@ impl IsoBackend {
             output_path: output_path.into(),
             mksquashfs_command: PathBuf::from("mksquashfs"),
             xorriso_command: PathBuf::from("xorriso"),
+            grub: GrubConfig {
+                menu_title: "Debian AI Appliance".to_owned(),
+                timeout: 5,
+                kernel_command_line: "boot=live quiet".to_owned(),
+            },
+            squashfs: SquashFsConfig {
+                compression: "xz".to_owned(),
+                exclusions: vec!["boot".to_owned()],
+            },
         }
     }
 
@@ -77,14 +87,32 @@ impl IsoBackend {
     pub fn layout(&self) -> Layout {
         Layout::new(self.work_directory.join("iso"))
     }
-
-    #[cfg(test)]
-    fn set_xorriso_command(&mut self, command: impl Into<PathBuf>) {
+    /// Uses a custom `xorriso` executable.
+    #[must_use]
+    pub fn with_xorriso_command(mut self, command: impl Into<PathBuf>) -> Self {
         self.xorriso_command = command.into();
+        self
     }
-    #[cfg(test)]
-    fn set_mksquashfs_command(&mut self, command: impl Into<PathBuf>) {
+
+    /// Uses a custom `mksquashfs` executable.
+    #[must_use]
+    pub fn with_mksquashfs_command(mut self, command: impl Into<PathBuf>) -> Self {
         self.mksquashfs_command = command.into();
+        self
+    }
+
+    /// Uses custom GRUB configuration.
+    #[must_use]
+    pub fn with_grub_config(mut self, config: GrubConfig) -> Self {
+        self.grub = config;
+        self
+    }
+
+    /// Uses custom `SquashFS` configuration.
+    #[must_use]
+    pub fn with_squashfs_config(mut self, config: SquashFsConfig) -> Self {
+        self.squashfs = config;
+        self
     }
 }
 
@@ -100,14 +128,14 @@ impl BuildBackend for IsoBackend {
                 mksquashfs_command: self.mksquashfs_command.clone(),
                 xorriso_command: self.xorriso_command.clone(),
                 layout: self.layout(),
-                grub: context::GrubConfig {
-                    menu_title: "Debian AI Appliance".to_owned(),
-                    timeout: 5,
-                    kernel_command_line: "boot=live quiet".to_owned(),
+                grub: GrubConfig {
+                    menu_title: self.grub.menu_title.clone(),
+                    timeout: self.grub.timeout,
+                    kernel_command_line: self.grub.kernel_command_line.clone(),
                 },
-                squashfs: context::SquashFsConfig {
-                    compression: "xz".to_owned(),
-                    exclusions: vec!["boot".to_owned()],
+                squashfs: SquashFsConfig {
+                    compression: self.squashfs.compression.clone(),
+                    exclusions: self.squashfs.exclusions.clone(),
                 },
             },
         };
@@ -186,10 +214,9 @@ mod tests {
             &source_iso,
             temp.path().join("work"),
             &output_iso,
-        );
-
-        backend.set_mksquashfs_command(&fake_mksquashfs);
-        backend.set_xorriso_command(&fake_xorriso);
+        )
+        .with_mksquashfs_command(&fake_mksquashfs)
+        .with_xorriso_command(&fake_xorriso);
 
         let plan = Plan {
             capability: Capability::new("test"),
