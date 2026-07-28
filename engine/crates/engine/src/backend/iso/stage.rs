@@ -8,7 +8,60 @@ use std::{
 };
 
 use super::IsoContext;
+/// Validates the source ISO before the build begins.
+pub struct SourceIsoStage;
 
+impl SourceIsoStage {
+    /// Validates that the configured source ISO exists, is a regular file and
+    /// is readable.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the source ISO does not exist, is not a regular
+    /// file, or cannot be opened for reading.
+    pub fn run(context: &IsoContext) -> io::Result<()> {
+        let source_iso = &context.config.source_iso;
+
+        let metadata = fs::metadata(source_iso)?;
+
+        if !metadata.is_file() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("source ISO is not a regular file: {}", source_iso.display()),
+            ));
+        }
+
+        fs::File::open(source_iso)?;
+
+        Ok(())
+    }
+}
+/// Validates that required external build tools are available.
+pub struct ToolValidationStage;
+
+impl ToolValidationStage {
+    /// Ensures all required external commands can be started.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if any required tool cannot be executed.
+    pub fn run(context: &IsoContext) -> io::Result<()> {
+        validate_tool(&context.config.mksquashfs_command)?;
+        validate_tool(&context.config.xorriso_command)?;
+        Ok(())
+    }
+}
+
+fn validate_tool(command: &Path) -> io::Result<()> {
+    match Command::new(command).arg("--version").status() {
+        Ok(_) => Ok(()),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Err(io::Error::new(
+            io::ErrorKind::NotFound,
+            format!("required tool not found: {}", command.display()),
+        )),
+        Err(error) => Err(error),
+    }
+}
 /// Creates the ISO workspace layout.
 pub struct WorkspaceStage;
 
@@ -113,12 +166,11 @@ impl SquashFsStage {
     pub fn run(context: &IsoContext) -> io::Result<PathBuf> {
         let output = context.config.layout.filesystem_squashfs();
 
-        let status = Command::new("mksquashfs")
+        let status = Command::new(&context.config.mksquashfs_command)
             .arg(&context.config.rootfs)
             .arg(&output)
             .args(["-comp", "xz", "-noappend", "-e", "boot"])
             .status()?;
-
         if !status.success() {
             return Err(io::Error::other(format!(
                 "mksquashfs failed with status {status}"
