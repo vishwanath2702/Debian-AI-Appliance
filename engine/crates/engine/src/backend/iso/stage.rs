@@ -36,6 +36,32 @@ impl SourceIsoStage {
         Ok(())
     }
 }
+/// Validates that required external build tools are available.
+pub struct ToolValidationStage;
+
+impl ToolValidationStage {
+    /// Ensures all required external commands can be started.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if any required tool cannot be executed.
+    pub fn run(context: &IsoContext) -> io::Result<()> {
+        validate_tool(&context.config.mksquashfs_command)?;
+        validate_tool(&context.config.xorriso_command)?;
+        Ok(())
+    }
+}
+
+fn validate_tool(command: &Path) -> io::Result<()> {
+    match Command::new(command).arg("--version").status() {
+        Ok(_) => Ok(()),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Err(io::Error::new(
+            io::ErrorKind::NotFound,
+            format!("required tool not found: {}", command.display()),
+        )),
+        Err(error) => Err(error),
+    }
+}
 /// Creates the ISO workspace layout.
 pub struct WorkspaceStage;
 
@@ -140,12 +166,11 @@ impl SquashFsStage {
     pub fn run(context: &IsoContext) -> io::Result<PathBuf> {
         let output = context.config.layout.filesystem_squashfs();
 
-        let status = Command::new("mksquashfs")
+        let status = Command::new(&context.config.mksquashfs_command)
             .arg(&context.config.rootfs)
             .arg(&output)
             .args(["-comp", "xz", "-noappend", "-e", "boot"])
             .status()?;
-
         if !status.success() {
             return Err(io::Error::other(format!(
                 "mksquashfs failed with status {status}"

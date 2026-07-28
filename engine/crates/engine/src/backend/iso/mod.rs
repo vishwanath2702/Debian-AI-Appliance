@@ -10,7 +10,7 @@ pub use layout::Layout;
 pub use pipeline::IsoPipeline;
 pub use stage::{
     BootArtifactsStage, GrubConfigStage, InitramfsStage, IsoImageStage, KernelStage,
-    SourceIsoStage, SquashFsStage, WorkspaceStage,
+    SourceIsoStage, SquashFsStage, ToolValidationStage, WorkspaceStage,
 };
 use std::path::{Path, PathBuf};
 
@@ -25,6 +25,7 @@ pub struct IsoBackend {
     source_iso: PathBuf,
     work_directory: PathBuf,
     output_path: PathBuf,
+    mksquashfs_command: PathBuf,
     xorriso_command: PathBuf,
 }
 
@@ -42,6 +43,7 @@ impl IsoBackend {
             source_iso: source_iso.into(),
             work_directory: work_directory.into(),
             output_path: output_path.into(),
+            mksquashfs_command: PathBuf::from("mksquashfs"),
             xorriso_command: PathBuf::from("xorriso"),
         }
     }
@@ -80,6 +82,10 @@ impl IsoBackend {
     fn set_xorriso_command(&mut self, command: impl Into<PathBuf>) {
         self.xorriso_command = command.into();
     }
+    #[cfg(test)]
+    fn set_mksquashfs_command(&mut self, command: impl Into<PathBuf>) {
+        self.mksquashfs_command = command.into();
+    }
 }
 
 impl BuildBackend for IsoBackend {
@@ -91,6 +97,7 @@ impl BuildBackend for IsoBackend {
                 rootfs: self.rootfs.clone(),
                 source_iso: self.source_iso.clone(),
                 output_iso: self.output_path.clone(),
+                mksquashfs_command: self.mksquashfs_command.clone(),
                 xorriso_command: self.xorriso_command.clone(),
                 layout: self.layout(),
             },
@@ -133,17 +140,38 @@ mod tests {
         permissions.set_mode(0o755);
         fs::set_permissions(path, permissions).unwrap();
     }
+    fn create_fake_mksquashfs(path: &Path) {
+        fs::write(
+            path,
+            concat!(
+                "#!/bin/sh\n",
+                "if [ \"$1\" = \"--version\" ]; then\n",
+                "    exit 0\n",
+                "fi\n",
+                "if [ \"$#\" -lt 2 ]; then\n",
+                "    exit 2\n",
+                "fi\n",
+                ": > \"$2\"\n",
+                "exit 0\n",
+            ),
+        )
+        .unwrap();
 
+        let mut permissions = fs::metadata(path).unwrap().permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(path, permissions).unwrap();
+    }
     #[test]
     fn build_creates_bootable_iso_workspace_and_output_image() {
         let temp = tempdir().unwrap();
         let source_iso = temp.path().join("source.iso");
         let output_iso = temp.path().join("output").join("image.iso");
+        let fake_mksquashfs = temp.path().join("mksquashfs");
         let fake_xorriso = temp.path().join("xorriso");
 
         fs::write(&source_iso, b"source ISO").unwrap();
+        create_fake_mksquashfs(&fake_mksquashfs);
         create_fake_xorriso(&fake_xorriso);
-
         let mut backend = IsoBackend::new(
             temp.path().join("rootfs"),
             &source_iso,
@@ -151,6 +179,7 @@ mod tests {
             &output_iso,
         );
 
+        backend.set_mksquashfs_command(&fake_mksquashfs);
         backend.set_xorriso_command(&fake_xorriso);
 
         let plan = Plan {
