@@ -4,6 +4,19 @@ use std::path::PathBuf;
 
 use super::Layout;
 
+/// GRUB boot menu configuration.
+pub struct GrubConfig {
+    pub menu_title: String,
+    pub timeout: u32,
+    pub kernel_command_line: String,
+}
+
+/// `SquashFS` build configuration.
+pub struct SquashFsConfig {
+    pub compression: String,
+    pub exclusions: Vec<String>,
+}
+
 /// Immutable configuration for an ISO build.
 pub struct IsoConfig {
     pub rootfs: PathBuf,
@@ -12,6 +25,8 @@ pub struct IsoConfig {
     pub mksquashfs_command: PathBuf,
     pub xorriso_command: PathBuf,
     pub layout: Layout,
+    pub grub: GrubConfig,
+    pub squashfs: SquashFsConfig,
 }
 
 /// Shared state passed through the ISO pipeline.

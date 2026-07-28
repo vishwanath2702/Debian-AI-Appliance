@@ -100,6 +100,15 @@ impl BuildBackend for IsoBackend {
                 mksquashfs_command: self.mksquashfs_command.clone(),
                 xorriso_command: self.xorriso_command.clone(),
                 layout: self.layout(),
+                grub: context::GrubConfig {
+                    menu_title: "Debian AI Appliance".to_owned(),
+                    timeout: 5,
+                    kernel_command_line: "boot=live quiet".to_owned(),
+                },
+                squashfs: context::SquashFsConfig {
+                    compression: "xz".to_owned(),
+                    exclusions: vec!["boot".to_owned()],
+                },
             },
         };
 
