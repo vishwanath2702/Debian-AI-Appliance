@@ -4,6 +4,8 @@ mod bootstrap;
 mod bootstrapper;
 mod context;
 mod mmdebstrap;
+mod workflow;
+
 use std::path::PathBuf;
 
 use executor::{ExecuteError, RootfsRunError};
@@ -11,6 +13,7 @@ use model::{Capability, Plan};
 use planner::{PlanError, Planner};
 use registry::{PackageRepository, Registry};
 use resolver::Resolver;
+use workflow::IsoWorkflow;
 
 pub use bootstrap::BootstrapConfig;
 pub use bootstrapper::Bootstrapper;
@@ -117,22 +120,8 @@ impl Engine {
         context: &BuildContext,
         package_repository: &PackageRepository,
     ) -> Result<Plan, BuildError> {
-        let plan = self.plan(capability)?;
-
-        MmdebstrapBootstrapper::new().bootstrap(context)?;
-
-        let mut rootfs_backend =
-            RootfsBackend::new(context.rootfs().to_path_buf(), package_repository.clone());
-
-        rootfs_backend.build(&plan).map_err(BuildError::Rootfs)?;
-
-        let mut iso_backend = IsoBackend::from_context(context);
-
-        iso_backend.build(&plan).map_err(BuildError::Iso)?;
-
-        Ok(plan)
+        IsoWorkflow::run(self, capability, context, package_repository)
     }
-
     /// Builds and executes an appliance plan inside a root filesystem.
     ///
     /// # Errors
