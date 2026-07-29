@@ -13,12 +13,28 @@ use registry::PackageRepository;
 /// Coordinates creation of a bootable ISO appliance.
 pub struct IsoWorkflow;
 
-struct WorkflowDependencies<B, R, I> {
+struct IsoPipeline<B, R, I> {
     bootstrapper: B,
     rootfs_backend: R,
     iso_backend: I,
 }
 
+impl<B, R, I> IsoPipeline<B, R, I>
+where
+    B: Bootstrapper<Error = MmdebstrapError>,
+    R: BuildBackend<Error = RootfsRunError>,
+    I: BuildBackend<Error = std::io::Error>,
+{
+    fn execute(mut self, build_context: &BuildContext, plan: &Plan) -> Result<(), BuildError> {
+        self.bootstrapper.bootstrap(build_context)?;
+        self.rootfs_backend
+            .build(plan)
+            .map_err(BuildError::Rootfs)?;
+        self.iso_backend.build(plan).map_err(BuildError::Iso)?;
+
+        Ok(())
+    }
+}
 impl IsoWorkflow {
     /// Runs the bootable ISO workflow.
     ///
@@ -31,16 +47,16 @@ impl IsoWorkflow {
         package_repository: &PackageRepository,
         plan: Plan,
     ) -> Result<Plan, BuildError> {
-        let dependencies = Self::production_dependencies(build_context, package_repository);
+        let pipeline = Self::production_pipeline(build_context, package_repository);
 
-        Self::run_with(build_context, plan, dependencies)
+        Self::run_with(build_context, plan, pipeline)
     }
 
-    fn production_dependencies(
+    fn production_pipeline(
         build_context: &BuildContext,
         package_repository: &PackageRepository,
-    ) -> WorkflowDependencies<MmdebstrapBootstrapper, RootfsBackend, IsoBackend> {
-        WorkflowDependencies {
+    ) -> IsoPipeline<MmdebstrapBootstrapper, RootfsBackend, IsoBackend> {
+        IsoPipeline {
             bootstrapper: MmdebstrapBootstrapper::new(),
             rootfs_backend: RootfsBackend::new(
                 build_context.rootfs().to_path_buf(),
@@ -53,23 +69,14 @@ impl IsoWorkflow {
     fn run_with<B, R, I>(
         build_context: &BuildContext,
         plan: Plan,
-        dependencies: WorkflowDependencies<B, R, I>,
+        pipeline: IsoPipeline<B, R, I>,
     ) -> Result<Plan, BuildError>
     where
         B: Bootstrapper<Error = MmdebstrapError>,
         R: BuildBackend<Error = RootfsRunError>,
         I: BuildBackend<Error = std::io::Error>,
     {
-        let WorkflowDependencies {
-            bootstrapper,
-            mut rootfs_backend,
-            mut iso_backend,
-        } = dependencies;
-
-        bootstrapper.bootstrap(build_context)?;
-
-        rootfs_backend.build(&plan).map_err(BuildError::Rootfs)?;
-        iso_backend.build(&plan).map_err(BuildError::Iso)?;
+        pipeline.execute(build_context, &plan)?;
 
         Ok(plan)
     }
@@ -85,7 +92,7 @@ mod tests {
     use model::{Action, Capability, CapabilityId, Plan, PlanStep, Provider, ProviderId};
     use registry::{PackageRepository, Registry};
 
-    use super::{IsoWorkflow, WorkflowDependencies};
+    use super::{IsoPipeline, IsoWorkflow};
     use crate::{
         BootstrapConfig, Bootstrapper, BuildBackend, BuildContext, BuildError, Engine,
         MmdebstrapError,
@@ -204,11 +211,10 @@ mod tests {
             .plan(&capability)
             .expect("test workflow plan should build");
         let log = Arc::new(Mutex::new(Vec::new()));
-
         let result = IsoWorkflow::run_with(
             &build_context,
             plan,
-            WorkflowDependencies {
+            IsoPipeline {
                 bootstrapper: RecordingBootstrapper {
                     log: Arc::clone(&log),
                     error: bootstrap_error,
