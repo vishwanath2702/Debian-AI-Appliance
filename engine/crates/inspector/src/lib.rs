@@ -105,6 +105,32 @@ pub enum BootMode {
     Uefi,
 }
 
+/// Debian repository discovered inside an installation ISO.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RepositoryInfo {
+    suite: String,
+    components: Vec<String>,
+}
+
+impl RepositoryInfo {
+    /// Creates repository information.
+    #[must_use]
+    pub const fn new(suite: String, components: Vec<String>) -> Self {
+        Self { suite, components }
+    }
+
+    /// Returns the repository suite.
+    #[must_use]
+    pub fn suite(&self) -> &str {
+        &self.suite
+    }
+
+    /// Returns the repository components.
+    #[must_use]
+    pub fn components(&self) -> &[String] {
+        &self.components
+    }
+}
 /// Inspects installation ISO metadata.
 pub trait IsoInspector {
     /// Inspects the supplied ISO path.
@@ -119,7 +145,7 @@ pub trait IsoInspector {
 mod tests {
     use std::path::{Path, PathBuf};
 
-    use super::{BootMode, IsoMetadata};
+    use super::{BootMode, IsoMetadata, RepositoryInfo};
 
     #[test]
     fn iso_metadata_exposes_discovered_values() {
@@ -140,5 +166,26 @@ mod tests {
         assert_eq!(metadata.architecture(), "amd64");
         assert_eq!(metadata.media_type(), "netinst");
         assert_eq!(metadata.boot_modes(), &[BootMode::Bios, BootMode::Uefi]);
+    }
+    #[test]
+    fn repository_info_exposes_discovered_values() {
+        let repository = RepositoryInfo::new(
+            "trixie".to_owned(),
+            vec![
+                "main".to_owned(),
+                "contrib".to_owned(),
+                "non-free-firmware".to_owned(),
+            ],
+        );
+
+        assert_eq!(repository.suite(), "trixie");
+        assert_eq!(
+            repository.components(),
+            &[
+                "main".to_owned(),
+                "contrib".to_owned(),
+                "non-free-firmware".to_owned(),
+            ]
+        );
     }
 }

@@ -1,14 +1,17 @@
-// engine/crates/inspector/src/debian.rs
-
 //! Parsing of Debian installation-media metadata.
 
 use std::path::PathBuf;
 
 use crate::{BootMode, InspectError, IsoMetadata, IsoReader};
 
+#[cfg(test)]
+use crate::RepositoryInfo;
+
 const OFFICIAL_SEPARATOR: &str = " - Official";
 const BIOS_BOOT_PATH: &str = "/isolinux/isolinux.bin";
 const UEFI_BOOT_PATH: &str = "/EFI/BOOT/BOOTX64.EFI";
+#[cfg(test)]
+const DISTS_PATH: &str = "/dists";
 
 fn detect_boot_modes(reader: &impl IsoReader) -> Result<Vec<BootMode>, InspectError> {
     let mut boot_modes = Vec::new();
@@ -22,6 +25,24 @@ fn detect_boot_modes(reader: &impl IsoReader) -> Result<Vec<BootMode>, InspectEr
     }
 
     Ok(boot_modes)
+}
+#[cfg(test)]
+fn discover_repositories(reader: &impl IsoReader) -> Result<Vec<RepositoryInfo>, InspectError> {
+    let mut repositories = Vec::new();
+
+    for entry in reader.list_files(DISTS_PATH)? {
+        let Some(suite) = entry.strip_prefix("/dists/") else {
+            continue;
+        };
+
+        if suite.is_empty() {
+            continue;
+        }
+
+        repositories.push(RepositoryInfo::new(suite.to_owned(), Vec::new()));
+    }
+
+    Ok(repositories)
 }
 /// Parses the contents of Debian's `/.disk/info` file.
 ///
@@ -143,20 +164,20 @@ impl crate::IsoInspector for DebianIsoInspector {
 #[cfg(test)]
 mod tests {
     use super::{
-        BIOS_BOOT_PATH, DebianIsoInspector, UEFI_BOOT_PATH, detect_boot_modes, parse_disk_info,
+        BIOS_BOOT_PATH, DISTS_PATH, DebianIsoInspector, UEFI_BOOT_PATH, detect_boot_modes,
+        discover_repositories, parse_disk_info,
     };
-    use crate::{BootMode, InspectError, IsoReader};
+    use crate::{BootMode, InspectError, IsoReader, RepositoryInfo};
     struct MockIsoReader {
         bios: bool,
         uefi: bool,
+        dists: Vec<String>,
     }
-
     impl MockIsoReader {
-        const fn new(bios: bool, uefi: bool) -> Self {
-            Self { bios, uefi }
+        fn new(bios: bool, uefi: bool, dists: Vec<String>) -> Self {
+            Self { bios, uefi, dists }
         }
     }
-
     impl IsoReader for MockIsoReader {
         fn read_file(&self, _iso_path: &str) -> Result<Vec<u8>, InspectError> {
             Ok(Vec::new())
@@ -169,8 +190,12 @@ mod tests {
                 _ => Ok(false),
             }
         }
-        fn list_files(&self, _iso_path: &str) -> Result<Vec<String>, InspectError> {
-            Ok(Vec::new())
+        fn list_files(&self, iso_path: &str) -> Result<Vec<String>, InspectError> {
+            if iso_path == DISTS_PATH {
+                Ok(self.dists.clone())
+            } else {
+                Ok(Vec::new())
+            }
         }
     }
     #[test]
@@ -193,7 +218,7 @@ mod tests {
     }
     #[test]
     fn detects_bios_boot_mode() {
-        let reader = MockIsoReader::new(true, false);
+        let reader = MockIsoReader::new(true, false, Vec::new());
 
         let boot_modes = detect_boot_modes(&reader).expect("boot-mode detection should succeed");
 
@@ -202,7 +227,7 @@ mod tests {
 
     #[test]
     fn detects_uefi_boot_mode() {
-        let reader = MockIsoReader::new(false, true);
+        let reader = MockIsoReader::new(false, true, Vec::new());
 
         let boot_modes = detect_boot_modes(&reader).expect("boot-mode detection should succeed");
 
@@ -211,11 +236,47 @@ mod tests {
 
     #[test]
     fn detects_hybrid_boot_modes() {
-        let reader = MockIsoReader::new(true, true);
+        let reader = MockIsoReader::new(true, true, Vec::new());
 
         let boot_modes = detect_boot_modes(&reader).expect("boot-mode detection should succeed");
 
         assert_eq!(boot_modes, vec![BootMode::Bios, BootMode::Uefi]);
+    }
+    #[test]
+    fn discovers_repository_suites() {
+        let reader = MockIsoReader::new(
+            false,
+            false,
+            vec!["/dists/trixie".to_owned(), "/dists/bookworm".to_owned()],
+        );
+
+        let repositories =
+            discover_repositories(&reader).expect("repository discovery should succeed");
+
+        assert_eq!(
+            repositories,
+            vec![
+                RepositoryInfo::new("trixie".to_owned(), Vec::new()),
+                RepositoryInfo::new("bookworm".to_owned(), Vec::new()),
+            ]
+        );
+    }
+
+    #[test]
+    fn ignores_non_suite_entries() {
+        let reader = MockIsoReader::new(
+            false,
+            false,
+            vec!["/README".to_owned(), "/dists/trixie".to_owned()],
+        );
+
+        let repositories =
+            discover_repositories(&reader).expect("repository discovery should succeed");
+
+        assert_eq!(
+            repositories,
+            vec![RepositoryInfo::new("trixie".to_owned(), Vec::new())]
+        );
     }
     #[test]
     fn parses_dvd_metadata() {
