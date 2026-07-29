@@ -25,12 +25,8 @@ impl IsoWorkflow {
         package_repository: &PackageRepository,
         plan: Plan,
     ) -> Result<Plan, BuildError> {
-        let bootstrapper = MmdebstrapBootstrapper::new();
-        let rootfs_backend = RootfsBackend::new(
-            build_context.rootfs().to_path_buf(),
-            package_repository.clone(),
-        );
-        let iso_backend = IsoBackend::from_context(build_context);
+        let (bootstrapper, rootfs_backend, iso_backend) =
+            Self::production_dependencies(build_context, package_repository);
 
         Self::run_with(
             build_context,
@@ -41,6 +37,19 @@ impl IsoWorkflow {
         )
     }
 
+    fn production_dependencies(
+        build_context: &BuildContext,
+        package_repository: &PackageRepository,
+    ) -> (MmdebstrapBootstrapper, RootfsBackend, IsoBackend) {
+        (
+            MmdebstrapBootstrapper::new(),
+            RootfsBackend::new(
+                build_context.rootfs().to_path_buf(),
+                package_repository.clone(),
+            ),
+            IsoBackend::from_context(build_context),
+        )
+    }
     pub(crate) fn run_with<B, R, I>(
         build_context: &BuildContext,
         plan: Plan,
