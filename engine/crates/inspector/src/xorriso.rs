@@ -124,47 +124,47 @@ impl IsoReader for XorrisoReader {
 }
 #[cfg(all(test, unix))]
 mod tests {
-use std::{
-    fs::{self, File},
-    io::Write,
-    os::unix::fs::PermissionsExt,
-    path::{Path, PathBuf},
-    thread,
-    time::Duration,
-};
+    use std::{
+        fs::{self, File},
+        io::Write,
+        os::unix::fs::PermissionsExt,
+        path::{Path, PathBuf},
+        thread,
+        time::Duration,
+    };
     use tempfile::tempdir;
 
     use super::*;
 
     fn create_command(directory: &Path, name: &str, body: &str) -> PathBuf {
-    let command = directory.join(name);
-    let temporary_command = directory.join(format!("{name}.tmp"));
+        let command = directory.join(name);
+        let temporary_command = directory.join(format!("{name}.tmp"));
 
-    let mut file =
-        File::create(&temporary_command).expect("temporary mock command should be created");
+        let mut file =
+            File::create(&temporary_command).expect("temporary mock command should be created");
 
-    writeln!(file, "#!/bin/sh\n{body}").expect("mock xorriso command should be written");
+        writeln!(file, "#!/bin/sh\n{body}").expect("mock xorriso command should be written");
 
-    file.sync_all()
-        .expect("mock xorriso command should be synchronized");
+        file.sync_all()
+            .expect("mock xorriso command should be synchronized");
 
-    drop(file);
+        drop(file);
 
-    let mut permissions = fs::metadata(&temporary_command)
-        .expect("temporary mock command metadata should be available")
-        .permissions();
+        let mut permissions = fs::metadata(&temporary_command)
+            .expect("temporary mock command metadata should be available")
+            .permissions();
 
-    permissions.set_mode(0o755);
+        permissions.set_mode(0o755);
 
-    fs::set_permissions(&temporary_command, permissions)
-        .expect("temporary mock command should be executable");
+        fs::set_permissions(&temporary_command, permissions)
+            .expect("temporary mock command should be executable");
 
-    fs::rename(&temporary_command, &command)
-        .expect("temporary mock command should be installed");
+        fs::rename(&temporary_command, &command)
+            .expect("temporary mock command should be installed");
         thread::sleep(Duration::from_millis(10));
-    command
-}
-    
+        command
+    }
+
     #[test]
     fn path_exists_returns_true_when_xorriso_prints_a_match() {
         let directory = tempdir().expect("temporary directory should be created");

@@ -2,15 +2,11 @@
 
 use std::path::PathBuf;
 
-use crate::{BootMode, InspectError, IsoMetadata, IsoReader};
-
-#[cfg(test)]
-use crate::RepositoryInfo;
+use crate::{BootMode, InspectError, IsoMetadata, IsoReader, RepositoryInfo};
 
 const OFFICIAL_SEPARATOR: &str = " - Official";
 const BIOS_BOOT_PATH: &str = "/isolinux/isolinux.bin";
 const UEFI_BOOT_PATH: &str = "/EFI/BOOT/BOOTX64.EFI";
-#[cfg(test)]
 const DISTS_PATH: &str = "/dists";
 
 fn detect_boot_modes(reader: &impl IsoReader) -> Result<Vec<BootMode>, InspectError> {
@@ -26,7 +22,6 @@ fn detect_boot_modes(reader: &impl IsoReader) -> Result<Vec<BootMode>, InspectEr
 
     Ok(boot_modes)
 }
-#[cfg(test)]
 fn discover_repositories(reader: &impl IsoReader) -> Result<Vec<RepositoryInfo>, InspectError> {
     let mut repositories = Vec::new();
 
@@ -173,10 +168,12 @@ impl crate::IsoInspector for DebianIsoInspector {
         let contents = std::str::from_utf8(&contents)?;
 
         let boot_modes = detect_boot_modes(&reader)?;
+        let repositories = discover_repositories(&reader)?;
 
         let mut metadata = parse_disk_info(contents)?;
         metadata.set_path(path.to_path_buf());
         metadata.set_boot_modes(boot_modes);
+        metadata.set_repositories(repositories);
 
         Ok(metadata)
     }

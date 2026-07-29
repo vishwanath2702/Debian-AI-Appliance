@@ -22,6 +22,7 @@ pub struct IsoMetadata {
     architecture: String,
     media_type: String,
     boot_modes: Vec<BootMode>,
+    repositories: Vec<RepositoryInfo>,
 }
 
 impl IsoMetadata {
@@ -44,6 +45,7 @@ impl IsoMetadata {
             architecture,
             media_type,
             boot_modes,
+            repositories: Vec::new(),
         }
     }
     pub(crate) fn set_path(&mut self, path: PathBuf) {
@@ -51,6 +53,9 @@ impl IsoMetadata {
     }
     pub(crate) fn set_boot_modes(&mut self, boot_modes: Vec<BootMode>) {
         self.boot_modes = boot_modes;
+    }
+    pub(crate) fn set_repositories(&mut self, repositories: Vec<RepositoryInfo>) {
+        self.repositories = repositories;
     }
     /// Returns the inspected ISO path.
     #[must_use]
@@ -92,6 +97,11 @@ impl IsoMetadata {
     #[must_use]
     pub fn boot_modes(&self) -> &[BootMode] {
         &self.boot_modes
+    }
+    /// Returns the Debian repositories discovered on the ISO.
+    #[must_use]
+    pub fn repositories(&self) -> &[RepositoryInfo] {
+        &self.repositories
     }
 }
 
@@ -166,6 +176,7 @@ mod tests {
         assert_eq!(metadata.architecture(), "amd64");
         assert_eq!(metadata.media_type(), "netinst");
         assert_eq!(metadata.boot_modes(), &[BootMode::Bios, BootMode::Uefi]);
+        assert!(metadata.repositories().is_empty());
     }
     #[test]
     fn repository_info_exposes_discovered_values() {
