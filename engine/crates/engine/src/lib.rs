@@ -1,7 +1,7 @@
 //! High-level orchestration for the DAIA engine.
 
+mod bootstrap;
 mod context;
-
 use std::path::PathBuf;
 
 use executor::{ActionRunner, ExecuteError, ExecutionEnvironment, RootfsRunError};
@@ -10,6 +10,7 @@ use planner::{PlanError, Planner};
 use registry::{PackageRepository, Registry};
 use resolver::Resolver;
 
+pub use bootstrap::BootstrapConfig;
 pub use context::BuildContext;
 /// Error returned when an appliance build cannot be completed.
 #[derive(Debug)]
