@@ -120,13 +120,18 @@ pub enum BootMode {
 pub struct RepositoryInfo {
     suite: String,
     components: Vec<String>,
+    architectures: Vec<String>,
 }
 
 impl RepositoryInfo {
     /// Creates repository information.
     #[must_use]
-    pub const fn new(suite: String, components: Vec<String>) -> Self {
-        Self { suite, components }
+    pub const fn new(suite: String, components: Vec<String>, architectures: Vec<String>) -> Self {
+        Self {
+            suite,
+            components,
+            architectures,
+        }
     }
 
     /// Returns the repository suite.
@@ -139,6 +144,12 @@ impl RepositoryInfo {
     #[must_use]
     pub fn components(&self) -> &[String] {
         &self.components
+    }
+
+    /// Returns the repository architectures.
+    #[must_use]
+    pub fn architectures(&self) -> &[String] {
+        &self.architectures
     }
 }
 /// Inspects installation ISO metadata.
@@ -187,6 +198,7 @@ mod tests {
                 "contrib".to_owned(),
                 "non-free-firmware".to_owned(),
             ],
+            vec!["amd64".to_owned(), "arm64".to_owned()],
         );
 
         assert_eq!(repository.suite(), "trixie");
@@ -197,6 +209,10 @@ mod tests {
                 "contrib".to_owned(),
                 "non-free-firmware".to_owned(),
             ]
+        );
+        assert_eq!(
+            repository.architectures(),
+            &["amd64".to_owned(), "arm64".to_owned(),]
         );
     }
 }

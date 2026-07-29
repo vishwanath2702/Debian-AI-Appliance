@@ -1,5 +1,6 @@
 //! Parsing of Debian installation-media metadata.
 
+use std::collections::BTreeSet;
 use std::path::PathBuf;
 
 use crate::{BootMode, InspectError, IsoMetadata, IsoReader, RepositoryInfo};
@@ -22,6 +23,7 @@ fn detect_boot_modes(reader: &impl IsoReader) -> Result<Vec<BootMode>, InspectEr
 
     Ok(boot_modes)
 }
+
 fn discover_repositories(reader: &impl IsoReader) -> Result<Vec<RepositoryInfo>, InspectError> {
     let mut repositories = Vec::new();
 
@@ -37,24 +39,45 @@ fn discover_repositories(reader: &impl IsoReader) -> Result<Vec<RepositoryInfo>,
         let suite_path = format!("{DISTS_PATH}/{suite}");
         let component_prefix = format!("{suite_path}/");
 
-        let components = reader
-            .list_files(&suite_path)?
-            .into_iter()
-            .filter_map(|entry| {
-                let component = entry.strip_prefix(&component_prefix)?;
+        let mut components = Vec::new();
+        let mut architectures = BTreeSet::new();
 
-                if component.is_empty()
-                    || component.contains('/')
-                    || matches!(component, "Release" | "InRelease" | "Release.gpg")
+        for entry in reader.list_files(&suite_path)? {
+            let Some(component) = entry.strip_prefix(&component_prefix) else {
+                continue;
+            };
+
+            if component.is_empty()
+                || component.contains('/')
+                || matches!(component, "Release" | "InRelease" | "Release.gpg")
+            {
+                continue;
+            }
+
+            components.push(component.to_owned());
+
+            let component_path = format!("{suite_path}/{component}");
+            let binary_prefix = format!("{component_path}/");
+
+            for entry in reader.list_files(&component_path)? {
+                let Some(directory) = entry.strip_prefix(&binary_prefix) else {
+                    continue;
+                };
+
+                if let Some(architecture) = directory.strip_prefix("binary-")
+                    && !architecture.is_empty()
+                    && !architecture.contains('/')
                 {
-                    return None;
+                    architectures.insert(architecture.to_owned());
                 }
+            }
+        }
 
-                Some(component.to_owned())
-            })
-            .collect();
-
-        repositories.push(RepositoryInfo::new(suite.to_owned(), components));
+        repositories.push(RepositoryInfo::new(
+            suite.to_owned(),
+            components,
+            architectures.into_iter().collect(),
+        ));
     }
 
     Ok(repositories)
@@ -291,19 +314,76 @@ mod tests {
                 "/dists/trixie/contrib".to_owned(),
             ],
         )
-        .with_listing("/dists/bookworm", vec!["/dists/bookworm/main".to_owned()]);
+        .with_listing("/dists/bookworm", vec!["/dists/bookworm/main".to_owned()])
+        .with_listing(
+            "/dists/trixie/main",
+            vec![
+                "/dists/trixie/main/binary-amd64".to_owned(),
+                "/dists/trixie/main/binary-arm64".to_owned(),
+            ],
+        )
+        .with_listing(
+            "/dists/trixie/contrib",
+            vec!["/dists/trixie/contrib/binary-amd64".to_owned()],
+        )
+        .with_listing(
+            "/dists/bookworm/main",
+            vec!["/dists/bookworm/main/binary-amd64".to_owned()],
+        );
         let repositories =
             discover_repositories(&reader).expect("repository discovery should succeed");
-
         assert_eq!(
             repositories,
             vec![
                 RepositoryInfo::new(
                     "trixie".to_owned(),
                     vec!["main".to_owned(), "contrib".to_owned()],
+                    vec!["amd64".to_owned(), "arm64".to_owned()],
                 ),
-                RepositoryInfo::new("bookworm".to_owned(), vec!["main".to_owned()],),
+                RepositoryInfo::new(
+                    "bookworm".to_owned(),
+                    vec!["main".to_owned()],
+                    vec!["amd64".to_owned()],
+                ),
             ]
+        );
+    }
+    #[test]
+    fn ignores_non_binary_directories_and_duplicate_architectures() {
+        let reader = MockIsoReader::new(false, false, vec!["/dists/trixie".to_owned()])
+            .with_listing(
+                "/dists/trixie",
+                vec![
+                    "/dists/trixie/main".to_owned(),
+                    "/dists/trixie/contrib".to_owned(),
+                ],
+            )
+            .with_listing(
+                "/dists/trixie/main",
+                vec![
+                    "/dists/trixie/main/binary-amd64".to_owned(),
+                    "/dists/trixie/main/source".to_owned(),
+                    "/dists/trixie/main/debian-installer".to_owned(),
+                ],
+            )
+            .with_listing(
+                "/dists/trixie/contrib",
+                vec![
+                    "/dists/trixie/contrib/binary-amd64".to_owned(),
+                    "/dists/trixie/contrib/binary-arm64".to_owned(),
+                ],
+            );
+
+        let repositories =
+            discover_repositories(&reader).expect("repository discovery should succeed");
+
+        assert_eq!(
+            repositories,
+            vec![RepositoryInfo::new(
+                "trixie".to_owned(),
+                vec!["main".to_owned(), "contrib".to_owned()],
+                vec!["amd64".to_owned(), "arm64".to_owned()],
+            )]
         );
     }
     #[test]
@@ -328,6 +408,7 @@ mod tests {
             vec![RepositoryInfo::new(
                 "trixie".to_owned(),
                 vec!["main".to_owned(), "non-free-firmware".to_owned()],
+                Vec::new(),
             )]
         );
     }
@@ -336,7 +417,11 @@ mod tests {
         let reader = MockIsoReader::new(
             false,
             false,
-            vec!["/README".to_owned(), "/dists/trixie".to_owned()],
+            vec![
+                "/dists/trixie".to_owned(),
+                "/pool/main".to_owned(),
+                "/README".to_owned(),
+            ],
         );
 
         let repositories =
@@ -344,9 +429,14 @@ mod tests {
 
         assert_eq!(
             repositories,
-            vec![RepositoryInfo::new("trixie".to_owned(), Vec::new())]
+            vec![RepositoryInfo::new(
+                "trixie".to_owned(),
+                Vec::new(),
+                Vec::new(),
+            )]
         );
     }
+
     #[test]
     fn parses_dvd_metadata() {
         let metadata =
