@@ -35,11 +35,31 @@ fn discover_repositories(reader: &impl IsoReader) -> Result<Vec<RepositoryInfo>,
             continue;
         };
 
-        if suite.is_empty() {
+        if suite.is_empty() || suite.contains('/') {
             continue;
         }
 
-        repositories.push(RepositoryInfo::new(suite.to_owned(), Vec::new()));
+        let suite_path = format!("{DISTS_PATH}/{suite}");
+        let component_prefix = format!("{suite_path}/");
+
+        let components = reader
+            .list_files(&suite_path)?
+            .into_iter()
+            .filter_map(|entry| {
+                let component = entry.strip_prefix(&component_prefix)?;
+
+                if component.is_empty()
+                    || component.contains('/')
+                    || matches!(component, "Release" | "InRelease" | "Release.gpg")
+                {
+                    return None;
+                }
+
+                Some(component.to_owned())
+            })
+            .collect();
+
+        repositories.push(RepositoryInfo::new(suite.to_owned(), components));
     }
 
     Ok(repositories)
@@ -168,16 +188,30 @@ mod tests {
         discover_repositories, parse_disk_info,
     };
     use crate::{BootMode, InspectError, IsoReader, RepositoryInfo};
+
     struct MockIsoReader {
         bios: bool,
         uefi: bool,
         dists: Vec<String>,
+        listings: Vec<(String, Vec<String>)>,
     }
+
     impl MockIsoReader {
         fn new(bios: bool, uefi: bool, dists: Vec<String>) -> Self {
-            Self { bios, uefi, dists }
+            Self {
+                bios,
+                uefi,
+                dists,
+                listings: Vec::new(),
+            }
+        }
+
+        fn with_listing(mut self, iso_path: &str, entries: Vec<String>) -> Self {
+            self.listings.push((iso_path.to_owned(), entries));
+            self
         }
     }
+
     impl IsoReader for MockIsoReader {
         fn read_file(&self, _iso_path: &str) -> Result<Vec<u8>, InspectError> {
             Ok(Vec::new())
@@ -192,10 +226,14 @@ mod tests {
         }
         fn list_files(&self, iso_path: &str) -> Result<Vec<String>, InspectError> {
             if iso_path == DISTS_PATH {
-                Ok(self.dists.clone())
-            } else {
-                Ok(Vec::new())
+                return Ok(self.dists.clone());
             }
+
+            Ok(self
+                .listings
+                .iter()
+                .find(|(path, _)| path == iso_path)
+                .map_or_else(Vec::new, |(_, entries)| entries.clone()))
         }
     }
     #[test]
@@ -248,20 +286,54 @@ mod tests {
             false,
             false,
             vec!["/dists/trixie".to_owned(), "/dists/bookworm".to_owned()],
-        );
-
+        )
+        .with_listing(
+            "/dists/trixie",
+            vec![
+                "/dists/trixie/main".to_owned(),
+                "/dists/trixie/contrib".to_owned(),
+            ],
+        )
+        .with_listing("/dists/bookworm", vec!["/dists/bookworm/main".to_owned()]);
         let repositories =
             discover_repositories(&reader).expect("repository discovery should succeed");
 
         assert_eq!(
             repositories,
             vec![
-                RepositoryInfo::new("trixie".to_owned(), Vec::new()),
-                RepositoryInfo::new("bookworm".to_owned(), Vec::new()),
+                RepositoryInfo::new(
+                    "trixie".to_owned(),
+                    vec!["main".to_owned(), "contrib".to_owned()],
+                ),
+                RepositoryInfo::new("bookworm".to_owned(), vec!["main".to_owned()],),
             ]
         );
     }
+    #[test]
+    fn ignores_repository_metadata_files() {
+        let reader = MockIsoReader::new(false, false, vec!["/dists/trixie".to_owned()])
+            .with_listing(
+                "/dists/trixie",
+                vec![
+                    "/dists/trixie/Release".to_owned(),
+                    "/dists/trixie/InRelease".to_owned(),
+                    "/dists/trixie/Release.gpg".to_owned(),
+                    "/dists/trixie/main".to_owned(),
+                    "/dists/trixie/non-free-firmware".to_owned(),
+                ],
+            );
 
+        let repositories =
+            discover_repositories(&reader).expect("repository discovery should succeed");
+
+        assert_eq!(
+            repositories,
+            vec![RepositoryInfo::new(
+                "trixie".to_owned(),
+                vec!["main".to_owned(), "non-free-firmware".to_owned()],
+            )]
+        );
+    }
     #[test]
     fn ignores_non_suite_entries() {
         let reader = MockIsoReader::new(
