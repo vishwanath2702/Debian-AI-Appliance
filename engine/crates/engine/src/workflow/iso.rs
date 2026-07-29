@@ -13,6 +13,12 @@ use registry::PackageRepository;
 /// Coordinates creation of a bootable ISO appliance.
 pub struct IsoWorkflow;
 
+struct WorkflowDependencies<B, R, I> {
+    bootstrapper: B,
+    rootfs_backend: R,
+    iso_backend: I,
+}
+
 impl IsoWorkflow {
     /// Runs the bootable ISO workflow.
     ///
@@ -25,43 +31,41 @@ impl IsoWorkflow {
         package_repository: &PackageRepository,
         plan: Plan,
     ) -> Result<Plan, BuildError> {
-        let (bootstrapper, rootfs_backend, iso_backend) =
-            Self::production_dependencies(build_context, package_repository);
+        let dependencies = Self::production_dependencies(build_context, package_repository);
 
-        Self::run_with(
-            build_context,
-            plan,
-            &bootstrapper,
-            rootfs_backend,
-            iso_backend,
-        )
+        Self::run_with(build_context, plan, dependencies)
     }
 
     fn production_dependencies(
         build_context: &BuildContext,
         package_repository: &PackageRepository,
-    ) -> (MmdebstrapBootstrapper, RootfsBackend, IsoBackend) {
-        (
-            MmdebstrapBootstrapper::new(),
-            RootfsBackend::new(
+    ) -> WorkflowDependencies<MmdebstrapBootstrapper, RootfsBackend, IsoBackend> {
+        WorkflowDependencies {
+            bootstrapper: MmdebstrapBootstrapper::new(),
+            rootfs_backend: RootfsBackend::new(
                 build_context.rootfs().to_path_buf(),
                 package_repository.clone(),
             ),
-            IsoBackend::from_context(build_context),
-        )
+            iso_backend: IsoBackend::from_context(build_context),
+        }
     }
-    pub(crate) fn run_with<B, R, I>(
+
+    fn run_with<B, R, I>(
         build_context: &BuildContext,
         plan: Plan,
-        bootstrapper: &B,
-        mut rootfs_backend: R,
-        mut iso_backend: I,
+        dependencies: WorkflowDependencies<B, R, I>,
     ) -> Result<Plan, BuildError>
     where
         B: Bootstrapper<Error = MmdebstrapError>,
         R: BuildBackend<Error = RootfsRunError>,
         I: BuildBackend<Error = std::io::Error>,
     {
+        let WorkflowDependencies {
+            bootstrapper,
+            mut rootfs_backend,
+            mut iso_backend,
+        } = dependencies;
+
         bootstrapper.bootstrap(build_context)?;
 
         rootfs_backend.build(&plan).map_err(BuildError::Rootfs)?;
@@ -70,7 +74,6 @@ impl IsoWorkflow {
         Ok(plan)
     }
 }
-
 #[cfg(test)]
 mod tests {
     use std::{
@@ -82,7 +85,7 @@ mod tests {
     use model::{Action, Capability, CapabilityId, Plan, PlanStep, Provider, ProviderId};
     use registry::{PackageRepository, Registry};
 
-    use super::IsoWorkflow;
+    use super::{IsoWorkflow, WorkflowDependencies};
     use crate::{
         BootstrapConfig, Bootstrapper, BuildBackend, BuildContext, BuildError, Engine,
         MmdebstrapError,
@@ -205,20 +208,21 @@ mod tests {
         let result = IsoWorkflow::run_with(
             &build_context,
             plan,
-            &RecordingBootstrapper {
-                log: Arc::clone(&log),
-                error: bootstrap_error,
-            },
-            RecordingRootfsBackend {
-                log: Arc::clone(&log),
-                error: rootfs_error,
-            },
-            RecordingIsoBackend {
-                log: Arc::clone(&log),
-                error: iso_error,
+            WorkflowDependencies {
+                bootstrapper: RecordingBootstrapper {
+                    log: Arc::clone(&log),
+                    error: bootstrap_error,
+                },
+                rootfs_backend: RecordingRootfsBackend {
+                    log: Arc::clone(&log),
+                    error: rootfs_error,
+                },
+                iso_backend: RecordingIsoBackend {
+                    log: Arc::clone(&log),
+                    error: iso_error,
+                },
             },
         );
-
         (result, log)
     }
     #[test]
