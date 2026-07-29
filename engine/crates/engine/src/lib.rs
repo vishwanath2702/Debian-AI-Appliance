@@ -6,7 +6,7 @@ mod context;
 mod mmdebstrap;
 use std::path::PathBuf;
 
-use executor::{ActionRunner, ExecuteError, ExecutionEnvironment, RootfsRunError};
+use executor::{ExecuteError, RootfsRunError};
 use model::{Capability, Plan};
 use planner::{PlanError, Planner};
 use registry::{PackageRepository, Registry};
@@ -44,6 +44,34 @@ impl<E> From<MmdebstrapError> for BuildError<E> {
 impl<E> From<ExecuteError<E>> for BuildError<E> {
     fn from(error: ExecuteError<E>) -> Self {
         Self::Execute(error)
+    }
+}
+
+/// Error returned when a bootable ISO appliance build cannot be completed.
+#[derive(Debug)]
+pub enum IsoBuildError {
+    /// An execution plan could not be produced.
+    Plan(PlanError),
+
+    /// The root filesystem could not be bootstrapped.
+    Bootstrap(MmdebstrapError),
+
+    /// The generated plan could not be executed inside the root filesystem.
+    Rootfs(ExecuteError<RootfsRunError>),
+
+    /// The bootable ISO image could not be generated.
+    Iso(ExecuteError<std::io::Error>),
+}
+
+impl From<PlanError> for IsoBuildError {
+    fn from(error: PlanError) -> Self {
+        Self::Plan(error)
+    }
+}
+
+impl From<MmdebstrapError> for IsoBuildError {
+    fn from(error: MmdebstrapError) -> Self {
+        Self::Bootstrap(error)
     }
 }
 mod backend;
@@ -96,21 +124,34 @@ impl Engine {
         Ok(plan)
     }
 
-    /// Builds and executes an appliance plan using the supplied runner.
+    /// Builds and executes an appliance plan as a bootable ISO image.
     ///
     /// # Errors
     ///
-    /// Returns a [`BuildError`] if planning or execution fails.
-    pub fn build_with_runner<R>(
+    /// Returns an [`IsoBuildError`] if planning, bootstrapping, root filesystem
+    /// execution, or ISO generation fails.
+    pub fn build_iso(
         &self,
         capability: &Capability,
-        runner: R,
-    ) -> Result<Plan, BuildError<R::Error>>
-    where
-        R: ActionRunner + ExecutionEnvironment,
-    {
-        self.build_with_backend(capability, RunnerBackend::new(runner))
+        context: &BuildContext,
+        package_repository: &PackageRepository,
+    ) -> Result<Plan, IsoBuildError> {
+        let plan = self.plan(capability)?;
+
+        MmdebstrapBootstrapper::new().bootstrap(context)?;
+
+        let mut rootfs_backend =
+            RootfsBackend::new(context.rootfs().to_path_buf(), package_repository.clone());
+
+        rootfs_backend.build(&plan).map_err(IsoBuildError::Rootfs)?;
+
+        let mut iso_backend = IsoBackend::from_context(context);
+
+        iso_backend.build(&plan).map_err(IsoBuildError::Iso)?;
+
+        Ok(plan)
     }
+
     /// Builds and executes an appliance plan inside a root filesystem.
     ///
     /// # Errors
@@ -123,24 +164,6 @@ impl Engine {
         package_repository: PackageRepository,
     ) -> Result<Plan, BuildError<RootfsRunError>> {
         let backend = RootfsBackend::new(rootfs, package_repository);
-
-        self.build_with_backend(capability, backend)
-    }
-
-    /// Builds and executes an appliance plan as a bootable ISO image.
-    ///
-    /// # Errors
-    ///
-    /// Returns a [`BuildError`] if planning or ISO generation fails.
-    pub fn build_iso(
-        &self,
-        capability: &Capability,
-        context: &BuildContext,
-        _package_repository: &PackageRepository,
-    ) -> Result<Plan, BuildError<std::io::Error>> {
-        MmdebstrapBootstrapper::new().bootstrap(context)?;
-
-        let backend = IsoBackend::from_context(context);
 
         self.build_with_backend(capability, backend)
     }
