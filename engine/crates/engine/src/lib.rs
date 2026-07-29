@@ -22,6 +22,9 @@ pub enum BuildError<E> {
     /// An execution plan could not be produced.
     Plan(PlanError),
 
+    /// The root filesystem could not be bootstrapped.
+    Bootstrap(MmdebstrapError),
+
     /// The generated plan could not be executed.
     Execute(ExecuteError<E>),
 }
@@ -29,6 +32,12 @@ pub enum BuildError<E> {
 impl<E> From<PlanError> for BuildError<E> {
     fn from(error: PlanError) -> Self {
         Self::Plan(error)
+    }
+}
+
+impl<E> From<MmdebstrapError> for BuildError<E> {
+    fn from(error: MmdebstrapError) -> Self {
+        Self::Bootstrap(error)
     }
 }
 
@@ -128,6 +137,8 @@ impl Engine {
         capability: &Capability,
         context: &BuildContext,
     ) -> Result<Plan, BuildError<std::io::Error>> {
+        MmdebstrapBootstrapper::new().bootstrap(context)?;
+
         let backend = IsoBackend::from_context(context);
 
         self.build_with_backend(capability, backend)
