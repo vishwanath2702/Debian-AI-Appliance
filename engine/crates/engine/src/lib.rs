@@ -6,7 +6,11 @@ mod context;
 mod mmdebstrap;
 mod workflow;
 
-use std::path::PathBuf;
+use std::{
+    error::Error,
+    fmt::{self, Display, Formatter},
+    path::PathBuf,
+};
 
 pub use bootstrap::BootstrapConfig;
 pub use bootstrapper::Bootstrapper;
@@ -34,6 +38,31 @@ pub enum BuildError {
     Iso(ExecuteError<std::io::Error>),
 }
 
+impl Display for BuildError {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Plan(error) => write!(formatter, "failed to build execution plan: {error}"),
+            Self::Bootstrap(error) => {
+                write!(formatter, "failed to bootstrap root filesystem: {error}")
+            }
+            Self::Rootfs(error) => {
+                write!(formatter, "failed to execute root filesystem plan: {error}")
+            }
+            Self::Iso(error) => write!(formatter, "failed to generate ISO image: {error}"),
+        }
+    }
+}
+
+impl Error for BuildError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::Plan(error) => Some(error),
+            Self::Bootstrap(error) => Some(error),
+            Self::Rootfs(error) => Some(error),
+            Self::Iso(error) => Some(error),
+        }
+    }
+}
 impl From<PlanError> for BuildError {
     fn from(error: PlanError) -> Self {
         Self::Plan(error)

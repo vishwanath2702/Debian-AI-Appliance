@@ -2,10 +2,13 @@
 mod apt_installer;
 
 pub use apt_installer::{AptInstaller, AptInstallerError};
-use std::fs;
-use std::io;
-use std::path::PathBuf;
-use std::process::Command;
+use std::{
+    error::Error,
+    fmt::{self, Display, Formatter},
+    fs, io,
+    path::PathBuf,
+    process::Command,
+};
 
 use model::{Action, Plan};
 
@@ -27,7 +30,41 @@ pub enum ExecuteError<E> {
         source: E,
     },
 }
+impl<E> Display for ExecuteError<E>
+where
+    E: Display,
+{
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Environment(error) => {
+                write!(
+                    formatter,
+                    "failed to prepare execution environment: {error}"
+                )
+            }
+            Self::Action {
+                step,
+                action,
+                source,
+            } => write!(
+                formatter,
+                "failed to execute step {step} ({action}): {source}"
+            ),
+        }
+    }
+}
 
+impl<E> Error for ExecuteError<E>
+where
+    E: Error + 'static,
+{
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::Environment(error) => Some(error),
+            Self::Action { source, .. } => Some(source),
+        }
+    }
+}
 /// Manages the lifecycle of an execution environment.
 pub trait ExecutionEnvironment {
     /// Prepares the execution environment.
@@ -108,6 +145,27 @@ impl RootfsRunner {
             rootfs,
             package_repository,
             package_installer,
+        }
+    }
+}
+impl Display for RootfsRunError {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::PackageManifestNotFound(name) => {
+                write!(formatter, "package manifest `{name}` was not found")
+            }
+            Self::PackageInstall(error) => {
+                write!(formatter, "package installation failed: {error}")
+            }
+        }
+    }
+}
+
+impl Error for RootfsRunError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::PackageManifestNotFound(_) => None,
+            Self::PackageInstall(error) => Some(error),
         }
     }
 }

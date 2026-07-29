@@ -1,10 +1,13 @@
 //! APT-based package installation.
 
-use std::cell::Cell;
-use std::io;
-use std::path::Path;
-
 use crate::PackageInstaller;
+use std::{
+    cell::Cell,
+    error::Error,
+    fmt::{self, Display, Formatter},
+    io,
+    path::Path,
+};
 
 /// Error returned when APT package installation fails.
 #[derive(Debug)]
@@ -15,7 +18,25 @@ pub enum AptInstallerError {
     /// The installer command exited unsuccessfully.
     CommandFailed(std::process::ExitStatus),
 }
+impl Display for AptInstallerError {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Io(error) => write!(formatter, "failed to execute APT command: {error}"),
+            Self::CommandFailed(status) => {
+                write!(formatter, "APT command exited unsuccessfully: {status}")
+            }
+        }
+    }
+}
 
+impl Error for AptInstallerError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::Io(error) => Some(error),
+            Self::CommandFailed(_) => None,
+        }
+    }
+}
 impl From<io::Error> for AptInstallerError {
     fn from(error: io::Error) -> Self {
         Self::Io(error)
