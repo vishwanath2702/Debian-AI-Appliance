@@ -1,7 +1,9 @@
 //! High-level orchestration for the DAIA engine.
 
+mod bootstrap;
+mod bootstrapper;
 mod context;
-
+mod mmdebstrap;
 use std::path::PathBuf;
 
 use executor::{ActionRunner, ExecuteError, ExecutionEnvironment, RootfsRunError};
@@ -10,12 +12,18 @@ use planner::{PlanError, Planner};
 use registry::{PackageRepository, Registry};
 use resolver::Resolver;
 
+pub use bootstrap::BootstrapConfig;
+pub use bootstrapper::Bootstrapper;
 pub use context::BuildContext;
+pub use mmdebstrap::{MmdebstrapBootstrapper, MmdebstrapError};
 /// Error returned when an appliance build cannot be completed.
 #[derive(Debug)]
 pub enum BuildError<E> {
     /// An execution plan could not be produced.
     Plan(PlanError),
+
+    /// The root filesystem could not be bootstrapped.
+    Bootstrap(MmdebstrapError),
 
     /// The generated plan could not be executed.
     Execute(ExecuteError<E>),
@@ -24,6 +32,12 @@ pub enum BuildError<E> {
 impl<E> From<PlanError> for BuildError<E> {
     fn from(error: PlanError) -> Self {
         Self::Plan(error)
+    }
+}
+
+impl<E> From<MmdebstrapError> for BuildError<E> {
+    fn from(error: MmdebstrapError) -> Self {
+        Self::Bootstrap(error)
     }
 }
 
@@ -122,7 +136,10 @@ impl Engine {
         &self,
         capability: &Capability,
         context: &BuildContext,
+        _package_repository: &PackageRepository,
     ) -> Result<Plan, BuildError<std::io::Error>> {
+        MmdebstrapBootstrapper::new().bootstrap(context)?;
+
         let backend = IsoBackend::from_context(context);
 
         self.build_with_backend(capability, backend)

@@ -18,7 +18,7 @@ use executor::ExecuteError;
 use model::Plan;
 
 use super::BuildBackend;
-
+use crate::BuildContext;
 /// Backend responsible for producing a bootable ISO image.
 pub struct IsoBackend {
     rootfs: PathBuf,
@@ -57,7 +57,16 @@ impl IsoBackend {
             },
         }
     }
-
+    /// Creates an ISO backend from a shared build context.
+    #[must_use]
+    pub fn from_context(context: &BuildContext) -> Self {
+        Self::new(
+            context.rootfs(),
+            context.source_iso(),
+            context.work_directory(),
+            context.output_iso(),
+        )
+    }
     /// Returns the prepared root filesystem path.
     #[must_use]
     pub fn rootfs(&self) -> &Path {
@@ -154,6 +163,7 @@ mod tests {
     use tempfile::{TempDir, tempdir};
 
     use super::*;
+    use crate::{BootstrapConfig, BuildContext};
 
     fn create_fake_xorriso(path: &Path) {
         fs::write(
@@ -234,6 +244,31 @@ mod tests {
             provider: ProviderId::new("test"),
             steps: Vec::new(),
         }
+    }
+    #[test]
+    fn creates_backend_from_build_context() {
+        let bootstrap = BootstrapConfig::new(
+            "bookworm",
+            "amd64",
+            "https://deb.debian.org/debian",
+            vec!["main".to_owned()],
+            "minbase",
+        );
+
+        let context = BuildContext::new(
+            "build/rootfs",
+            "images/source.iso",
+            "build/work",
+            "build/output.iso",
+            bootstrap,
+        );
+
+        let backend = IsoBackend::from_context(&context);
+
+        assert_eq!(backend.rootfs(), context.rootfs());
+        assert_eq!(backend.source_iso(), context.source_iso());
+        assert_eq!(backend.work_directory(), context.work_directory());
+        assert_eq!(backend.output_path(), context.output_iso());
     }
     #[test]
     fn build_creates_bootable_iso_workspace_and_output_image() {

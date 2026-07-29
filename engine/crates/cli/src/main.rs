@@ -4,8 +4,9 @@ use std::env;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use engine::{BuildContext, Engine};
+use engine::{BootstrapConfig, BuildContext, Engine};
 use model::{Capability, Plan};
+use registry::PackageRepository;
 
 mod provider_registry;
 
@@ -64,9 +65,38 @@ fn run_iso_build(
         return ExitCode::FAILURE;
     };
 
-    let context = BuildContext::new(rootfs, source_iso, work_directory, output_iso.to_path_buf());
+    let package_manifest_directory =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../registry/package-manifests");
 
-    match engine.build_iso(&Capability::new(capability_name), &context) {
+    let package_repository = match PackageRepository::from_directory(package_manifest_directory) {
+        Ok(repository) => repository,
+        Err(error) => {
+            eprintln!("Error loading package repository: {error}");
+            return ExitCode::FAILURE;
+        }
+    };
+
+    let bootstrap = BootstrapConfig::new(
+        "bookworm",
+        "amd64",
+        "https://deb.debian.org/debian",
+        vec!["main".to_owned()],
+        "minbase",
+    );
+
+    let context = BuildContext::new(
+        rootfs,
+        source_iso,
+        work_directory,
+        output_iso.to_path_buf(),
+        bootstrap,
+    );
+
+    match engine.build_iso(
+        &Capability::new(capability_name),
+        &context,
+        &package_repository,
+    ) {
         Ok(plan) => {
             print_plan(&plan);
             println!();
@@ -79,7 +109,6 @@ fn run_iso_build(
         }
     }
 }
-
 fn load_engine() -> Option<Engine> {
     match provider_registry::load() {
         Ok(registry) => Some(Engine::from_registry(registry)),
