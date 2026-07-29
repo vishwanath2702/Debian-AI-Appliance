@@ -1,6 +1,7 @@
 //! High-level orchestration for the DAIA engine.
 
 mod bootstrap;
+mod bootstrapper;
 mod context;
 use std::path::PathBuf;
 
@@ -11,6 +12,7 @@ use registry::{PackageRepository, Registry};
 use resolver::Resolver;
 
 pub use bootstrap::BootstrapConfig;
+pub use bootstrapper::Bootstrapper;
 pub use context::BuildContext;
 /// Error returned when an appliance build cannot be completed.
 #[derive(Debug)]
