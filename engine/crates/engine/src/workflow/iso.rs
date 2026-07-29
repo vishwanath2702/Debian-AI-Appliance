@@ -1,11 +1,10 @@
 //! Bootable ISO build workflow.
 
-use model::{Capability, Plan};
-use registry::PackageRepository;
+use model::Plan;
 
+use super::WorkflowContext;
 use crate::{
-    Bootstrapper, BuildBackend, BuildContext, BuildError, Engine, IsoBackend,
-    MmdebstrapBootstrapper, RootfsBackend,
+    Bootstrapper, BuildBackend, BuildError, IsoBackend, MmdebstrapBootstrapper, RootfsBackend,
 };
 
 /// Coordinates creation of a bootable ISO appliance.
@@ -18,22 +17,19 @@ impl IsoWorkflow {
     ///
     /// Returns a [`BuildError`] if planning, bootstrapping, root filesystem
     /// execution, or ISO generation fails.
-    pub fn run(
-        engine: &Engine,
-        capability: &Capability,
-        context: &BuildContext,
-        package_repository: &PackageRepository,
-    ) -> Result<Plan, BuildError> {
-        let plan = engine.plan(capability)?;
+    pub fn run(context: &WorkflowContext<'_>) -> Result<Plan, BuildError> {
+        let plan = context.engine().plan(context.capability())?;
 
-        MmdebstrapBootstrapper::new().bootstrap(context)?;
+        MmdebstrapBootstrapper::new().bootstrap(context.build_context())?;
 
-        let mut rootfs_backend =
-            RootfsBackend::new(context.rootfs().to_path_buf(), package_repository.clone());
+        let mut rootfs_backend = RootfsBackend::new(
+            context.build_context().rootfs().to_path_buf(),
+            context.package_repository().clone(),
+        );
 
         rootfs_backend.build(&plan).map_err(BuildError::Rootfs)?;
 
-        let mut iso_backend = IsoBackend::from_context(context);
+        let mut iso_backend = IsoBackend::from_context(context.build_context());
 
         iso_backend.build(&plan).map_err(BuildError::Iso)?;
 

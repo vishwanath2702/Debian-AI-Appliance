@@ -13,7 +13,7 @@ use model::{Capability, Plan};
 use planner::{PlanError, Planner};
 use registry::{PackageRepository, Registry};
 use resolver::Resolver;
-use workflow::IsoWorkflow;
+use workflow::{IsoWorkflow, WorkflowContext};
 
 pub use bootstrap::BootstrapConfig;
 pub use bootstrapper::Bootstrapper;
@@ -120,7 +120,9 @@ impl Engine {
         context: &BuildContext,
         package_repository: &PackageRepository,
     ) -> Result<Plan, BuildError> {
-        IsoWorkflow::run(self, capability, context, package_repository)
+        let workflow_context = WorkflowContext::new(self, capability, context, package_repository);
+
+        IsoWorkflow::run(&workflow_context)
     }
     /// Builds and executes an appliance plan inside a root filesystem.
     ///
