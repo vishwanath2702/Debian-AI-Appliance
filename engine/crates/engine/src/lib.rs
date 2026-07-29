@@ -8,17 +8,16 @@ mod workflow;
 
 use std::path::PathBuf;
 
+pub use bootstrap::BootstrapConfig;
+pub use bootstrapper::Bootstrapper;
+pub use context::BuildContext;
 use executor::{ExecuteError, RootfsRunError};
+pub use mmdebstrap::{MmdebstrapBootstrapper, MmdebstrapError};
 use model::{Capability, Plan};
 use planner::{PlanError, Planner};
 use registry::{PackageRepository, Registry};
 use resolver::Resolver;
-use workflow::{IsoWorkflow, WorkflowContext};
-
-pub use bootstrap::BootstrapConfig;
-pub use bootstrapper::Bootstrapper;
-pub use context::BuildContext;
-pub use mmdebstrap::{MmdebstrapBootstrapper, MmdebstrapError};
+use workflow::IsoWorkflow;
 /// Error returned when an appliance build cannot be completed.
 #[derive(Debug)]
 pub enum BuildError {
@@ -120,9 +119,9 @@ impl Engine {
         context: &BuildContext,
         package_repository: &PackageRepository,
     ) -> Result<Plan, BuildError> {
-        let workflow_context = WorkflowContext::new(self, capability, context, package_repository);
+        let plan = self.plan(capability)?;
 
-        IsoWorkflow::run(&workflow_context)
+        IsoWorkflow::run(context, package_repository, plan)
     }
     /// Builds and executes an appliance plan inside a root filesystem.
     ///
@@ -143,9 +142,9 @@ impl Engine {
 #[cfg(test)]
 mod tests {
     use model::{Action, Capability, CapabilityId, PlanStep, Provider, ProviderId};
-    use registry::Registry;
+    use registry::{PackageRepository, Registry};
 
-    use super::{BuildError, Engine, RootfsRunError};
+    use super::{BootstrapConfig, BuildContext, BuildError, Engine, RootfsRunError};
     fn desktop_registry() -> Registry {
         Registry::from_providers(vec![Provider {
             id: ProviderId::new("desktop"),
@@ -228,5 +227,32 @@ mod tests {
         let build_error = BuildError::from(execution_error);
 
         assert!(matches!(build_error, BuildError::Rootfs(_)));
+    }
+
+    #[test]
+    fn build_iso_returns_plan_error_before_workflow_execution() {
+        let engine = Engine::from_registry(desktop_registry());
+        let build_context = BuildContext::new(
+            "build/rootfs",
+            "images/source.iso",
+            "build/work",
+            "build/output.iso",
+            BootstrapConfig::new(
+                "bookworm",
+                "amd64",
+                "https://deb.debian.org/debian",
+                vec!["main".to_owned()],
+                "minbase",
+            ),
+        );
+        let package_repository = PackageRepository::new();
+
+        let result = engine.build_iso(
+            &Capability::new("does-not-exist"),
+            &build_context,
+            &package_repository,
+        );
+
+        assert!(matches!(result, Err(BuildError::Plan(_))));
     }
 }
