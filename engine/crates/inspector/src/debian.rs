@@ -4,10 +4,25 @@
 
 use std::path::PathBuf;
 
-use crate::{InspectError, IsoMetadata};
+use crate::{BootMode, InspectError, IsoMetadata, IsoReader};
 
 const OFFICIAL_SEPARATOR: &str = " - Official";
+const BIOS_BOOT_PATH: &str = "/isolinux/isolinux.bin";
+const UEFI_BOOT_PATH: &str = "/EFI/BOOT/BOOTX64.EFI";
 
+fn detect_boot_modes(reader: &impl IsoReader) -> Result<Vec<BootMode>, InspectError> {
+    let mut boot_modes = Vec::new();
+
+    if reader.path_exists(BIOS_BOOT_PATH)? {
+        boot_modes.push(BootMode::Bios);
+    }
+
+    if reader.path_exists(UEFI_BOOT_PATH)? {
+        boot_modes.push(BootMode::Uefi);
+    }
+
+    Ok(boot_modes)
+}
 /// Parses the contents of Debian's `/.disk/info` file.
 ///
 /// The supported format is similar to:
@@ -110,23 +125,51 @@ impl DebianIsoInspector {
 
 impl crate::IsoInspector for DebianIsoInspector {
     fn inspect(&self, path: &std::path::Path) -> Result<IsoMetadata, InspectError> {
-        use crate::{IsoReader, XorrisoReader};
+        use crate::XorrisoReader;
 
         let reader = XorrisoReader::new(path);
         let contents = reader.read_file("/.disk/info")?;
         let contents = std::str::from_utf8(&contents)?;
 
+        let boot_modes = detect_boot_modes(&reader)?;
+
         let mut metadata = parse_disk_info(contents)?;
         metadata.set_path(path.to_path_buf());
+        metadata.set_boot_modes(boot_modes);
 
         Ok(metadata)
     }
 }
 #[cfg(test)]
 mod tests {
-    use super::{DebianIsoInspector, parse_disk_info};
-    use crate::InspectError;
+    use super::{
+        BIOS_BOOT_PATH, DebianIsoInspector, UEFI_BOOT_PATH, detect_boot_modes, parse_disk_info,
+    };
+    use crate::{BootMode, InspectError, IsoReader};
+    struct MockIsoReader {
+        bios: bool,
+        uefi: bool,
+    }
 
+    impl MockIsoReader {
+        const fn new(bios: bool, uefi: bool) -> Self {
+            Self { bios, uefi }
+        }
+    }
+
+    impl IsoReader for MockIsoReader {
+        fn read_file(&self, _iso_path: &str) -> Result<Vec<u8>, InspectError> {
+            Ok(Vec::new())
+        }
+
+        fn path_exists(&self, iso_path: &str) -> Result<bool, InspectError> {
+            match iso_path {
+                BIOS_BOOT_PATH => Ok(self.bios),
+                UEFI_BOOT_PATH => Ok(self.uefi),
+                _ => Ok(false),
+            }
+        }
+    }
     #[test]
     fn parses_netinst_metadata() {
         let metadata =
@@ -144,6 +187,32 @@ mod tests {
     #[test]
     fn creates_debian_iso_inspector() {
         let _inspector = DebianIsoInspector::new();
+    }
+    #[test]
+    fn detects_bios_boot_mode() {
+        let reader = MockIsoReader::new(true, false);
+
+        let boot_modes = detect_boot_modes(&reader).expect("boot-mode detection should succeed");
+
+        assert_eq!(boot_modes, vec![BootMode::Bios]);
+    }
+
+    #[test]
+    fn detects_uefi_boot_mode() {
+        let reader = MockIsoReader::new(false, true);
+
+        let boot_modes = detect_boot_modes(&reader).expect("boot-mode detection should succeed");
+
+        assert_eq!(boot_modes, vec![BootMode::Uefi]);
+    }
+
+    #[test]
+    fn detects_hybrid_boot_modes() {
+        let reader = MockIsoReader::new(true, true);
+
+        let boot_modes = detect_boot_modes(&reader).expect("boot-mode detection should succeed");
+
+        assert_eq!(boot_modes, vec![BootMode::Bios, BootMode::Uefi]);
     }
     #[test]
     fn parses_dvd_metadata() {

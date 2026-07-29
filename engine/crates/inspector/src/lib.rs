@@ -49,6 +49,9 @@ impl IsoMetadata {
     pub(crate) fn set_path(&mut self, path: PathBuf) {
         self.path = path;
     }
+    pub(crate) fn set_boot_modes(&mut self, boot_modes: Vec<BootMode>) {
+        self.boot_modes = boot_modes;
+    }
     /// Returns the inspected ISO path.
     #[must_use]
     pub fn path(&self) -> &Path {

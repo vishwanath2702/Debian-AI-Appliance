@@ -11,4 +11,10 @@ pub trait IsoReader {
     /// Returns an error when the ISO cannot be accessed or the requested file
     /// cannot be extracted.
     fn read_file(&self, iso_path: &str) -> Result<Vec<u8>, InspectError>;
+    /// Checks whether a path exists inside the ISO filesystem.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the ISO cannot be accessed.
+    fn path_exists(&self, iso_path: &str) -> Result<bool, InspectError>;
 }
