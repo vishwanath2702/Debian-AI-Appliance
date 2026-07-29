@@ -18,38 +18,7 @@ pub use context::BuildContext;
 pub use mmdebstrap::{MmdebstrapBootstrapper, MmdebstrapError};
 /// Error returned when an appliance build cannot be completed.
 #[derive(Debug)]
-pub enum BuildError<E> {
-    /// An execution plan could not be produced.
-    Plan(PlanError),
-
-    /// The root filesystem could not be bootstrapped.
-    Bootstrap(MmdebstrapError),
-
-    /// The generated plan could not be executed.
-    Execute(ExecuteError<E>),
-}
-
-impl<E> From<PlanError> for BuildError<E> {
-    fn from(error: PlanError) -> Self {
-        Self::Plan(error)
-    }
-}
-
-impl<E> From<MmdebstrapError> for BuildError<E> {
-    fn from(error: MmdebstrapError) -> Self {
-        Self::Bootstrap(error)
-    }
-}
-
-impl<E> From<ExecuteError<E>> for BuildError<E> {
-    fn from(error: ExecuteError<E>) -> Self {
-        Self::Execute(error)
-    }
-}
-
-/// Error returned when a bootable ISO appliance build cannot be completed.
-#[derive(Debug)]
-pub enum IsoBuildError {
+pub enum BuildError {
     /// An execution plan could not be produced.
     Plan(PlanError),
 
@@ -63,15 +32,27 @@ pub enum IsoBuildError {
     Iso(ExecuteError<std::io::Error>),
 }
 
-impl From<PlanError> for IsoBuildError {
+impl From<PlanError> for BuildError {
     fn from(error: PlanError) -> Self {
         Self::Plan(error)
     }
 }
 
-impl From<MmdebstrapError> for IsoBuildError {
+impl From<MmdebstrapError> for BuildError {
     fn from(error: MmdebstrapError) -> Self {
         Self::Bootstrap(error)
+    }
+}
+
+impl From<ExecuteError<RootfsRunError>> for BuildError {
+    fn from(error: ExecuteError<RootfsRunError>) -> Self {
+        Self::Rootfs(error)
+    }
+}
+
+impl From<ExecuteError<std::io::Error>> for BuildError {
+    fn from(error: ExecuteError<std::io::Error>) -> Self {
+        Self::Iso(error)
     }
 }
 mod backend;
@@ -113,29 +94,29 @@ impl Engine {
         &self,
         capability: &Capability,
         mut backend: B,
-    ) -> Result<Plan, BuildError<B::Error>>
+    ) -> Result<Plan, BuildError>
     where
         B: BuildBackend,
+        BuildError: From<ExecuteError<B::Error>>,
     {
         let plan = self.plan(capability)?;
 
-        backend.build(&plan)?;
+        backend.build(&plan).map_err(BuildError::from)?;
 
         Ok(plan)
     }
-
     /// Builds and executes an appliance plan as a bootable ISO image.
     ///
     /// # Errors
     ///
-    /// Returns an [`IsoBuildError`] if planning, bootstrapping, root filesystem
+    /// Returns a [`BuildError`] if planning, bootstrapping, root filesystem
     /// execution, or ISO generation fails.
     pub fn build_iso(
         &self,
         capability: &Capability,
         context: &BuildContext,
         package_repository: &PackageRepository,
-    ) -> Result<Plan, IsoBuildError> {
+    ) -> Result<Plan, BuildError> {
         let plan = self.plan(capability)?;
 
         MmdebstrapBootstrapper::new().bootstrap(context)?;
@@ -143,11 +124,11 @@ impl Engine {
         let mut rootfs_backend =
             RootfsBackend::new(context.rootfs().to_path_buf(), package_repository.clone());
 
-        rootfs_backend.build(&plan).map_err(IsoBuildError::Rootfs)?;
+        rootfs_backend.build(&plan).map_err(BuildError::Rootfs)?;
 
         let mut iso_backend = IsoBackend::from_context(context);
 
-        iso_backend.build(&plan).map_err(IsoBuildError::Iso)?;
+        iso_backend.build(&plan).map_err(BuildError::Iso)?;
 
         Ok(plan)
     }
@@ -162,7 +143,7 @@ impl Engine {
         capability: &Capability,
         rootfs: PathBuf,
         package_repository: PackageRepository,
-    ) -> Result<Plan, BuildError<RootfsRunError>> {
+    ) -> Result<Plan, BuildError> {
         let backend = RootfsBackend::new(rootfs, package_repository);
 
         self.build_with_backend(capability, backend)
@@ -243,18 +224,18 @@ mod tests {
             .plan(&Capability::new("does-not-exist"))
             .expect_err("unknown capability should fail");
 
-        let build_error: BuildError<RootfsRunError> = BuildError::from(plan_error);
+        let build_error = BuildError::from(plan_error);
 
         assert!(matches!(build_error, BuildError::Plan(_)));
     }
 
     #[test]
-    fn converts_execution_error_into_build_error() {
+    fn converts_rootfs_execution_error_into_build_error() {
         let execution_error: executor::ExecuteError<RootfsRunError> =
             executor::ExecuteError::Environment(std::io::Error::other("prepare failed"));
 
-        let build_error: BuildError<RootfsRunError> = BuildError::from(execution_error);
+        let build_error = BuildError::from(execution_error);
 
-        assert!(matches!(build_error, BuildError::Execute(_)));
+        assert!(matches!(build_error, BuildError::Rootfs(_)));
     }
 }
