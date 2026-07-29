@@ -1,6 +1,16 @@
 //! Inspection and identification of Debian installation media.
 
+mod debian;
+mod error;
+mod reader;
+mod xorriso;
+
 use std::path::{Path, PathBuf};
+
+pub use debian::parse_disk_info;
+pub use error::InspectError;
+pub use reader::IsoReader;
+pub use xorriso::XorrisoReader;
 
 /// Metadata discovered from an installation ISO.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -90,13 +100,6 @@ pub enum BootMode {
     Uefi,
 }
 
-/// Error returned when ISO inspection cannot be completed.
-#[derive(Debug)]
-pub enum InspectError {
-    /// ISO inspection has not yet been implemented.
-    Unsupported(PathBuf),
-}
-
 /// Inspects installation ISO metadata.
 pub trait IsoInspector {
     /// Inspects the supplied ISO path.
@@ -107,21 +110,11 @@ pub trait IsoInspector {
     fn inspect(&self, path: &Path) -> Result<IsoMetadata, InspectError>;
 }
 
-/// Placeholder inspector used while real Debian ISO parsing is introduced.
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub struct DebianIsoInspector;
-
-impl IsoInspector for DebianIsoInspector {
-    fn inspect(&self, path: &Path) -> Result<IsoMetadata, InspectError> {
-        Err(InspectError::Unsupported(path.to_path_buf()))
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use std::path::{Path, PathBuf};
 
-    use super::{BootMode, DebianIsoInspector, InspectError, IsoInspector, IsoMetadata};
+    use super::{BootMode, IsoMetadata};
 
     #[test]
     fn iso_metadata_exposes_discovered_values() {
@@ -142,20 +135,5 @@ mod tests {
         assert_eq!(metadata.architecture(), "amd64");
         assert_eq!(metadata.media_type(), "netinst");
         assert_eq!(metadata.boot_modes(), &[BootMode::Bios, BootMode::Uefi]);
-    }
-
-    #[test]
-    fn placeholder_inspector_returns_unsupported_error() {
-        let path = Path::new("/tmp/debian.iso");
-
-        let error = DebianIsoInspector
-            .inspect(path)
-            .expect_err("placeholder inspection should fail");
-
-        match error {
-            InspectError::Unsupported(unsupported_path) => {
-                assert_eq!(unsupported_path, path);
-            }
-        }
     }
 }
