@@ -3,6 +3,7 @@
 mod bootstrap;
 mod bootstrapper;
 mod context;
+mod mmdebstrap;
 use std::path::PathBuf;
 
 use executor::{ActionRunner, ExecuteError, ExecutionEnvironment, RootfsRunError};
@@ -14,6 +15,7 @@ use resolver::Resolver;
 pub use bootstrap::BootstrapConfig;
 pub use bootstrapper::Bootstrapper;
 pub use context::BuildContext;
+pub use mmdebstrap::{MmdebstrapBootstrapper, MmdebstrapError};
 /// Error returned when an appliance build cannot be completed.
 #[derive(Debug)]
 pub enum BuildError<E> {
