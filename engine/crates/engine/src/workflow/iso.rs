@@ -3,11 +3,12 @@
 use executor::RootfsRunError;
 use model::Plan;
 
-use super::WorkflowContext;
 use crate::{
-    Bootstrapper, BuildBackend, BuildError, IsoBackend, MmdebstrapBootstrapper, MmdebstrapError,
-    RootfsBackend,
+    Bootstrapper, BuildBackend, BuildContext, BuildError, IsoBackend, MmdebstrapBootstrapper,
+    MmdebstrapError, RootfsBackend,
 };
+
+use registry::PackageRepository;
 
 /// Coordinates creation of a bootable ISO appliance.
 pub struct IsoWorkflow;
@@ -17,21 +18,32 @@ impl IsoWorkflow {
     ///
     /// # Errors
     ///
-    /// Returns a [`BuildError`] if planning, bootstrapping, root filesystem
-    /// execution, or ISO generation fails.
-    pub fn run(context: &WorkflowContext<'_>) -> Result<Plan, BuildError> {
+    /// Returns a [`BuildError`] if bootstrapping, root filesystem execution,
+    /// or ISO generation fails.
+    pub fn run(
+        build_context: &BuildContext,
+        package_repository: &PackageRepository,
+        plan: Plan,
+    ) -> Result<Plan, BuildError> {
         let bootstrapper = MmdebstrapBootstrapper::new();
         let rootfs_backend = RootfsBackend::new(
-            context.build_context().rootfs().to_path_buf(),
-            context.package_repository().clone(),
+            build_context.rootfs().to_path_buf(),
+            package_repository.clone(),
         );
-        let iso_backend = IsoBackend::from_context(context.build_context());
+        let iso_backend = IsoBackend::from_context(build_context);
 
-        Self::run_with(context, &bootstrapper, rootfs_backend, iso_backend)
+        Self::run_with(
+            build_context,
+            plan,
+            &bootstrapper,
+            rootfs_backend,
+            iso_backend,
+        )
     }
 
-    fn run_with<B, R, I>(
-        context: &WorkflowContext<'_>,
+    pub(crate) fn run_with<B, R, I>(
+        build_context: &BuildContext,
+        plan: Plan,
         bootstrapper: &B,
         mut rootfs_backend: R,
         mut iso_backend: I,
@@ -41,14 +53,209 @@ impl IsoWorkflow {
         R: BuildBackend<Error = RootfsRunError>,
         I: BuildBackend<Error = std::io::Error>,
     {
-        let plan = context.engine().plan(context.capability())?;
-
-        bootstrapper.bootstrap(context.build_context())?;
+        bootstrapper.bootstrap(build_context)?;
 
         rootfs_backend.build(&plan).map_err(BuildError::Rootfs)?;
-
         iso_backend.build(&plan).map_err(BuildError::Iso)?;
 
         Ok(plan)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{
+        io,
+        sync::{Arc, Mutex},
+    };
+
+    use executor::{ExecuteError, RootfsRunError};
+    use model::{Action, Capability, CapabilityId, Plan, PlanStep, Provider, ProviderId};
+    use registry::{PackageRepository, Registry};
+
+    use super::IsoWorkflow;
+    use crate::{
+        BootstrapConfig, Bootstrapper, BuildBackend, BuildContext, BuildError, Engine,
+        MmdebstrapError,
+    };
+
+    type ExecutionLog = Arc<Mutex<Vec<&'static str>>>;
+
+    struct RecordingBootstrapper {
+        log: ExecutionLog,
+        error: bool,
+    }
+
+    impl Bootstrapper for RecordingBootstrapper {
+        type Error = MmdebstrapError;
+
+        fn bootstrap(&self, _context: &BuildContext) -> Result<(), Self::Error> {
+            self.log
+                .lock()
+                .expect("execution log should not be poisoned")
+                .push("bootstrap");
+
+            if self.error {
+                Err(MmdebstrapError::Process(io::Error::other(
+                    "bootstrap failed",
+                )))
+            } else {
+                Ok(())
+            }
+        }
+    }
+
+    struct RecordingRootfsBackend {
+        log: ExecutionLog,
+        error: bool,
+    }
+
+    impl BuildBackend for RecordingRootfsBackend {
+        type Error = RootfsRunError;
+
+        fn build(&mut self, _plan: &Plan) -> Result<(), ExecuteError<Self::Error>> {
+            self.log
+                .lock()
+                .expect("execution log should not be poisoned")
+                .push("rootfs");
+
+            if self.error {
+                Err(ExecuteError::Environment(io::Error::other("rootfs failed")))
+            } else {
+                Ok(())
+            }
+        }
+    }
+
+    struct RecordingIsoBackend {
+        log: ExecutionLog,
+        error: bool,
+    }
+
+    impl BuildBackend for RecordingIsoBackend {
+        type Error = io::Error;
+
+        fn build(&mut self, _plan: &Plan) -> Result<(), ExecuteError<Self::Error>> {
+            self.log
+                .lock()
+                .expect("execution log should not be poisoned")
+                .push("iso");
+
+            if self.error {
+                Err(ExecuteError::Environment(io::Error::other("iso failed")))
+            } else {
+                Ok(())
+            }
+        }
+    }
+
+    fn workflow_inputs() -> (Engine, Capability, BuildContext, PackageRepository) {
+        let registry = Registry::from_providers(vec![Provider {
+            id: ProviderId::new("desktop"),
+            capability: CapabilityId::new("desktop"),
+            steps: vec![
+                PlanStep::new(Action::InstallPackageManifest("desktop".to_owned())),
+                PlanStep::new(Action::EnableService("display-manager".to_owned())),
+            ],
+        }])
+        .expect("test registry should be valid");
+
+        let bootstrap = BootstrapConfig::new(
+            "bookworm",
+            "amd64",
+            "https://deb.debian.org/debian",
+            vec!["main".to_owned()],
+            "minbase",
+        );
+
+        (
+            Engine::from_registry(registry),
+            Capability::new("desktop"),
+            BuildContext::new(
+                "build/rootfs",
+                "images/source.iso",
+                "build/work",
+                "build/output.iso",
+                bootstrap,
+            ),
+            PackageRepository::new(),
+        )
+    }
+
+    fn run_workflow(
+        bootstrap_error: bool,
+        rootfs_error: bool,
+        iso_error: bool,
+    ) -> (Result<Plan, BuildError>, ExecutionLog) {
+        let (engine, capability, build_context, _) = workflow_inputs();
+        let plan = engine
+            .plan(&capability)
+            .expect("test workflow plan should build");
+        let log = Arc::new(Mutex::new(Vec::new()));
+
+        let result = IsoWorkflow::run_with(
+            &build_context,
+            plan,
+            &RecordingBootstrapper {
+                log: Arc::clone(&log),
+                error: bootstrap_error,
+            },
+            RecordingRootfsBackend {
+                log: Arc::clone(&log),
+                error: rootfs_error,
+            },
+            RecordingIsoBackend {
+                log: Arc::clone(&log),
+                error: iso_error,
+            },
+        );
+
+        (result, log)
+    }
+    #[test]
+    fn executes_workflow_stages_in_order() {
+        let (result, log) = run_workflow(false, false, false);
+
+        let plan = result.expect("workflow should succeed");
+
+        assert_eq!(plan.capability, Capability::new("desktop"));
+        assert_eq!(plan.provider, ProviderId::new("desktop"));
+        assert_eq!(
+            *log.lock().expect("execution log should not be poisoned"),
+            vec!["bootstrap", "rootfs", "iso"]
+        );
+    }
+
+    #[test]
+    fn returns_bootstrap_error_without_running_backends() {
+        let (result, log) = run_workflow(true, false, false);
+
+        assert!(matches!(result, Err(BuildError::Bootstrap(_))));
+        assert_eq!(
+            *log.lock().expect("execution log should not be poisoned"),
+            vec!["bootstrap"]
+        );
+    }
+
+    #[test]
+    fn returns_rootfs_error_without_running_iso_backend() {
+        let (result, log) = run_workflow(false, true, false);
+
+        assert!(matches!(result, Err(BuildError::Rootfs(_))));
+        assert_eq!(
+            *log.lock().expect("execution log should not be poisoned"),
+            vec!["bootstrap", "rootfs"]
+        );
+    }
+
+    #[test]
+    fn returns_iso_error_after_rootfs_execution() {
+        let (result, log) = run_workflow(false, false, true);
+
+        assert!(matches!(result, Err(BuildError::Iso(_))));
+        assert_eq!(
+            *log.lock().expect("execution log should not be poisoned"),
+            vec!["bootstrap", "rootfs", "iso"]
+        );
     }
 }
