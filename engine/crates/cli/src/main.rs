@@ -4,7 +4,7 @@ use std::env;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use engine::Engine;
+use engine::{BuildContext, Engine};
 use model::{Capability, Plan};
 
 mod provider_registry;
@@ -64,13 +64,9 @@ fn run_iso_build(
         return ExitCode::FAILURE;
     };
 
-    match engine.build_iso(
-        &Capability::new(capability_name),
-        rootfs,
-        source_iso,
-        work_directory,
-        output_iso.to_path_buf(),
-    ) {
+    let context = BuildContext::new(rootfs, source_iso, work_directory, output_iso.to_path_buf());
+
+    match engine.build_iso(&Capability::new(capability_name), &context) {
         Ok(plan) => {
             print_plan(&plan);
             println!();

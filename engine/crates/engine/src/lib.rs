@@ -1,4 +1,7 @@
 //! High-level orchestration for the DAIA engine.
+
+mod context;
+
 use std::path::PathBuf;
 
 use executor::{ActionRunner, ExecuteError, ExecutionEnvironment, RootfsRunError};
@@ -6,6 +9,8 @@ use model::{Capability, Plan};
 use planner::{PlanError, Planner};
 use registry::{PackageRepository, Registry};
 use resolver::Resolver;
+
+pub use context::BuildContext;
 /// Error returned when an appliance build cannot be completed.
 #[derive(Debug)]
 pub enum BuildError<E> {
@@ -107,6 +112,7 @@ impl Engine {
 
         self.build_with_backend(capability, backend)
     }
+
     /// Builds and executes an appliance plan as a bootable ISO image.
     ///
     /// # Errors
@@ -115,12 +121,9 @@ impl Engine {
     pub fn build_iso(
         &self,
         capability: &Capability,
-        rootfs: PathBuf,
-        source_iso: PathBuf,
-        work_directory: PathBuf,
-        output_iso: PathBuf,
+        context: &BuildContext,
     ) -> Result<Plan, BuildError<std::io::Error>> {
-        let backend = IsoBackend::new(rootfs, source_iso, work_directory, output_iso);
+        let backend = IsoBackend::from_context(context);
 
         self.build_with_backend(capability, backend)
     }
