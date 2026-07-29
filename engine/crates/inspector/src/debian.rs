@@ -23,7 +23,6 @@ fn detect_boot_modes(reader: &impl IsoReader) -> Result<Vec<BootMode>, InspectEr
 
     Ok(boot_modes)
 }
-
 fn discover_repositories(reader: &impl IsoReader) -> Result<Vec<RepositoryInfo>, InspectError> {
     let mut repositories = Vec::new();
 
@@ -41,6 +40,7 @@ fn discover_repositories(reader: &impl IsoReader) -> Result<Vec<RepositoryInfo>,
 
         let mut components = Vec::new();
         let mut architectures = BTreeSet::new();
+        let mut indexes = BTreeSet::new();
 
         for entry in reader.list_files(&suite_path)? {
             let Some(component) = entry.strip_prefix(&component_prefix) else {
@@ -57,18 +57,50 @@ fn discover_repositories(reader: &impl IsoReader) -> Result<Vec<RepositoryInfo>,
             components.push(component.to_owned());
 
             let component_path = format!("{suite_path}/{component}");
-            let binary_prefix = format!("{component_path}/");
+            let directory_prefix = format!("{component_path}/");
 
             for entry in reader.list_files(&component_path)? {
-                let Some(directory) = entry.strip_prefix(&binary_prefix) else {
+                let Some(directory) = entry.strip_prefix(&directory_prefix) else {
                     continue;
                 };
 
+                if directory.is_empty() || directory.contains('/') {
+                    continue;
+                }
+
                 if let Some(architecture) = directory.strip_prefix("binary-")
                     && !architecture.is_empty()
-                    && !architecture.contains('/')
                 {
                     architectures.insert(architecture.to_owned());
+                }
+
+                if !directory.starts_with("binary-") && directory != "source" {
+                    continue;
+                }
+
+                let index_directory = format!("{component_path}/{directory}");
+                let index_prefix = format!("{index_directory}/");
+
+                for entry in reader.list_files(&index_directory)? {
+                    let Some(filename) = entry.strip_prefix(&index_prefix) else {
+                        continue;
+                    };
+
+                    if filename.contains('/') {
+                        continue;
+                    }
+
+                    if matches!(
+                        filename,
+                        "Packages"
+                            | "Packages.gz"
+                            | "Packages.xz"
+                            | "Sources"
+                            | "Sources.gz"
+                            | "Sources.xz"
+                    ) {
+                        indexes.insert(entry);
+                    }
                 }
             }
         }
@@ -77,6 +109,7 @@ fn discover_repositories(reader: &impl IsoReader) -> Result<Vec<RepositoryInfo>,
             suite.to_owned(),
             components,
             architectures.into_iter().collect(),
+            indexes.into_iter().collect(),
         ));
     }
 
@@ -329,9 +362,27 @@ mod tests {
         .with_listing(
             "/dists/bookworm/main",
             vec!["/dists/bookworm/main/binary-amd64".to_owned()],
+        )
+        .with_listing(
+            "/dists/trixie/main/binary-amd64",
+            vec!["/dists/trixie/main/binary-amd64/Packages.xz".to_owned()],
+        )
+        .with_listing(
+            "/dists/trixie/main/binary-arm64",
+            vec!["/dists/trixie/main/binary-arm64/Packages.gz".to_owned()],
+        )
+        .with_listing(
+            "/dists/trixie/contrib/binary-amd64",
+            vec!["/dists/trixie/contrib/binary-amd64/Packages".to_owned()],
+        )
+        .with_listing(
+            "/dists/bookworm/main/binary-amd64",
+            vec!["/dists/bookworm/main/binary-amd64/Packages.xz".to_owned()],
         );
+
         let repositories =
             discover_repositories(&reader).expect("repository discovery should succeed");
+
         assert_eq!(
             repositories,
             vec![
@@ -339,11 +390,17 @@ mod tests {
                     "trixie".to_owned(),
                     vec!["main".to_owned(), "contrib".to_owned()],
                     vec!["amd64".to_owned(), "arm64".to_owned()],
+                    vec![
+                        "/dists/trixie/contrib/binary-amd64/Packages".to_owned(),
+                        "/dists/trixie/main/binary-amd64/Packages.xz".to_owned(),
+                        "/dists/trixie/main/binary-arm64/Packages.gz".to_owned(),
+                    ],
                 ),
                 RepositoryInfo::new(
                     "bookworm".to_owned(),
                     vec!["main".to_owned()],
                     vec!["amd64".to_owned()],
+                    vec!["/dists/bookworm/main/binary-amd64/Packages.xz".to_owned()],
                 ),
             ]
         );
@@ -372,6 +429,28 @@ mod tests {
                     "/dists/trixie/contrib/binary-amd64".to_owned(),
                     "/dists/trixie/contrib/binary-arm64".to_owned(),
                 ],
+            )
+            .with_listing(
+                "/dists/trixie/main/binary-amd64",
+                vec![
+                    "/dists/trixie/main/binary-amd64/Packages.xz".to_owned(),
+                    "/dists/trixie/main/binary-amd64/Contents-amd64.gz".to_owned(),
+                ],
+            )
+            .with_listing(
+                "/dists/trixie/main/source",
+                vec![
+                    "/dists/trixie/main/source/Sources.xz".to_owned(),
+                    "/dists/trixie/main/source/Release".to_owned(),
+                ],
+            )
+            .with_listing(
+                "/dists/trixie/contrib/binary-amd64",
+                vec!["/dists/trixie/contrib/binary-amd64/Packages.xz".to_owned()],
+            )
+            .with_listing(
+                "/dists/trixie/contrib/binary-arm64",
+                vec!["/dists/trixie/contrib/binary-arm64/Packages.gz".to_owned()],
             );
 
         let repositories =
@@ -383,6 +462,12 @@ mod tests {
                 "trixie".to_owned(),
                 vec!["main".to_owned(), "contrib".to_owned()],
                 vec!["amd64".to_owned(), "arm64".to_owned()],
+                vec![
+                    "/dists/trixie/contrib/binary-amd64/Packages.xz".to_owned(),
+                    "/dists/trixie/contrib/binary-arm64/Packages.gz".to_owned(),
+                    "/dists/trixie/main/binary-amd64/Packages.xz".to_owned(),
+                    "/dists/trixie/main/source/Sources.xz".to_owned(),
+                ],
             )]
         );
     }
@@ -409,6 +494,7 @@ mod tests {
                 "trixie".to_owned(),
                 vec!["main".to_owned(), "non-free-firmware".to_owned()],
                 Vec::new(),
+                Vec::new(),
             )]
         );
     }
@@ -433,10 +519,10 @@ mod tests {
                 "trixie".to_owned(),
                 Vec::new(),
                 Vec::new(),
+                Vec::new(),
             )]
         );
     }
-
     #[test]
     fn parses_dvd_metadata() {
         let metadata =

@@ -121,16 +121,23 @@ pub struct RepositoryInfo {
     suite: String,
     components: Vec<String>,
     architectures: Vec<String>,
+    indexes: Vec<String>,
 }
 
 impl RepositoryInfo {
     /// Creates repository information.
     #[must_use]
-    pub const fn new(suite: String, components: Vec<String>, architectures: Vec<String>) -> Self {
+    pub const fn new(
+        suite: String,
+        components: Vec<String>,
+        architectures: Vec<String>,
+        indexes: Vec<String>,
+    ) -> Self {
         Self {
             suite,
             components,
             architectures,
+            indexes,
         }
     }
 
@@ -150,6 +157,12 @@ impl RepositoryInfo {
     #[must_use]
     pub fn architectures(&self) -> &[String] {
         &self.architectures
+    }
+
+    /// Returns the repository index paths.
+    #[must_use]
+    pub fn indexes(&self) -> &[String] {
+        &self.indexes
     }
 }
 /// Inspects installation ISO metadata.
@@ -199,6 +212,10 @@ mod tests {
                 "non-free-firmware".to_owned(),
             ],
             vec!["amd64".to_owned(), "arm64".to_owned()],
+            vec![
+                "/dists/trixie/main/binary-amd64/Packages.xz".to_owned(),
+                "/dists/trixie/main/source/Sources.xz".to_owned(),
+            ],
         );
 
         assert_eq!(repository.suite(), "trixie");
@@ -212,7 +229,14 @@ mod tests {
         );
         assert_eq!(
             repository.architectures(),
-            &["amd64".to_owned(), "arm64".to_owned(),]
+            &["amd64".to_owned(), "arm64".to_owned()]
+        );
+        assert_eq!(
+            repository.indexes(),
+            &[
+                "/dists/trixie/main/binary-amd64/Packages.xz".to_owned(),
+                "/dists/trixie/main/source/Sources.xz".to_owned(),
+            ]
         );
     }
 }
