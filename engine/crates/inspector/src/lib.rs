@@ -7,7 +7,7 @@ mod xorriso;
 
 use std::path::{Path, PathBuf};
 
-pub use debian::parse_disk_info;
+pub use debian::{DebianIsoInspector, parse_disk_info};
 pub use error::InspectError;
 pub use reader::IsoReader;
 pub use xorriso::XorrisoReader;
@@ -46,7 +46,9 @@ impl IsoMetadata {
             boot_modes,
         }
     }
-
+    pub(crate) fn set_path(&mut self, path: PathBuf) {
+        self.path = path;
+    }
     /// Returns the inspected ISO path.
     #[must_use]
     pub fn path(&self) -> &Path {

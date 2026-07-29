@@ -8,6 +8,9 @@ pub enum InspectError {
     /// An operating-system operation failed.
     Io(io::Error),
 
+    /// ISO metadata contained invalid UTF-8.
+    InvalidUtf8(std::str::Utf8Error),
+
     /// An external command completed unsuccessfully.
     ProcessFailed {
         /// Name or path of the command.
@@ -31,6 +34,9 @@ impl fmt::Display for InspectError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Io(error) => write!(formatter, "ISO inspection I/O failed: {error}"),
+            Self::InvalidUtf8(error) => {
+                write!(formatter, "ISO metadata is not valid UTF-8: {error}")
+            }
             Self::ProcessFailed {
                 command,
                 status,
@@ -57,11 +63,17 @@ impl Error for InspectError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
             Self::Io(error) => Some(error),
+            Self::InvalidUtf8(error) => Some(error),
             Self::ProcessFailed { .. } | Self::InvalidDiskInfo { .. } => None,
         }
     }
 }
 
+impl From<std::str::Utf8Error> for InspectError {
+    fn from(error: std::str::Utf8Error) -> Self {
+        Self::InvalidUtf8(error)
+    }
+}
 impl From<io::Error> for InspectError {
     fn from(error: io::Error) -> Self {
         Self::Io(error)

@@ -96,10 +96,35 @@ pub fn parse_disk_info(contents: &str) -> Result<IsoMetadata, InspectError> {
         Vec::new(),
     ))
 }
+/// Inspects Debian installation media using `xorriso`.
+#[derive(Clone, Debug, Default)]
+pub struct DebianIsoInspector;
 
+impl DebianIsoInspector {
+    /// Creates a Debian ISO inspector.
+    #[must_use]
+    pub const fn new() -> Self {
+        Self
+    }
+}
+
+impl crate::IsoInspector for DebianIsoInspector {
+    fn inspect(&self, path: &std::path::Path) -> Result<IsoMetadata, InspectError> {
+        use crate::{IsoReader, XorrisoReader};
+
+        let reader = XorrisoReader::new(path);
+        let contents = reader.read_file("/.disk/info")?;
+        let contents = std::str::from_utf8(&contents)?;
+
+        let mut metadata = parse_disk_info(contents)?;
+        metadata.set_path(path.to_path_buf());
+
+        Ok(metadata)
+    }
+}
 #[cfg(test)]
 mod tests {
-    use super::parse_disk_info;
+    use super::{DebianIsoInspector, parse_disk_info};
     use crate::InspectError;
 
     #[test]
@@ -116,7 +141,10 @@ mod tests {
         assert!(metadata.path().as_os_str().is_empty());
         assert!(metadata.boot_modes().is_empty());
     }
-
+    #[test]
+    fn creates_debian_iso_inspector() {
+        let _inspector = DebianIsoInspector::new();
+    }
     #[test]
     fn parses_dvd_metadata() {
         let metadata =
