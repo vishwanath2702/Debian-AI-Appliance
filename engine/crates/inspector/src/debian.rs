@@ -169,6 +169,9 @@ mod tests {
                 _ => Ok(false),
             }
         }
+        fn list_files(&self, _iso_path: &str) -> Result<Vec<String>, InspectError> {
+            Ok(Vec::new())
+        }
     }
     #[test]
     fn parses_netinst_metadata() {

@@ -89,15 +89,47 @@ impl IsoReader for XorrisoReader {
 
         Ok(!output.stdout.is_empty())
     }
+    fn list_files(&self, iso_path: &str) -> Result<Vec<String>, InspectError> {
+        let output = Command::new(&self.command)
+            .arg("-indev")
+            .arg(&self.iso)
+            .arg("-find")
+            .arg(iso_path)
+            .arg("-mindepth")
+            .arg("1")
+            .arg("-maxdepth")
+            .arg("1")
+            .arg("-exec")
+            .arg("echo")
+            .arg("--")
+            .output()?;
+
+        if !output.status.success() {
+            return Err(InspectError::ProcessFailed {
+                command: self.command.display().to_string(),
+                status: output.status,
+                stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+            });
+        }
+
+        let stdout = std::str::from_utf8(&output.stdout)?;
+
+        Ok(stdout
+            .lines()
+            .map(str::trim)
+            .filter(|path| !path.is_empty())
+            .map(str::to_owned)
+            .collect())
+    }
 }
 #[cfg(all(test, unix))]
 mod tests {
     use std::{
-        fs,
+        fs::{self, File},
+        io::Write,
         os::unix::fs::PermissionsExt,
         path::{Path, PathBuf},
     };
-
     use tempfile::tempdir;
 
     use super::*;
@@ -105,8 +137,14 @@ mod tests {
     fn create_command(directory: &Path, name: &str, body: &str) -> PathBuf {
         let command = directory.join(name);
 
-        fs::write(&command, format!("#!/bin/sh\n{body}\n"))
-            .expect("mock xorriso command should be written");
+        let mut file = File::create(&command).expect("mock xorriso command should be created");
+
+        writeln!(file, "#!/bin/sh\n{body}").expect("mock xorriso command should be written");
+
+        file.sync_all()
+            .expect("mock xorriso command should be synchronized");
+
+        drop(file);
 
         let mut permissions = fs::metadata(&command)
             .expect("mock xorriso metadata should be available")
@@ -119,7 +157,6 @@ mod tests {
 
         command
     }
-
     #[test]
     fn path_exists_returns_true_when_xorriso_prints_a_match() {
         let directory = tempdir().expect("temporary directory should be created");
@@ -150,5 +187,45 @@ mod tests {
             .expect("path lookup should succeed");
 
         assert!(!exists);
+    }
+    #[test]
+    fn list_files_returns_directory_entries() {
+        let directory = tempdir().expect("temporary directory should be created");
+
+        let command = create_command(
+            directory.path(),
+            "xorriso-list",
+            "printf '%s\\n' '/dists' '/pool' '/README.html'",
+        );
+
+        let reader = XorrisoReader::new("debian.iso").with_command(command);
+
+        let entries = reader
+            .list_files("/")
+            .expect("directory listing should succeed");
+
+        assert_eq!(
+            entries,
+            vec![
+                "/dists".to_owned(),
+                "/pool".to_owned(),
+                "/README.html".to_owned(),
+            ]
+        );
+    }
+
+    #[test]
+    fn list_files_returns_empty_when_directory_has_no_entries() {
+        let directory = tempdir().expect("temporary directory should be created");
+
+        let command = create_command(directory.path(), "xorriso-empty", "exit 0");
+
+        let reader = XorrisoReader::new("debian.iso").with_command(command);
+
+        let entries = reader
+            .list_files("/")
+            .expect("directory listing should succeed");
+
+        assert!(entries.is_empty());
     }
 }
