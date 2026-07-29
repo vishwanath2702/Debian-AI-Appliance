@@ -163,6 +163,7 @@ mod tests {
     use tempfile::{TempDir, tempdir};
 
     use super::*;
+    use crate::{BootstrapConfig, BuildContext};
 
     fn create_fake_xorriso(path: &Path) {
         fs::write(
@@ -246,11 +247,20 @@ mod tests {
     }
     #[test]
     fn creates_backend_from_build_context() {
+        let bootstrap = BootstrapConfig::new(
+            "bookworm",
+            "amd64",
+            "https://deb.debian.org/debian",
+            vec!["main".to_owned()],
+            "minbase",
+        );
+
         let context = BuildContext::new(
             "build/rootfs",
             "images/source.iso",
             "build/work",
             "build/output.iso",
+            bootstrap,
         );
 
         let backend = IsoBackend::from_context(&context);

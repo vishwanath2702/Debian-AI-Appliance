@@ -4,7 +4,7 @@ use std::env;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use engine::{BuildContext, Engine};
+use engine::{BootstrapConfig, BuildContext, Engine};
 use model::{Capability, Plan};
 
 mod provider_registry;
@@ -64,7 +64,21 @@ fn run_iso_build(
         return ExitCode::FAILURE;
     };
 
-    let context = BuildContext::new(rootfs, source_iso, work_directory, output_iso.to_path_buf());
+    let bootstrap = BootstrapConfig::new(
+        "bookworm",
+        "amd64",
+        "https://deb.debian.org/debian",
+        vec!["main".to_owned()],
+        "minbase",
+    );
+
+    let context = BuildContext::new(
+        rootfs,
+        source_iso,
+        work_directory,
+        output_iso.to_path_buf(),
+        bootstrap,
+    );
 
     match engine.build_iso(&Capability::new(capability_name), &context) {
         Ok(plan) => {
