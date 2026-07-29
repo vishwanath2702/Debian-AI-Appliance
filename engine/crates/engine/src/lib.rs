@@ -136,6 +136,7 @@ impl Engine {
         &self,
         capability: &Capability,
         context: &BuildContext,
+        _package_repository: &PackageRepository,
     ) -> Result<Plan, BuildError<std::io::Error>> {
         MmdebstrapBootstrapper::new().bootstrap(context)?;
 
