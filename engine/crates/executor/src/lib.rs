@@ -120,7 +120,7 @@ impl ExecutionEnvironment for RootfsRunner {
     fn bootstrap(&self) -> io::Result<()> {
         let status = Command::new("debootstrap")
             .arg("--variant=minbase")
-            .arg("bookworm")
+            .arg("trixie")
             .arg(&self.rootfs)
             .status()?;
 

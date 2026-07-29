@@ -135,19 +135,21 @@ impl GrubConfigStage {
     /// Returns an error if the GRUB configuration cannot be written.
     pub fn run(context: &IsoContext) -> io::Result<PathBuf> {
         let output = context.config.layout.grub_config();
-
-        fs::write(
-            &output,
+        let grub = &context.config.grub;
+        let contents = format!(
             concat!(
                 "set default=0\n",
-                "set timeout=5\n",
+                "set timeout={}\n",
                 "\n",
-                "menuentry \"Debian AI Appliance\" {\n",
-                "    linux /live/vmlinuz boot=live quiet\n",
+                "menuentry \"{}\" {{\n",
+                "    linux /live/vmlinuz {}\n",
                 "    initrd /live/initrd.img\n",
-                "}\n",
+                "}}\n",
             ),
-        )?;
+            grub.timeout, grub.menu_title, grub.kernel_command_line,
+        );
+
+        fs::write(&output, contents)?;
 
         Ok(output)
     }
@@ -165,12 +167,21 @@ impl SquashFsStage {
     /// unsuccessfully.
     pub fn run(context: &IsoContext) -> io::Result<PathBuf> {
         let output = context.config.layout.filesystem_squashfs();
+        let squashfs = &context.config.squashfs;
+        let mut command = Command::new(&context.config.mksquashfs_command);
 
-        let status = Command::new(&context.config.mksquashfs_command)
-            .arg(&context.config.rootfs)
-            .arg(&output)
-            .args(["-comp", "xz", "-noappend", "-e", "boot"])
-            .status()?;
+        command.arg(&context.config.rootfs).arg(&output).args([
+            "-comp",
+            &squashfs.compression,
+            "-noappend",
+        ]);
+
+        if !squashfs.exclusions.is_empty() {
+            command.arg("-e").args(&squashfs.exclusions);
+        }
+
+        let status = command.status()?;
+
         if !status.success() {
             return Err(io::Error::other(format!(
                 "mksquashfs failed with status {status}"
