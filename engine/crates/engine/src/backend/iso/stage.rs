@@ -499,6 +499,17 @@ mod tests {
         assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
     }
     #[test]
+    fn rejects_missing_source_iso() {
+        let directory = TestDirectory::create();
+        let source_iso = directory.path().join("missing.iso");
+        let context = iso_context(&source_iso, None);
+
+        let error =
+            SourceIsoStage::run(&context).expect_err("missing source ISO should be rejected");
+
+        assert_eq!(error.kind(), std::io::ErrorKind::NotFound);
+    }
+    #[test]
     fn returns_error_when_kernel_is_missing() {
         let boot_directory = TestDirectory::create();
 
