@@ -2,6 +2,8 @@
 mod apt_installer;
 
 pub use apt_installer::{AptInstaller, AptInstallerError};
+use assets::AssetStore;
+use model::{Action, Plan};
 use std::{
     error::Error,
     fmt::{self, Display, Formatter},
@@ -9,9 +11,6 @@ use std::{
     path::PathBuf,
     process::Command,
 };
-
-use model::{Action, Plan};
-
 /// Error returned when plan execution fails.
 #[derive(Debug)]
 pub enum ExecuteError<E> {
@@ -121,17 +120,33 @@ pub trait ActionRunner {
     fn run(&mut self, action: &Action) -> Result<(), Self::Error>;
 }
 
+struct UnavailableAssetStore;
+
+impl AssetStore for UnavailableAssetStore {
+    fn read(&self, path: &std::path::Path) -> io::Result<Vec<u8>> {
+        Err(io::Error::new(
+            io::ErrorKind::NotFound,
+            format!("asset store is unavailable for `{}`", path.display()),
+        ))
+    }
+}
 pub struct RootfsRunner {
     rootfs: PathBuf,
     package_repository: registry::PackageRepository,
     package_installer: Box<dyn PackageInstaller>,
+    asset_store: Box<dyn AssetStore>,
 }
 
 impl RootfsRunner {
-    /// Creates a root filesystem action runner using the no-op package installer.
+    /// Creates a root filesystem action runner using default dependencies.
     #[must_use]
     pub fn new(rootfs: PathBuf, package_repository: registry::PackageRepository) -> Self {
-        Self::with_installer(rootfs, package_repository, Box::new(NoopPackageInstaller))
+        Self::with_dependencies(
+            rootfs,
+            package_repository,
+            Box::new(NoopPackageInstaller),
+            Box::new(UnavailableAssetStore),
+        )
     }
 
     /// Creates a root filesystem action runner using the supplied package installer.
@@ -141,10 +156,27 @@ impl RootfsRunner {
         package_repository: registry::PackageRepository,
         package_installer: Box<dyn PackageInstaller>,
     ) -> Self {
+        Self::with_dependencies(
+            rootfs,
+            package_repository,
+            package_installer,
+            Box::new(UnavailableAssetStore),
+        )
+    }
+
+    /// Creates a root filesystem action runner using supplied dependencies.
+    #[must_use]
+    pub fn with_dependencies(
+        rootfs: PathBuf,
+        package_repository: registry::PackageRepository,
+        package_installer: Box<dyn PackageInstaller>,
+        asset_store: Box<dyn AssetStore>,
+    ) -> Self {
         Self {
             rootfs,
             package_repository,
             package_installer,
+            asset_store,
         }
     }
 }
@@ -157,6 +189,9 @@ impl Display for RootfsRunError {
             Self::PackageInstall(error) => {
                 write!(formatter, "package installation failed: {error}")
             }
+            Self::Asset(error) => {
+                write!(formatter, "asset operation failed: {error}")
+            }
         }
     }
 }
@@ -166,6 +201,7 @@ impl Error for RootfsRunError {
         match self {
             Self::PackageManifestNotFound(_) => None,
             Self::PackageInstall(error) => Some(error),
+            Self::Asset(error) => Some(error),
         }
     }
 }
@@ -199,6 +235,9 @@ pub enum RootfsRunError {
 
     /// Package installation failed.
     PackageInstall(AptInstallerError),
+
+    /// Asset operations failed.
+    Asset(io::Error),
 }
 impl ActionRunner for RootfsRunner {
     type Error = RootfsRunError;
@@ -214,8 +253,22 @@ impl ActionRunner for RootfsRunner {
                     .install(&self.rootfs, manifest.packages())
                     .map_err(RootfsRunError::PackageInstall)?;
             }
-            Action::CopyAsset { .. } => {
-                todo!("CopyAsset execution will be implemented in a later commit");
+            Action::CopyAsset { asset, destination } => {
+                let contents = self
+                    .asset_store
+                    .read(std::path::Path::new(asset.as_str()))
+                    .map_err(RootfsRunError::Asset)?;
+
+                let destination = destination
+                    .strip_prefix(std::path::Path::new("/"))
+                    .unwrap_or(destination);
+                let destination = self.rootfs.join(destination);
+
+                if let Some(parent) = destination.parent() {
+                    fs::create_dir_all(parent).map_err(RootfsRunError::Asset)?;
+                }
+
+                fs::write(destination, contents).map_err(RootfsRunError::Asset)?;
             }
             Action::EnableService(service) => {
                 println!(
@@ -279,9 +332,11 @@ where
 mod tests {
     use super::{ActionRunner, Executor, RootfsRunner};
     use crate::ExecutionEnvironment;
+    use assets::AssetStore;
     use model::{Action, Capability, PackageManifest, Plan, PlanStep, ProviderId};
     use std::fs;
-    use std::path::PathBuf;
+    use std::io;
+    use std::path::{Path, PathBuf};
     use std::time::{SystemTime, UNIX_EPOCH};
     #[derive(Default)]
     struct RecordingRunner {
@@ -308,7 +363,23 @@ mod tests {
     }
 
     struct FailingRunner;
+    struct TestAssetStore {
+        contents: Vec<u8>,
+    }
 
+    impl AssetStore for TestAssetStore {
+        fn read(&self, _: &Path) -> io::Result<Vec<u8>> {
+            Ok(self.contents.clone())
+        }
+    }
+
+    struct FailingAssetStore;
+
+    impl AssetStore for FailingAssetStore {
+        fn read(&self, _: &Path) -> io::Result<Vec<u8>> {
+            Err(io::Error::new(io::ErrorKind::NotFound, "missing asset"))
+        }
+    }
     impl ExecutionEnvironment for FailingRunner {
         fn prepare(&self) -> std::io::Result<()> {
             Ok(())
@@ -422,7 +493,68 @@ mod tests {
             other @ super::RootfsRunError::PackageInstall(_) => {
                 panic!("expected PackageManifestNotFound, got {other:?}");
             }
+            super::RootfsRunError::Asset(error) => {
+                panic!("expected PackageManifestNotFound, got Asset({error})");
+            }
         }
+    }
+    #[test]
+    fn rootfs_runner_copies_asset() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+
+        let rootfs = std::env::temp_dir().join(format!("daia-rootfs-{unique}"));
+
+        let mut runner = RootfsRunner::with_dependencies(
+            rootfs.clone(),
+            registry::PackageRepository::new(),
+            Box::new(crate::AptInstaller::new()),
+            Box::new(TestAssetStore {
+                contents: b"hello world".to_vec(),
+            }),
+        );
+
+        runner
+            .run(&Action::CopyAsset {
+                asset: model::AssetId::new("test.txt"),
+                destination: PathBuf::from("/etc/test.txt"),
+            })
+            .expect("copy should succeed");
+
+        assert_eq!(
+            fs::read(rootfs.join("etc/test.txt")).unwrap(),
+            b"hello world"
+        );
+
+        fs::remove_dir_all(rootfs).unwrap();
+    }
+
+    #[test]
+    fn rootfs_runner_returns_asset_error_when_asset_is_missing() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+
+        let rootfs = std::env::temp_dir().join(format!("daia-rootfs-{unique}"));
+
+        let mut runner = RootfsRunner::with_dependencies(
+            rootfs,
+            registry::PackageRepository::new(),
+            Box::new(crate::AptInstaller::new()),
+            Box::new(FailingAssetStore),
+        );
+
+        let error = runner
+            .run(&Action::CopyAsset {
+                asset: model::AssetId::new("missing"),
+                destination: PathBuf::from("/etc/test.txt"),
+            })
+            .expect_err("missing asset should fail");
+
+        assert!(matches!(error, super::RootfsRunError::Asset(_)));
     }
     #[test]
     fn prepare_creates_rootfs_directory() {
