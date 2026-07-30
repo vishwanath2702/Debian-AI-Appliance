@@ -196,6 +196,9 @@ mod tests {
             path,
             concat!(
                 "#!/bin/sh\n",
+                "if [ \"$1\" = \"--version\" ]; then\n",
+                "    exit 0\n",
+                "fi\n",
                 "while [ \"$#\" -gt 0 ]; do\n",
                 "    if [ \"$1\" = \"-outdev\" ]; then\n",
                 "        shift\n",

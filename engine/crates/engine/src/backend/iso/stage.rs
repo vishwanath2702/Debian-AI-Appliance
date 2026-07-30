@@ -128,7 +128,11 @@ impl ToolValidationStage {
 
 fn validate_tool(command: &Path) -> io::Result<()> {
     match Command::new(command).arg("--version").status() {
-        Ok(_) => Ok(()),
+        Ok(status) if status.success() => Ok(()),
+        Ok(status) => Err(io::Error::other(format!(
+            "required tool failed with status {status}: {}",
+            command.display()
+        ))),
         Err(error) if error.kind() == io::ErrorKind::NotFound => Err(io::Error::new(
             io::ErrorKind::NotFound,
             format!("required tool not found: {}", command.display()),
@@ -136,6 +140,7 @@ fn validate_tool(command: &Path) -> io::Result<()> {
         Err(error) => Err(error),
     }
 }
+
 /// Creates the ISO workspace layout.
 pub struct WorkspaceStage;
 
@@ -364,15 +369,15 @@ fn has_prefix(file_name: &OsStr, prefix: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use inspector::{BootMode, IsoMetadata};
     use std::{
         fs::{self, File},
+        os::unix::fs::PermissionsExt,
         path::{Path, PathBuf},
         sync::atomic::{AtomicUsize, Ordering},
     };
 
-    use inspector::{BootMode, IsoMetadata};
-
-    use super::{MetadataValidationStage, find_initramfs, find_kernel};
+    use super::{MetadataValidationStage, find_initramfs, find_kernel, validate_tool};
     use crate::backend::iso::{
         GrubConfig, IsoConfig, IsoContext, IsoState, Layout, SquashFsConfig,
     };
@@ -404,6 +409,15 @@ mod tests {
             let path = self.path.join(name);
 
             File::create(&path).expect("test file should be created");
+
+            path
+        }
+        fn create_executable(&self, name: &str, contents: &str) -> PathBuf {
+            let path = self.path.join(name);
+
+            fs::write(&path, contents).expect("test executable should be written");
+            fs::set_permissions(&path, fs::Permissions::from_mode(0o755))
+                .expect("test executable should be made executable");
 
             path
         }
@@ -523,6 +537,29 @@ mod tests {
             .expect_err("multiple initramfs images should return an error");
 
         assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
+    }
+    #[test]
+    fn accepts_tool_with_successful_version_command() {
+        let directory = TestDirectory::create();
+        let tool = directory.create_executable("tool", "#!/bin/sh\nexit 0\n");
+
+        validate_tool(&tool).expect("successful version command should be accepted");
+    }
+    #[test]
+    fn rejects_missing_tool() {
+        let directory = TestDirectory::create();
+        let tool = directory.path().join("missing-tool");
+
+        let error = validate_tool(&tool).expect_err("missing tool should be rejected");
+
+        assert_eq!(error.kind(), std::io::ErrorKind::NotFound);
+    }
+    #[test]
+    fn rejects_tool_with_failing_version_command() {
+        let directory = TestDirectory::create();
+        let tool = directory.create_executable("tool", "#!/bin/sh\nexit 1\n");
+
+        validate_tool(&tool).expect_err("failing version command should be rejected");
     }
     #[test]
     fn accepts_valid_metadata() {
