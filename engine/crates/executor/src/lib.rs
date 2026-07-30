@@ -214,6 +214,9 @@ impl ActionRunner for RootfsRunner {
                     .install(&self.rootfs, manifest.packages())
                     .map_err(RootfsRunError::PackageInstall)?;
             }
+            Action::CopyAsset { .. } => {
+                todo!("CopyAsset execution will be implemented in a later commit");
+            }
             Action::EnableService(service) => {
                 println!(
                     "enabling service in rootfs {}: {service}",

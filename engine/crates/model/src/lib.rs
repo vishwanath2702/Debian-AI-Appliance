@@ -1,6 +1,6 @@
 //! Core domain types shared across the DAIA engine.
 
-use std::fmt;
+use std::{fmt, path::PathBuf};
 
 /// Stable identifier for a DAIA asset.
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
@@ -113,6 +113,15 @@ pub enum Action {
     /// Installs packages declared by a package manifest.
     InstallPackageManifest(String),
 
+    /// Copies a bundled asset to a destination path.
+    CopyAsset {
+        /// Stable identifier of the bundled asset.
+        asset: AssetId,
+
+        /// Destination path inside the target system.
+        destination: PathBuf,
+    },
+
     /// Enables a system service.
     EnableService(String),
 }
@@ -123,13 +132,19 @@ impl fmt::Display for Action {
             Self::InstallPackageManifest(manifest) => {
                 write!(formatter, "Install package manifest: {manifest}")
             }
+            Self::CopyAsset { asset, destination } => {
+                write!(
+                    formatter,
+                    "Copy asset: {asset} -> {}",
+                    destination.display()
+                )
+            }
             Self::EnableService(service) => {
                 write!(formatter, "Enable service: {service}")
             }
         }
     }
 }
-
 /// One ordered action in an execution plan.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PlanStep {
@@ -212,6 +227,7 @@ pub struct Plan {
 #[cfg(test)]
 mod tests {
     use super::{Action, AssetId, Capability, CapabilityId, PackageManifest, PlanStep, ProviderId};
+    use std::path::PathBuf;
     #[test]
     fn asset_id_exposes_its_identifier() {
         let asset_id = AssetId::new("desktop/files/lightdm.conf");
@@ -255,11 +271,19 @@ mod tests {
         );
 
         assert_eq!(
+            Action::CopyAsset {
+                asset: AssetId::new("desktop/files/lightdm.conf"),
+                destination: PathBuf::from("/etc/lightdm/lightdm.conf"),
+            }
+            .to_string(),
+            "Copy asset: desktop/files/lightdm.conf -> /etc/lightdm/lightdm.conf"
+        );
+
+        assert_eq!(
             Action::EnableService("display-manager".to_owned()).to_string(),
             "Enable service: display-manager"
         );
     }
-
     #[test]
     fn plan_steps_delegate_display_to_their_actions() {
         let install_step = PlanStep::new(Action::InstallPackageManifest("desktop".to_owned()));
