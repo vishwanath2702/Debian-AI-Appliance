@@ -562,6 +562,15 @@ mod tests {
         validate_tool(&tool).expect_err("failing version command should be rejected");
     }
     #[test]
+    fn rejects_non_executable_tool() {
+        let directory = TestDirectory::create();
+        let tool = directory.create_file("tool");
+
+        let error = validate_tool(&tool).expect_err("non-executable tool should be rejected");
+
+        assert_eq!(error.kind(), std::io::ErrorKind::PermissionDenied);
+    }
+    #[test]
     fn accepts_valid_metadata() {
         let source_iso = PathBuf::from("debian.iso");
         let metadata = valid_metadata(&source_iso);
