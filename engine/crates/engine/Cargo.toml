@@ -5,12 +5,12 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+assets = { path = "../assets" }
 executor = { path = "../executor" }
 model = { path = "../model" }
 planner = { path = "../planner" }
 registry = { path = "../registry" }
 resolver = { path = "../resolver" }
 tempfile = "3"
-
 [lints]
 workspace = true

@@ -72,6 +72,7 @@ impl IsoWorkflow {
             bootstrapper: MmdebstrapBootstrapper::new(),
             rootfs_backend: RootfsBackend::new(
                 build_context.rootfs().to_path_buf(),
+                build_context.asset_directory().to_path_buf(),
                 package_repository.clone(),
             ),
             iso_backend: IsoBackend::from_context(build_context),

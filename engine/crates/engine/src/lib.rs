@@ -161,9 +161,10 @@ impl Engine {
         &self,
         capability: &Capability,
         rootfs: PathBuf,
+        asset_directory: PathBuf,
         package_repository: PackageRepository,
     ) -> Result<Plan, BuildError> {
-        let backend = RootfsBackend::new(rootfs, package_repository);
+        let backend = RootfsBackend::new(rootfs, asset_directory, package_repository);
 
         self.build_with_backend(capability, backend)
     }
