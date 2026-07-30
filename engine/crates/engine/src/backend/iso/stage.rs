@@ -560,7 +560,9 @@ mod tests {
         let directory = TestDirectory::create();
         let tool = directory.create_executable("tool", "#!/bin/sh\nexit 1\n");
 
-        validate_tool(&tool).expect_err("failing version command should be rejected");
+        let error = validate_tool(&tool).expect_err("failing version command should be rejected");
+
+        assert_eq!(error.kind(), std::io::ErrorKind::Other);
     }
     #[test]
     fn rejects_non_executable_tool() {
