@@ -2,6 +2,30 @@
 
 use std::fmt;
 
+/// Stable identifier for a DAIA asset.
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub struct AssetId(String);
+
+impl AssetId {
+    /// Creates an asset identifier.
+    #[must_use]
+    pub fn new(value: impl Into<String>) -> Self {
+        Self(value.into())
+    }
+
+    /// Returns the asset identifier as a string slice.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl fmt::Display for AssetId {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.as_str())
+    }
+}
+
 /// Stable identifier for a DAIA capability.
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub struct CapabilityId(String);
@@ -49,7 +73,6 @@ impl fmt::Display for ProviderId {
         formatter.write_str(self.as_str())
     }
 }
-
 /// A capability requested through desired state.
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub struct Capability {
@@ -188,13 +211,13 @@ pub struct Plan {
 }
 #[cfg(test)]
 mod tests {
-    use super::{Action, Capability, CapabilityId, PackageManifest, PlanStep, ProviderId};
+    use super::{Action, AssetId, Capability, CapabilityId, PackageManifest, PlanStep, ProviderId};
     #[test]
-    fn capability_id_exposes_its_identifier() {
-        let capability_id = CapabilityId::new("desktop");
+    fn asset_id_exposes_its_identifier() {
+        let asset_id = AssetId::new("desktop/files/lightdm.conf");
 
-        assert_eq!(capability_id.as_str(), "desktop");
-        assert_eq!(capability_id.to_string(), "desktop");
+        assert_eq!(asset_id.as_str(), "desktop/files/lightdm.conf");
+        assert_eq!(asset_id.to_string(), "desktop/files/lightdm.conf");
     }
 
     #[test]
