@@ -35,8 +35,10 @@ pub struct IsoConfig {
 #[derive(Default)]
 pub struct IsoState {
     pub metadata: Option<IsoMetadata>,
+    pub kernel: Option<PathBuf>,
+    pub initramfs: Option<PathBuf>,
+    pub squashfs: Option<PathBuf>,
 }
-
 /// Shared state passed through the ISO pipeline.
 pub struct IsoContext {
     pub config: IsoConfig,

@@ -444,7 +444,12 @@ mod tests {
                     exclusions: vec!["boot".to_owned()],
                 },
             },
-            state: IsoState { metadata },
+            state: IsoState {
+                metadata,
+                kernel: None,
+                initramfs: None,
+                squashfs: None,
+            },
         }
     }
     #[test]
