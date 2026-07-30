@@ -8,6 +8,7 @@ use std::{
 };
 
 use super::IsoContext;
+use inspector::{IsoInspector, IsoMetadata};
 /// Validates the source ISO before the build begins.
 pub struct SourceIsoStage;
 
@@ -34,6 +35,21 @@ impl SourceIsoStage {
         fs::File::open(source_iso)?;
 
         Ok(())
+    }
+}
+/// Inspects metadata from the source ISO.
+pub struct InspectionStage;
+
+impl InspectionStage {
+    /// Inspects and identifies the configured source ISO.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the source ISO cannot be inspected or identified.
+    pub fn run(context: &IsoContext, inspector: &dyn IsoInspector) -> io::Result<IsoMetadata> {
+        inspector
+            .inspect(&context.config.source_iso)
+            .map_err(|error| io::Error::other(error.to_string()))
     }
 }
 /// Validates that required external build tools are available.

@@ -7,6 +7,7 @@ license.workspace = true
 [dependencies]
 assets = { path = "../assets" }
 executor = { path = "../executor" }
+inspector = { path = "../inspector" }
 model = { path = "../model" }
 planner = { path = "../planner" }
 registry = { path = "../registry" }

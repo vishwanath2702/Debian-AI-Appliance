@@ -9,12 +9,13 @@ pub use context::{GrubConfig, IsoConfig, IsoContext, SquashFsConfig};
 pub use layout::Layout;
 pub use pipeline::IsoPipeline;
 pub use stage::{
-    BootArtifactsStage, GrubConfigStage, InitramfsStage, IsoImageStage, KernelStage,
-    SourceIsoStage, SquashFsStage, ToolValidationStage, WorkspaceStage,
+    BootArtifactsStage, GrubConfigStage, InitramfsStage, InspectionStage, IsoImageStage,
+    KernelStage, SourceIsoStage, SquashFsStage, ToolValidationStage, WorkspaceStage,
 };
 use std::path::{Path, PathBuf};
 
 use executor::ExecuteError;
+use inspector::{DebianIsoInspector, IsoInspector};
 use model::Plan;
 
 use super::BuildBackend;
@@ -29,6 +30,7 @@ pub struct IsoBackend {
     xorriso_command: PathBuf,
     grub: GrubConfig,
     squashfs: SquashFsConfig,
+    inspector: Box<dyn IsoInspector>,
 }
 impl IsoBackend {
     /// Creates an ISO backend.
@@ -55,6 +57,7 @@ impl IsoBackend {
                 compression: "xz".to_owned(),
                 exclusions: vec!["boot".to_owned()],
             },
+            inspector: Box::new(DebianIsoInspector::new()),
         }
     }
     /// Creates an ISO backend from a shared build context.
@@ -123,6 +126,12 @@ impl IsoBackend {
         self.squashfs = config;
         self
     }
+    /// Uses a custom ISO inspector.
+    #[must_use]
+    pub fn with_iso_inspector(mut self, inspector: impl IsoInspector + 'static) -> Self {
+        self.inspector = Box::new(inspector);
+        self
+    }
 }
 
 impl BuildBackend for IsoBackend {
@@ -149,7 +158,7 @@ impl BuildBackend for IsoBackend {
             },
         };
 
-        IsoPipeline::run(&context).map_err(ExecuteError::Environment)?;
+        IsoPipeline::run(&context, self.inspector.as_ref()).map_err(ExecuteError::Environment)?;
 
         Ok(())
     }
@@ -157,13 +166,28 @@ impl BuildBackend for IsoBackend {
 
 #[cfg(test)]
 mod tests {
-    use std::{fs, os::unix::fs::PermissionsExt, path::Path};
-
+    use inspector::{BootMode, InspectError, IsoInspector, IsoMetadata};
     use model::{Capability, Plan, ProviderId};
+    use std::{fs, os::unix::fs::PermissionsExt, path::Path};
     use tempfile::{TempDir, tempdir};
 
     use super::*;
     use crate::{BootstrapConfig, BuildContext};
+    struct TestIsoInspector;
+
+    impl IsoInspector for TestIsoInspector {
+        fn inspect(&self, path: &Path) -> Result<IsoMetadata, InspectError> {
+            Ok(IsoMetadata::new(
+                path.to_path_buf(),
+                "Debian".to_owned(),
+                "13.1.0".to_owned(),
+                "trixie".to_owned(),
+                "amd64".to_owned(),
+                "netinst".to_owned(),
+                vec![BootMode::Bios, BootMode::Uefi],
+            ))
+        }
+    }
 
     fn create_fake_xorriso(path: &Path) {
         fs::write(
@@ -227,7 +251,8 @@ mod tests {
             &output_iso,
         )
         .with_mksquashfs_command(&fake_mksquashfs)
-        .with_xorriso_command(&fake_xorriso);
+        .with_xorriso_command(&fake_xorriso)
+        .with_iso_inspector(TestIsoInspector);
 
         let boot_directory = backend.rootfs().join("boot");
 
