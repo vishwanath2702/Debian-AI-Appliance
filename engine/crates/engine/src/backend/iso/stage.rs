@@ -413,6 +413,7 @@ mod tests {
 
             path
         }
+
         fn create_executable(&self, name: &str, contents: &str) -> PathBuf {
             let path = self.path.join(name);
 
