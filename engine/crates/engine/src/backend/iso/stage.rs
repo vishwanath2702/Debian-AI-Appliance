@@ -114,11 +114,12 @@ fn validate_metadata_field(name: &str, value: &str) -> io::Result<()> {
 pub struct ToolValidationStage;
 
 impl ToolValidationStage {
-    /// Ensures all required external commands can be started.
+    /// Ensures all required external commands report a successful version.
     ///
     /// # Errors
     ///
-    /// Returns an error if any required tool cannot be executed.
+    /// Returns an error if any required tool cannot be executed or its
+    /// `--version` command exits unsuccessfully.
     pub fn run(context: &IsoContext) -> io::Result<()> {
         validate_tool(&context.config.mksquashfs_command)?;
         validate_tool(&context.config.xorriso_command)?;
