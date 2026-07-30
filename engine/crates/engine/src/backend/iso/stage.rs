@@ -378,7 +378,9 @@ mod tests {
         sync::atomic::{AtomicUsize, Ordering},
     };
 
-    use super::{MetadataValidationStage, find_initramfs, find_kernel, validate_tool};
+    use super::{
+        MetadataValidationStage, SourceIsoStage, find_initramfs, find_kernel, validate_tool,
+    };
     use crate::backend::iso::{
         GrubConfig, IsoConfig, IsoContext, IsoState, Layout, SquashFsConfig,
     };
@@ -478,7 +480,14 @@ mod tests {
 
         assert_eq!(kernel, expected);
     }
+    #[test]
+    fn accepts_existing_source_iso_file() {
+        let directory = TestDirectory::create();
+        let source_iso = directory.create_file("source.iso");
+        let context = iso_context(&source_iso, None);
 
+        SourceIsoStage::run(&context).expect("existing source ISO should be accepted");
+    }
     #[test]
     fn returns_error_when_kernel_is_missing() {
         let boot_directory = TestDirectory::create();
