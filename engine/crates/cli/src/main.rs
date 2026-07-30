@@ -89,9 +89,9 @@ fn run_iso_build(
         source_iso,
         work_directory,
         output_iso.to_path_buf(),
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../registry/assets"),
         bootstrap,
     );
-
     match engine.build_iso(
         &Capability::new(capability_name),
         &context,

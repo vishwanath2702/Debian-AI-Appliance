@@ -50,6 +50,7 @@ mod tests {
             "images/source.iso",
             "build/work",
             "build/output.iso",
+            "registry/assets",
             bootstrap,
         );
 

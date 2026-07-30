@@ -260,9 +260,9 @@ mod tests {
             "images/source.iso",
             "build/work",
             "build/output.iso",
+            "registry/assets",
             bootstrap,
         );
-
         let backend = IsoBackend::from_context(&context);
 
         assert_eq!(backend.rootfs(), context.rootfs());

@@ -11,6 +11,7 @@ pub struct BuildContext {
     source_iso: PathBuf,
     work_directory: PathBuf,
     output_iso: PathBuf,
+    asset_directory: PathBuf,
     bootstrap: BootstrapConfig,
 }
 
@@ -22,6 +23,7 @@ impl BuildContext {
         source_iso: impl Into<PathBuf>,
         work_directory: impl Into<PathBuf>,
         output_iso: impl Into<PathBuf>,
+        asset_directory: impl Into<PathBuf>,
         bootstrap: BootstrapConfig,
     ) -> Self {
         Self {
@@ -29,6 +31,7 @@ impl BuildContext {
             source_iso: source_iso.into(),
             work_directory: work_directory.into(),
             output_iso: output_iso.into(),
+            asset_directory: asset_directory.into(),
             bootstrap,
         }
     }
@@ -55,6 +58,12 @@ impl BuildContext {
     #[must_use]
     pub fn output_iso(&self) -> &Path {
         &self.output_iso
+    }
+
+    /// Returns the directory containing provider assets.
+    #[must_use]
+    pub fn asset_directory(&self) -> &Path {
+        &self.asset_directory
     }
 
     /// Returns the root filesystem bootstrap configuration.
@@ -86,6 +95,7 @@ mod tests {
             "images/source.iso",
             "build/work",
             "build/output.iso",
+            "registry/assets",
             bootstrap.clone(),
         );
 
@@ -93,6 +103,7 @@ mod tests {
         assert_eq!(context.source_iso(), Path::new("images/source.iso"));
         assert_eq!(context.work_directory(), Path::new("build/work"));
         assert_eq!(context.output_iso(), Path::new("build/output.iso"));
+        assert_eq!(context.asset_directory(), Path::new("registry/assets"));
         assert_eq!(context.bootstrap(), &bootstrap);
     }
 }

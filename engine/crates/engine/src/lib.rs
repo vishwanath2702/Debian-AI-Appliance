@@ -266,6 +266,7 @@ mod tests {
             "images/source.iso",
             "build/work",
             "build/output.iso",
+            "registry/assets",
             BootstrapConfig::new(
                 "bookworm",
                 "amd64",
