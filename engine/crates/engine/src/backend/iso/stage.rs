@@ -489,6 +489,16 @@ mod tests {
         SourceIsoStage::run(&context).expect("existing source ISO should be accepted");
     }
     #[test]
+    fn rejects_source_iso_directory() {
+        let directory = TestDirectory::create();
+        let context = iso_context(directory.path(), None);
+
+        let error =
+            SourceIsoStage::run(&context).expect_err("source ISO directory should be rejected");
+
+        assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
+    }
+    #[test]
     fn returns_error_when_kernel_is_missing() {
         let boot_directory = TestDirectory::create();
 
