@@ -32,8 +32,7 @@ impl IsoPipeline {
         let initramfs = InitramfsStage::run(context)?;
         context.state.initramfs = Some(initramfs.clone());
         let squashfs = SquashFsStage::run(context)?;
-        context.state.squashfs = Some(squashfs.clone());
-
+        context.state.squashfs = Some(squashfs);
         BootArtifactsStage::run(context, &kernel, &initramfs)?;
         let grub_config = GrubConfigStage::run(context)?;
         context.state.grub_config = Some(grub_config);
