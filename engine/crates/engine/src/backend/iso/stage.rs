@@ -777,6 +777,16 @@ mod tests {
             Ok(self.metadata.clone())
         }
     }
+
+    struct FailingInspector;
+
+    impl IsoInspector for FailingInspector {
+        fn inspect(&self, _path: &Path) -> Result<IsoMetadata, InspectError> {
+            Err(InspectError::InvalidDiskInfo {
+                reason: "test failure",
+            })
+        }
+    }
     #[test]
     fn returns_inspected_metadata() {
         let source_iso = PathBuf::from("debian.iso");
@@ -790,5 +800,15 @@ mod tests {
             InspectionStage::run(&context, &inspector).expect("inspection should succeed");
 
         assert_eq!(metadata, expected);
+    }
+    #[test]
+    fn converts_inspection_error_to_io_error() {
+        let source_iso = PathBuf::from("debian.iso");
+        let context = iso_context(&source_iso, None);
+
+        let error = InspectionStage::run(&context, &FailingInspector)
+            .expect_err("inspection failure should return an error");
+
+        assert_eq!(error.kind(), std::io::ErrorKind::Other);
     }
 }
