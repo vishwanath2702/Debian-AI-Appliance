@@ -17,9 +17,10 @@ impl IsoPipeline {
     /// # Errors
     ///
     /// Returns an error if an ISO build stage fails.
-    pub fn run(context: &IsoContext, inspector: &dyn IsoInspector) -> io::Result<()> {
+    pub fn run(context: &mut IsoContext, inspector: &dyn IsoInspector) -> io::Result<()> {
         SourceIsoStage::run(context)?;
-        let _metadata = InspectionStage::run(context, inspector)?;
+        let metadata = InspectionStage::run(context, inspector)?;
+        context.state.metadata = Some(metadata);
         ToolValidationStage::run(context)?;
         WorkspaceStage::run(context)?;
 

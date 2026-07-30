@@ -2,6 +2,8 @@
 
 use std::path::PathBuf;
 
+use inspector::IsoMetadata;
+
 use super::Layout;
 
 /// GRUB boot menu configuration.
@@ -29,7 +31,14 @@ pub struct IsoConfig {
     pub squashfs: SquashFsConfig,
 }
 
+/// Mutable state produced while running the ISO pipeline.
+#[derive(Default)]
+pub struct IsoState {
+    pub metadata: Option<IsoMetadata>,
+}
+
 /// Shared state passed through the ISO pipeline.
 pub struct IsoContext {
     pub config: IsoConfig,
+    pub state: IsoState,
 }

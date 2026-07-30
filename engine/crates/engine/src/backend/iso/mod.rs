@@ -5,7 +5,7 @@ mod layout;
 mod pipeline;
 mod stage;
 
-pub use context::{GrubConfig, IsoConfig, IsoContext, SquashFsConfig};
+pub use context::{GrubConfig, IsoConfig, IsoContext, IsoState, SquashFsConfig};
 pub use layout::Layout;
 pub use pipeline::IsoPipeline;
 pub use stage::{
@@ -138,7 +138,7 @@ impl BuildBackend for IsoBackend {
     type Error = std::io::Error;
 
     fn build(&mut self, _plan: &Plan) -> Result<(), ExecuteError<Self::Error>> {
-        let context = IsoContext {
+        let mut context = IsoContext {
             config: IsoConfig {
                 rootfs: self.rootfs.clone(),
                 source_iso: self.source_iso.clone(),
@@ -156,9 +156,10 @@ impl BuildBackend for IsoBackend {
                     exclusions: self.squashfs.exclusions.clone(),
                 },
             },
+            state: IsoState::default(),
         };
-
-        IsoPipeline::run(&context, self.inspector.as_ref()).map_err(ExecuteError::Environment)?;
+        IsoPipeline::run(&mut context, self.inspector.as_ref())
+            .map_err(ExecuteError::Environment)?;
 
         Ok(())
     }
