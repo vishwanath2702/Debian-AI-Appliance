@@ -564,6 +564,7 @@ mod tests {
         let error = validate_tool(&tool).expect_err("failing version command should be rejected");
 
         assert_eq!(error.kind(), std::io::ErrorKind::Other);
+        assert!(error.to_string().contains(&tool.display().to_string()));
     }
     #[test]
     fn rejects_non_executable_tool() {
