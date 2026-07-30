@@ -450,6 +450,7 @@ mod tests {
                 initramfs: None,
                 squashfs: None,
                 grub_config: None,
+                iso_image: None,
             },
         }
     }
