@@ -26,13 +26,25 @@ where
     I: BuildBackend<Error = std::io::Error>,
 {
     fn execute(mut self, build_context: &BuildContext, plan: &Plan) -> Result<(), BuildError> {
-        self.bootstrapper.bootstrap(build_context)?;
-        self.rootfs_backend
-            .build(plan)
-            .map_err(BuildError::Rootfs)?;
-        self.iso_backend.build(plan).map_err(BuildError::Iso)?;
+        self.bootstrap(build_context)?;
+        self.build_rootfs(plan)?;
+        self.build_iso(plan)?;
 
         Ok(())
+    }
+
+    fn bootstrap(&self, build_context: &BuildContext) -> Result<(), BuildError> {
+        self.bootstrapper.bootstrap(build_context)?;
+
+        Ok(())
+    }
+
+    fn build_rootfs(&mut self, plan: &Plan) -> Result<(), BuildError> {
+        self.rootfs_backend.build(plan).map_err(BuildError::Rootfs)
+    }
+
+    fn build_iso(&mut self, plan: &Plan) -> Result<(), BuildError> {
+        self.iso_backend.build(plan).map_err(BuildError::Iso)
     }
 }
 impl IsoWorkflow {
