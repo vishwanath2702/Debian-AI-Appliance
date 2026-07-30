@@ -6,7 +6,8 @@ use inspector::IsoInspector;
 
 use super::{
     BootArtifactsStage, GrubConfigStage, InitramfsStage, InspectionStage, IsoContext,
-    IsoImageStage, KernelStage, SourceIsoStage, SquashFsStage, ToolValidationStage, WorkspaceStage,
+    IsoImageStage, KernelStage, MetadataValidationStage, SourceIsoStage, SquashFsStage,
+    ToolValidationStage, WorkspaceStage,
 };
 /// Coordinates the ISO build process.
 pub struct IsoPipeline;
@@ -21,6 +22,7 @@ impl IsoPipeline {
         SourceIsoStage::run(context)?;
         let metadata = InspectionStage::run(context, inspector)?;
         context.state.metadata = Some(metadata);
+        MetadataValidationStage::run(context)?;
         ToolValidationStage::run(context)?;
         WorkspaceStage::run(context)?;
 

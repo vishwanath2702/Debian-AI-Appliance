@@ -52,6 +52,64 @@ impl InspectionStage {
             .map_err(|error| io::Error::other(error.to_string()))
     }
 }
+/// Validates inspected source ISO metadata.
+pub struct MetadataValidationStage;
+
+impl MetadataValidationStage {
+    /// Validates metadata discovered from the configured source ISO.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if metadata is missing, inconsistent, or unsupported.
+    pub fn run(context: &IsoContext) -> io::Result<()> {
+        let metadata = context.state.metadata.as_ref().ok_or_else(|| {
+            io::Error::new(io::ErrorKind::InvalidData, "source ISO metadata is missing")
+        })?;
+
+        if metadata.path() != context.config.source_iso {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!(
+                    "inspected ISO path does not match configured source ISO: expected {}, found {}",
+                    context.config.source_iso.display(),
+                    metadata.path().display(),
+                ),
+            ));
+        }
+
+        if !metadata.distribution().eq_ignore_ascii_case("Debian") {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("unsupported ISO distribution: {}", metadata.distribution()),
+            ));
+        }
+
+        validate_metadata_field("version", metadata.version())?;
+        validate_metadata_field("codename", metadata.codename())?;
+        validate_metadata_field("architecture", metadata.architecture())?;
+        validate_metadata_field("media type", metadata.media_type())?;
+
+        if metadata.boot_modes().is_empty() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "source ISO does not provide a supported boot mode",
+            ));
+        }
+
+        Ok(())
+    }
+}
+
+fn validate_metadata_field(name: &str, value: &str) -> io::Result<()> {
+    if value.trim().is_empty() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("source ISO metadata field is empty: {name}"),
+        ));
+    }
+
+    Ok(())
+}
 /// Validates that required external build tools are available.
 pub struct ToolValidationStage;
 
@@ -312,7 +370,12 @@ mod tests {
         sync::atomic::{AtomicUsize, Ordering},
     };
 
-    use super::{find_initramfs, find_kernel};
+    use inspector::{BootMode, IsoMetadata};
+
+    use super::{MetadataValidationStage, find_initramfs, find_kernel};
+    use crate::backend::iso::{
+        GrubConfig, IsoConfig, IsoContext, IsoState, Layout, SquashFsConfig,
+    };
 
     static NEXT_DIRECTORY_ID: AtomicUsize = AtomicUsize::new(0);
 
@@ -351,7 +414,39 @@ mod tests {
             fs::remove_dir_all(&self.path).expect("test directory should be removed");
         }
     }
-
+    fn valid_metadata(path: &Path) -> IsoMetadata {
+        IsoMetadata::new(
+            path.to_path_buf(),
+            "Debian".to_owned(),
+            "13.1.0".to_owned(),
+            "trixie".to_owned(),
+            "amd64".to_owned(),
+            "netinst".to_owned(),
+            vec![BootMode::Bios, BootMode::Uefi],
+        )
+    }
+    fn iso_context(source_iso: &Path, metadata: Option<IsoMetadata>) -> IsoContext {
+        IsoContext {
+            config: IsoConfig {
+                rootfs: PathBuf::from("build/rootfs"),
+                source_iso: source_iso.to_path_buf(),
+                output_iso: PathBuf::from("build/output.iso"),
+                mksquashfs_command: PathBuf::from("mksquashfs"),
+                xorriso_command: PathBuf::from("xorriso"),
+                layout: Layout::new("build/work/iso"),
+                grub: GrubConfig {
+                    menu_title: "Debian AI Appliance".to_owned(),
+                    timeout: 5,
+                    kernel_command_line: "boot=live quiet".to_owned(),
+                },
+                squashfs: SquashFsConfig {
+                    compression: "xz".to_owned(),
+                    exclusions: vec!["boot".to_owned()],
+                },
+            },
+            state: IsoState { metadata },
+        }
+    }
     #[test]
     fn finds_single_kernel() {
         let boot_directory = TestDirectory::create();
@@ -423,6 +518,149 @@ mod tests {
 
         let error = find_initramfs(boot_directory.path())
             .expect_err("multiple initramfs images should return an error");
+
+        assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
+    }
+    #[test]
+    fn accepts_valid_metadata() {
+        let source_iso = PathBuf::from("debian.iso");
+        let metadata = valid_metadata(&source_iso);
+        let context = iso_context(&source_iso, Some(metadata));
+
+        MetadataValidationStage::run(&context).expect("valid metadata should be accepted");
+    }
+    #[test]
+    fn rejects_missing_metadata() {
+        let source_iso = PathBuf::from("debian.iso");
+        let context = iso_context(&source_iso, None);
+
+        let error = MetadataValidationStage::run(&context)
+            .expect_err("missing metadata should be rejected");
+
+        assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
+    }
+    #[test]
+    fn rejects_metadata_for_different_source_iso() {
+        let source_iso = PathBuf::from("debian.iso");
+        let metadata = valid_metadata(Path::new("other.iso"));
+        let context = iso_context(&source_iso, Some(metadata));
+
+        let error = MetadataValidationStage::run(&context)
+            .expect_err("metadata for another source ISO should be rejected");
+
+        assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
+    }
+    #[test]
+    fn rejects_non_debian_distribution() {
+        let source_iso = PathBuf::from("debian.iso");
+        let metadata = IsoMetadata::new(
+            source_iso.clone(),
+            "Ubuntu".to_owned(),
+            "24.04".to_owned(),
+            "noble".to_owned(),
+            "amd64".to_owned(),
+            "live".to_owned(),
+            vec![BootMode::Uefi],
+        );
+        let context = iso_context(&source_iso, Some(metadata));
+
+        let error = MetadataValidationStage::run(&context)
+            .expect_err("non-Debian metadata should be rejected");
+
+        assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
+    }
+    #[test]
+    fn rejects_empty_version() {
+        let source_iso = PathBuf::from("debian.iso");
+        let metadata = IsoMetadata::new(
+            source_iso.clone(),
+            "Debian".to_owned(),
+            String::new(),
+            "trixie".to_owned(),
+            "amd64".to_owned(),
+            "netinst".to_owned(),
+            vec![BootMode::Bios, BootMode::Uefi],
+        );
+        let context = iso_context(&source_iso, Some(metadata));
+
+        let error =
+            MetadataValidationStage::run(&context).expect_err("empty version should be rejected");
+
+        assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
+    }
+    #[test]
+    fn rejects_empty_codename() {
+        let source_iso = PathBuf::from("debian.iso");
+        let metadata = IsoMetadata::new(
+            source_iso.clone(),
+            "Debian".to_owned(),
+            "13.1.0".to_owned(),
+            String::new(),
+            "amd64".to_owned(),
+            "netinst".to_owned(),
+            vec![BootMode::Bios, BootMode::Uefi],
+        );
+        let context = iso_context(&source_iso, Some(metadata));
+
+        let error =
+            MetadataValidationStage::run(&context).expect_err("empty codename should be rejected");
+
+        assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
+    }
+    #[test]
+    fn rejects_empty_architecture() {
+        let source_iso = PathBuf::from("debian.iso");
+        let metadata = IsoMetadata::new(
+            source_iso.clone(),
+            "Debian".to_owned(),
+            "13.1.0".to_owned(),
+            "trixie".to_owned(),
+            String::new(),
+            "netinst".to_owned(),
+            vec![BootMode::Bios, BootMode::Uefi],
+        );
+        let context = iso_context(&source_iso, Some(metadata));
+
+        let error = MetadataValidationStage::run(&context)
+            .expect_err("empty architecture should be rejected");
+
+        assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
+    }
+    #[test]
+    fn rejects_empty_media_type() {
+        let source_iso = PathBuf::from("debian.iso");
+        let metadata = IsoMetadata::new(
+            source_iso.clone(),
+            "Debian".to_owned(),
+            "13.1.0".to_owned(),
+            "trixie".to_owned(),
+            "amd64".to_owned(),
+            String::new(),
+            vec![BootMode::Bios, BootMode::Uefi],
+        );
+        let context = iso_context(&source_iso, Some(metadata));
+
+        let error = MetadataValidationStage::run(&context)
+            .expect_err("empty media type should be rejected");
+
+        assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
+    }
+    #[test]
+    fn rejects_empty_boot_modes() {
+        let source_iso = PathBuf::from("debian.iso");
+        let metadata = IsoMetadata::new(
+            source_iso.clone(),
+            "Debian".to_owned(),
+            "13.1.0".to_owned(),
+            "trixie".to_owned(),
+            "amd64".to_owned(),
+            "netinst".to_owned(),
+            Vec::new(),
+        );
+        let context = iso_context(&source_iso, Some(metadata));
+
+        let error = MetadataValidationStage::run(&context)
+            .expect_err("empty boot modes should be rejected");
 
         assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
     }

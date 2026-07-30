@@ -10,7 +10,8 @@ pub use layout::Layout;
 pub use pipeline::IsoPipeline;
 pub use stage::{
     BootArtifactsStage, GrubConfigStage, InitramfsStage, InspectionStage, IsoImageStage,
-    KernelStage, SourceIsoStage, SquashFsStage, ToolValidationStage, WorkspaceStage,
+    KernelStage, MetadataValidationStage, SourceIsoStage, SquashFsStage, ToolValidationStage,
+    WorkspaceStage,
 };
 use std::path::{Path, PathBuf};
 
