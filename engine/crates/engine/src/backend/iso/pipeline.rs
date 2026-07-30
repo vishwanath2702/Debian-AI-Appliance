@@ -37,9 +37,6 @@ impl IsoPipeline {
         BootArtifactsStage::run(context, &kernel, &initramfs)?;
         let _grub_config = GrubConfigStage::run(context)?;
         let _iso_image = IsoImageStage::run(context)?;
-        let _grub_config = GrubConfigStage::run(context)?;
-        let _iso_image = IsoImageStage::run(context)?;
-
         Ok(())
     }
 }
