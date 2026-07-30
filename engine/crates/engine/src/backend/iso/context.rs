@@ -38,6 +38,7 @@ pub struct IsoState {
     pub kernel: Option<PathBuf>,
     pub initramfs: Option<PathBuf>,
     pub squashfs: Option<PathBuf>,
+    pub grub_config: Option<PathBuf>,
 }
 /// Shared state passed through the ISO pipeline.
 pub struct IsoContext {

@@ -449,6 +449,7 @@ mod tests {
                 kernel: None,
                 initramfs: None,
                 squashfs: None,
+                grub_config: None,
             },
         }
     }
