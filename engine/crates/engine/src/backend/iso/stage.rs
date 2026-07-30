@@ -370,7 +370,7 @@ fn has_prefix(file_name: &OsStr, prefix: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use inspector::{BootMode, IsoMetadata};
+    use inspector::{BootMode, InspectError, IsoInspector, IsoMetadata};
     use std::{
         fs::{self, File},
         os::unix::fs::PermissionsExt,
@@ -379,7 +379,8 @@ mod tests {
     };
 
     use super::{
-        MetadataValidationStage, SourceIsoStage, find_initramfs, find_kernel, validate_tool,
+        InspectionStage, MetadataValidationStage, SourceIsoStage, find_initramfs, find_kernel,
+        validate_tool,
     };
     use crate::backend::iso::{
         GrubConfig, IsoConfig, IsoContext, IsoState, Layout, SquashFsConfig,
@@ -766,5 +767,28 @@ mod tests {
             .expect_err("empty boot modes should be rejected");
 
         assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
+    }
+    struct SuccessfulInspector {
+        metadata: IsoMetadata,
+    }
+
+    impl IsoInspector for SuccessfulInspector {
+        fn inspect(&self, _path: &Path) -> Result<IsoMetadata, InspectError> {
+            Ok(self.metadata.clone())
+        }
+    }
+    #[test]
+    fn returns_inspected_metadata() {
+        let source_iso = PathBuf::from("debian.iso");
+        let expected = valid_metadata(&source_iso);
+        let context = iso_context(&source_iso, None);
+        let inspector = SuccessfulInspector {
+            metadata: expected.clone(),
+        };
+
+        let metadata =
+            InspectionStage::run(&context, &inspector).expect("inspection should succeed");
+
+        assert_eq!(metadata, expected);
     }
 }
