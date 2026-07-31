@@ -379,9 +379,9 @@ mod tests {
     };
 
     use super::{
-        BootArtifactsStage, GrubConfigStage, InitramfsStage, InspectionStage, KernelStage,
-        MetadataValidationStage, SourceIsoStage, SquashFsStage, WorkspaceStage, find_initramfs,
-        find_kernel, validate_tool,
+        BootArtifactsStage, GrubConfigStage, InitramfsStage, InspectionStage, IsoImageStage,
+        KernelStage, MetadataValidationStage, SourceIsoStage, SquashFsStage, WorkspaceStage,
+        find_initramfs, find_kernel, validate_tool,
     };
     use crate::backend::iso::{
         GrubConfig, IsoConfig, IsoContext, IsoState, Layout, SquashFsConfig,
@@ -611,6 +611,46 @@ mod tests {
 
         assert_eq!(output, context.config.layout.filesystem_squashfs());
         assert!(output.exists());
+    }
+    #[test]
+    fn creates_iso_image() {
+        let directory = TestDirectory::create();
+
+        let xorriso = directory.create_executable(
+            "xorriso",
+            r#"#!/bin/sh
+while [ "$#" -gt 0 ]; do
+    if [ "$1" = "-outdev" ]; then
+        shift
+        printf iso > "$1"
+        exit 0
+    fi
+    shift
+done
+exit 1
+"#,
+        );
+
+        let source_iso = directory.create_file("source.iso");
+        let output_iso = directory.path().join("output").join("appliance.iso");
+
+        let context = IsoContext {
+            config: IsoConfig {
+                source_iso,
+                output_iso: output_iso.clone(),
+                xorriso_command: xorriso,
+                layout: Layout::new(directory.path()),
+                ..iso_context(Path::new("debian.iso"), None).config
+            },
+            state: IsoState::default(),
+        };
+
+        WorkspaceStage::run(&context).expect("workspace should be created");
+
+        let output = IsoImageStage::run(&context).expect("ISO image should be created");
+
+        assert_eq!(output, output_iso);
+        assert!(output.is_file());
     }
     #[test]
     fn accepts_existing_source_iso_file() {
