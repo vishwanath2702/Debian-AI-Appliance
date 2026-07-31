@@ -9,6 +9,12 @@ use model::{Capability, Plan};
 use registry::PackageRepository;
 
 mod provider_registry;
+struct BuildOptions {
+    rootfs: PathBuf,
+    source_iso: PathBuf,
+    work_directory: PathBuf,
+    output_iso: PathBuf,
+}
 
 fn main() -> ExitCode {
     let arguments = env::args().skip(1).collect::<Vec<_>>();
@@ -29,10 +35,12 @@ fn run(arguments: Vec<String>) -> ExitCode {
             output_iso,
         ] if command == "build-iso" => run_iso_build(
             capability_name,
-            PathBuf::from(rootfs),
-            PathBuf::from(source_iso),
-            PathBuf::from(work_directory),
-            std::path::Path::new(output_iso),
+            BuildOptions {
+                rootfs: PathBuf::from(rootfs),
+                source_iso: PathBuf::from(source_iso),
+                work_directory: PathBuf::from(work_directory),
+                output_iso: PathBuf::from(output_iso),
+            },
         ),
         _ => {
             print_usage();
@@ -57,13 +65,7 @@ fn run_plan(capability_name: &str) -> ExitCode {
     }
 }
 
-fn run_iso_build(
-    capability_name: &str,
-    rootfs: PathBuf,
-    source_iso: PathBuf,
-    work_directory: PathBuf,
-    output_iso: &std::path::Path,
-) -> ExitCode {
+fn run_iso_build(capability_name: &str, options: BuildOptions) -> ExitCode {
     let Some(engine) = load_engine() else {
         return ExitCode::FAILURE;
     };
@@ -79,7 +81,7 @@ fn run_iso_build(
         }
     };
 
-    let context = create_build_context(rootfs, source_iso, work_directory, output_iso);
+    let context = create_build_context(&options);
     match engine.build_iso(
         &Capability::new(capability_name),
         &context,
@@ -88,7 +90,7 @@ fn run_iso_build(
         Ok(plan) => {
             print_plan(&plan);
             println!();
-            println!("ISO image  : {}", output_iso.display());
+            println!("ISO image  : {}", options.output_iso.display());
             ExitCode::SUCCESS
         }
         Err(error) => {
@@ -97,12 +99,7 @@ fn run_iso_build(
         }
     }
 }
-fn create_build_context(
-    rootfs: PathBuf,
-    source_iso: PathBuf,
-    work_directory: PathBuf,
-    output_iso: &std::path::Path,
-) -> BuildContext {
+fn create_build_context(options: &BuildOptions) -> BuildContext {
     let bootstrap = BootstrapConfig::new(
         "bookworm",
         "amd64",
@@ -112,10 +109,10 @@ fn create_build_context(
     );
 
     BuildContext::new(
-        rootfs,
-        source_iso,
-        work_directory,
-        output_iso.to_path_buf(),
+        options.rootfs.clone(),
+        options.source_iso.clone(),
+        options.work_directory.clone(),
+        options.output_iso.clone(),
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../registry/assets"),
         bootstrap,
     )
@@ -156,7 +153,7 @@ fn print_usage() {
 }
 #[cfg(test)]
 mod tests {
-    use super::{create_build_context, run};
+    use super::{BuildOptions, create_build_context, run};
     use std::path::PathBuf;
     use std::process::ExitCode;
 
@@ -175,13 +172,12 @@ mod tests {
     }
     #[test]
     fn creates_iso_build_context() {
-        let context = create_build_context(
-            PathBuf::from("rootfs"),
-            PathBuf::from("source.iso"),
-            PathBuf::from("work"),
-            std::path::Path::new("output.iso"),
-        );
-
+        let context = create_build_context(&BuildOptions {
+            rootfs: PathBuf::from("rootfs"),
+            source_iso: PathBuf::from("source.iso"),
+            work_directory: PathBuf::from("work"),
+            output_iso: PathBuf::from("output.iso"),
+        });
         assert_eq!(context.rootfs(), PathBuf::from("rootfs"));
         assert_eq!(context.source_iso(), PathBuf::from("source.iso"));
         assert_eq!(context.work_directory(), PathBuf::from("work"));
