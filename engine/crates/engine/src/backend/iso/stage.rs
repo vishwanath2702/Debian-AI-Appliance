@@ -379,8 +379,8 @@ mod tests {
     };
 
     use super::{
-        InspectionStage, MetadataValidationStage, SourceIsoStage, find_initramfs, find_kernel,
-        validate_tool,
+        InspectionStage, MetadataValidationStage, SourceIsoStage, WorkspaceStage, find_initramfs,
+        find_kernel, validate_tool,
     };
     use crate::backend::iso::{
         GrubConfig, IsoConfig, IsoContext, IsoState, Layout, SquashFsConfig,
@@ -468,6 +468,22 @@ mod tests {
                 ..IsoState::default()
             },
         }
+    }
+    #[test]
+    fn creates_iso_workspace_layout() {
+        let directory = TestDirectory::create();
+        let context = IsoContext {
+            config: IsoConfig {
+                layout: Layout::new(directory.path()),
+                ..iso_context(Path::new("debian.iso"), None).config
+            },
+            state: IsoState::default(),
+        };
+
+        WorkspaceStage::run(&context).expect("workspace should be created");
+
+        assert!(directory.path().join("live").exists());
+        assert!(directory.path().join("boot").exists());
     }
     #[test]
     fn finds_single_kernel() {
