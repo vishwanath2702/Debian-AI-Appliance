@@ -379,8 +379,8 @@ mod tests {
     };
 
     use super::{
-        InspectionStage, KernelStage, MetadataValidationStage, SourceIsoStage, WorkspaceStage,
-        find_initramfs, find_kernel, validate_tool,
+        InitramfsStage, InspectionStage, KernelStage, MetadataValidationStage, SourceIsoStage,
+        WorkspaceStage, find_initramfs, find_kernel, validate_tool,
     };
     use crate::backend::iso::{
         GrubConfig, IsoConfig, IsoContext, IsoState, Layout, SquashFsConfig,
@@ -519,6 +519,30 @@ mod tests {
         let kernel = KernelStage::run(&context).expect("kernel stage should find kernel");
 
         assert_eq!(kernel, expected);
+    }
+    #[test]
+    fn initramfs_stage_finds_initramfs_from_rootfs() {
+        let directory = TestDirectory::create();
+        let rootfs = directory.path().join("rootfs");
+        let boot = rootfs.join("boot");
+
+        fs::create_dir_all(&boot).expect("boot directory should be created");
+
+        let expected = boot.join("initrd.img-6.12.0-amd64");
+        File::create(&expected).expect("initramfs file should be created");
+
+        let context = IsoContext {
+            config: IsoConfig {
+                rootfs,
+                ..iso_context(Path::new("debian.iso"), None).config
+            },
+            state: IsoState::default(),
+        };
+
+        let initramfs =
+            InitramfsStage::run(&context).expect("initramfs stage should find initramfs");
+
+        assert_eq!(initramfs, expected);
     }
     #[test]
     fn accepts_existing_source_iso_file() {
