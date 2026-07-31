@@ -712,6 +712,25 @@ mod tests {
         assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
     }
     #[test]
+    fn rejects_whitespace_only_codename() {
+        let source_iso = PathBuf::from("debian.iso");
+        let metadata = IsoMetadata::new(
+            source_iso.clone(),
+            "Debian".to_owned(),
+            "13.1.0".to_owned(),
+            "   ".to_owned(),
+            "amd64".to_owned(),
+            "netinst".to_owned(),
+            vec![BootMode::Bios, BootMode::Uefi],
+        );
+        let context = iso_context(&source_iso, Some(metadata));
+
+        let error = MetadataValidationStage::run(&context)
+            .expect_err("whitespace-only codename should be rejected");
+
+        assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
+    }
+    #[test]
     fn rejects_empty_architecture() {
         let source_iso = PathBuf::from("debian.iso");
         let metadata = IsoMetadata::new(
