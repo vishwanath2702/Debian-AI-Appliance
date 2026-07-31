@@ -379,8 +379,9 @@ mod tests {
     };
 
     use super::{
-        BootArtifactsStage, InitramfsStage, InspectionStage, KernelStage, MetadataValidationStage,
-        SourceIsoStage, WorkspaceStage, find_initramfs, find_kernel, validate_tool,
+        BootArtifactsStage, GrubConfigStage, InitramfsStage, InspectionStage, KernelStage,
+        MetadataValidationStage, SourceIsoStage, WorkspaceStage, find_initramfs, find_kernel,
+        validate_tool,
     };
     use crate::backend::iso::{
         GrubConfig, IsoConfig, IsoContext, IsoState, Layout, SquashFsConfig,
@@ -563,6 +564,28 @@ mod tests {
 
         assert!(context.config.layout.live_kernel().exists());
         assert!(context.config.layout.live_initramfs().exists());
+    }
+    #[test]
+    fn creates_grub_configuration() {
+        let directory = TestDirectory::create();
+        let context = IsoContext {
+            config: IsoConfig {
+                layout: Layout::new(directory.path()),
+                ..iso_context(Path::new("debian.iso"), None).config
+            },
+            state: IsoState::default(),
+        };
+
+        WorkspaceStage::run(&context).expect("workspace should be created");
+
+        let output = GrubConfigStage::run(&context).expect("grub configuration should be created");
+
+        assert_eq!(output, context.config.layout.grub_config());
+
+        let contents = fs::read_to_string(output).expect("grub configuration should be readable");
+
+        assert!(contents.contains("Debian AI Appliance"));
+        assert!(contents.contains("boot=live quiet"));
     }
     #[test]
     fn accepts_existing_source_iso_file() {
