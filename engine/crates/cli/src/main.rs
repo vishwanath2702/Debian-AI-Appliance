@@ -79,22 +79,7 @@ fn run_iso_build(
         }
     };
 
-    let bootstrap = BootstrapConfig::new(
-        "bookworm",
-        "amd64",
-        "https://deb.debian.org/debian",
-        vec!["main".to_owned()],
-        "minbase",
-    );
-
-    let context = BuildContext::new(
-        rootfs,
-        source_iso,
-        work_directory,
-        output_iso.to_path_buf(),
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../registry/assets"),
-        bootstrap,
-    );
+    let context = create_build_context(rootfs, source_iso, work_directory, output_iso);
     match engine.build_iso(
         &Capability::new(capability_name),
         &context,
@@ -111,6 +96,29 @@ fn run_iso_build(
             ExitCode::FAILURE
         }
     }
+}
+fn create_build_context(
+    rootfs: PathBuf,
+    source_iso: PathBuf,
+    work_directory: PathBuf,
+    output_iso: &std::path::Path,
+) -> BuildContext {
+    let bootstrap = BootstrapConfig::new(
+        "bookworm",
+        "amd64",
+        "https://deb.debian.org/debian",
+        vec!["main".to_owned()],
+        "minbase",
+    );
+
+    BuildContext::new(
+        rootfs,
+        source_iso,
+        work_directory,
+        output_iso.to_path_buf(),
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../registry/assets"),
+        bootstrap,
+    )
 }
 fn load_engine() -> Option<Engine> {
     match provider_registry::load() {
@@ -148,7 +156,8 @@ fn print_usage() {
 }
 #[cfg(test)]
 mod tests {
-    use super::run;
+    use super::{create_build_context, run};
+    use std::path::PathBuf;
     use std::process::ExitCode;
 
     #[test]
@@ -163,5 +172,19 @@ mod tests {
         let result = run(vec!["build-iso".to_owned(), "desktop".to_owned()]);
 
         assert_eq!(result, ExitCode::FAILURE);
+    }
+    #[test]
+    fn creates_iso_build_context() {
+        let context = create_build_context(
+            PathBuf::from("rootfs"),
+            PathBuf::from("source.iso"),
+            PathBuf::from("work"),
+            std::path::Path::new("output.iso"),
+        );
+
+        assert_eq!(context.rootfs(), PathBuf::from("rootfs"));
+        assert_eq!(context.source_iso(), PathBuf::from("source.iso"));
+        assert_eq!(context.work_directory(), PathBuf::from("work"));
+        assert_eq!(context.output_iso(), PathBuf::from("output.iso"));
     }
 }
