@@ -45,7 +45,7 @@ impl IsoPipeline {
 }
 #[cfg(test)]
 mod tests {
-    use std::{fs, os::unix::fs::PermissionsExt, path::Path};
+    use std::{fs, io, os::unix::fs::PermissionsExt, path::Path};
 
     use inspector::{BootMode, InspectError, IsoInspector, IsoMetadata};
     use tempfile::tempdir;
@@ -69,7 +69,13 @@ mod tests {
             ))
         }
     }
+    struct FailingIsoInspector;
 
+    impl IsoInspector for FailingIsoInspector {
+        fn inspect(&self, _source_iso: &Path) -> Result<IsoMetadata, InspectError> {
+            Err(InspectError::Io(io::Error::other("inspection failed")))
+        }
+    }
     fn create_executable(path: &Path, contents: &str) {
         fs::write(path, contents).expect("test executable should be written");
         fs::set_permissions(path, fs::Permissions::from_mode(0o755))
@@ -145,6 +151,34 @@ exit 1
             state: IsoState::default(),
         }
     }
+    fn create_failing_mksquashfs(path: &Path) {
+        create_executable(
+            path,
+            r#"#!/bin/sh
+if [ "$1" = "--version" ]; then
+    echo "mksquashfs test version"
+    exit 0
+fi
+
+echo "squashfs failed" >&2
+exit 1
+"#,
+        );
+    }
+    fn create_failing_xorriso(path: &Path) {
+        create_executable(
+            path,
+            r#"#!/bin/sh
+if [ "$1" = "--version" ]; then
+    echo "xorriso test version"
+    exit 0
+fi
+
+echo "xorriso failed" >&2
+exit 1
+"#,
+        );
+    }
     #[test]
     fn pipeline_populates_build_state() {
         let temp = tempdir().expect("temporary directory should be created");
@@ -169,5 +203,60 @@ exit 1
                 .expect("initramfs should be readable"),
             b"initramfs"
         );
+    }
+    #[test]
+    fn inspection_failure_stops_pipeline() {
+        let temp = tempdir().expect("temporary directory should be created");
+        let mut context = create_test_context(temp.path());
+
+        let error = IsoPipeline::run(&mut context, &FailingIsoInspector)
+            .expect_err("inspection failure should stop pipeline");
+
+        assert!(context.state.metadata.is_none());
+        assert!(context.state.kernel.is_none());
+        assert!(context.state.initramfs.is_none());
+        assert!(context.state.squashfs.is_none());
+        assert!(context.state.grub_config.is_none());
+        assert!(context.state.iso_image.is_none());
+
+        assert!(error.to_string().contains("inspection"));
+    }
+    #[test]
+    fn squashfs_failure_stops_before_iso_creation() {
+        let temp = tempdir().expect("temporary directory should be created");
+        let mut context = create_test_context(temp.path());
+
+        create_failing_mksquashfs(&context.config.mksquashfs_command);
+
+        let error = IsoPipeline::run(&mut context, &TestIsoInspector)
+            .expect_err("squashfs failure should stop pipeline");
+
+        assert!(context.state.kernel.is_some());
+        assert!(context.state.initramfs.is_some());
+
+        assert!(context.state.squashfs.is_none());
+        assert!(context.state.grub_config.is_none());
+        assert!(context.state.iso_image.is_none());
+
+        assert!(error.to_string().contains("mksquashfs"));
+    }
+    #[test]
+    fn xorriso_failure_returns_error_after_grub_generation() {
+        let temp = tempdir().expect("temporary directory should be created");
+        let mut context = create_test_context(temp.path());
+
+        create_failing_xorriso(&context.config.xorriso_command);
+
+        let error = IsoPipeline::run(&mut context, &TestIsoInspector)
+            .expect_err("xorriso failure should stop pipeline");
+
+        assert!(context.state.kernel.is_some());
+        assert!(context.state.initramfs.is_some());
+        assert!(context.state.squashfs.is_some());
+        assert!(context.state.grub_config.is_some());
+
+        assert!(context.state.iso_image.is_none());
+
+        assert!(error.to_string().contains("xorriso"));
     }
 }
