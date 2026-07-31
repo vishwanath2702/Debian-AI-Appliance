@@ -247,6 +247,9 @@ impl SquashFsStage {
     /// unsuccessfully.
     pub fn run(context: &IsoContext) -> io::Result<PathBuf> {
         let output = context.config.layout.filesystem_squashfs();
+        if let Some(parent) = output.parent() {
+            fs::create_dir_all(parent)?;
+        }
         let squashfs = &context.config.squashfs;
         let mut command = Command::new(&context.config.mksquashfs_command);
 
