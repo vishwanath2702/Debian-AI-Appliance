@@ -788,6 +788,25 @@ mod tests {
         assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
     }
     #[test]
+    fn rejects_whitespace_only_media_type() {
+        let source_iso = PathBuf::from("debian.iso");
+        let metadata = IsoMetadata::new(
+            source_iso.clone(),
+            "Debian".to_owned(),
+            "13.1.0".to_owned(),
+            "trixie".to_owned(),
+            "amd64".to_owned(),
+            "   ".to_owned(),
+            vec![BootMode::Bios, BootMode::Uefi],
+        );
+        let context = iso_context(&source_iso, Some(metadata));
+
+        let error = MetadataValidationStage::run(&context)
+            .expect_err("whitespace-only media type should be rejected");
+
+        assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
+    }
+    #[test]
     fn rejects_empty_boot_modes() {
         let source_iso = PathBuf::from("debian.iso");
         let metadata = IsoMetadata::new(
