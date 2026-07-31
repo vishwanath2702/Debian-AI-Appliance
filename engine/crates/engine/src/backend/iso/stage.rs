@@ -380,8 +380,8 @@ mod tests {
 
     use super::{
         BootArtifactsStage, GrubConfigStage, InitramfsStage, InspectionStage, KernelStage,
-        MetadataValidationStage, SourceIsoStage, WorkspaceStage, find_initramfs, find_kernel,
-        validate_tool,
+        MetadataValidationStage, SourceIsoStage, SquashFsStage, WorkspaceStage, find_initramfs,
+        find_kernel, validate_tool,
     };
     use crate::backend::iso::{
         GrubConfig, IsoConfig, IsoContext, IsoState, Layout, SquashFsConfig,
@@ -587,6 +587,30 @@ mod tests {
 
         assert!(contents.contains("Debian AI Appliance"));
         assert!(contents.contains("boot=live quiet"));
+    }
+    #[test]
+    fn creates_squashfs_image() {
+        let directory = TestDirectory::create();
+
+        let mksquashfs =
+            directory.create_executable("mksquashfs", "#!/bin/sh\nprintf squashfs > \"$2\"\n");
+
+        let context = IsoContext {
+            config: IsoConfig {
+                layout: Layout::new(directory.path()),
+                rootfs: directory.path().join("rootfs"),
+                mksquashfs_command: mksquashfs,
+                ..iso_context(Path::new("debian.iso"), None).config
+            },
+            state: IsoState::default(),
+        };
+
+        WorkspaceStage::run(&context).expect("workspace should be created");
+
+        let output = SquashFsStage::run(&context).expect("squashfs image should be created");
+
+        assert_eq!(output, context.config.layout.filesystem_squashfs());
+        assert!(output.exists());
     }
     #[test]
     fn accepts_existing_source_iso_file() {
