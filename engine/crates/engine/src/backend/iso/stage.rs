@@ -615,6 +615,23 @@ mod tests {
         MetadataValidationStage::run(&context).expect("valid metadata should be accepted");
     }
     #[test]
+    fn accepts_single_boot_mode() {
+        let source_iso = PathBuf::from("debian.iso");
+        let metadata = IsoMetadata::new(
+            source_iso.clone(),
+            "Debian".to_owned(),
+            "13.1.0".to_owned(),
+            "trixie".to_owned(),
+            "amd64".to_owned(),
+            "netinst".to_owned(),
+            vec![BootMode::Uefi],
+        );
+        let context = iso_context(&source_iso, Some(metadata));
+
+        MetadataValidationStage::run(&context)
+            .expect("single supported boot mode should be accepted");
+    }
+    #[test]
     fn rejects_missing_metadata() {
         let source_iso = PathBuf::from("debian.iso");
         let context = iso_context(&source_iso, None);
