@@ -13,6 +13,10 @@ mod provider_registry;
 fn main() -> ExitCode {
     let arguments = env::args().skip(1).collect::<Vec<_>>();
 
+    run(arguments)
+}
+
+fn run(arguments: Vec<String>) -> ExitCode {
     match arguments.as_slice() {
         [capability_name] => run_plan(capability_name),
         [command, capability_name] if command == "plan" => run_plan(capability_name),
@@ -36,7 +40,6 @@ fn main() -> ExitCode {
         }
     }
 }
-
 fn run_plan(capability_name: &str) -> ExitCode {
     let Some(engine) = load_engine() else {
         return ExitCode::FAILURE;
@@ -142,4 +145,23 @@ fn print_usage() {
     eprintln!("    daia desktop");
     eprintln!("    daia plan desktop");
     eprintln!("    daia build-iso desktop /rootfs source.iso /tmp/daia-work output.iso");
+}
+#[cfg(test)]
+mod tests {
+    use super::run;
+    use std::process::ExitCode;
+
+    #[test]
+    fn rejects_unknown_command() {
+        let result = run(vec!["unknown".to_owned()]);
+
+        assert_eq!(result, ExitCode::FAILURE);
+    }
+
+    #[test]
+    fn rejects_incomplete_iso_build_arguments() {
+        let result = run(vec!["build-iso".to_owned(), "desktop".to_owned()]);
+
+        assert_eq!(result, ExitCode::FAILURE);
+    }
 }
