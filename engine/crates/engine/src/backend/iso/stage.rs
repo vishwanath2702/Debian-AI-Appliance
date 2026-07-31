@@ -379,8 +379,8 @@ mod tests {
     };
 
     use super::{
-        InitramfsStage, InspectionStage, KernelStage, MetadataValidationStage, SourceIsoStage,
-        WorkspaceStage, find_initramfs, find_kernel, validate_tool,
+        BootArtifactsStage, InitramfsStage, InspectionStage, KernelStage, MetadataValidationStage,
+        SourceIsoStage, WorkspaceStage, find_initramfs, find_kernel, validate_tool,
     };
     use crate::backend::iso::{
         GrubConfig, IsoConfig, IsoContext, IsoState, Layout, SquashFsConfig,
@@ -543,6 +543,26 @@ mod tests {
             InitramfsStage::run(&context).expect("initramfs stage should find initramfs");
 
         assert_eq!(initramfs, expected);
+    }
+    #[test]
+    fn copies_boot_artifacts_into_live_directory() {
+        let directory = TestDirectory::create();
+        let context = IsoContext {
+            config: IsoConfig {
+                layout: Layout::new(directory.path()),
+                ..iso_context(Path::new("debian.iso"), None).config
+            },
+            state: IsoState::default(),
+        };
+
+        let kernel = directory.create_file("vmlinuz-source");
+        let initramfs = directory.create_file("initrd-source");
+        WorkspaceStage::run(&context).expect("workspace should be created");
+        BootArtifactsStage::run(&context, &kernel, &initramfs)
+            .expect("boot artifacts should be copied");
+
+        assert!(context.config.layout.live_kernel().exists());
+        assert!(context.config.layout.live_initramfs().exists());
     }
     #[test]
     fn accepts_existing_source_iso_file() {
