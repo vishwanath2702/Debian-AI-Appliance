@@ -379,8 +379,8 @@ mod tests {
     };
 
     use super::{
-        InspectionStage, MetadataValidationStage, SourceIsoStage, WorkspaceStage, find_initramfs,
-        find_kernel, validate_tool,
+        InspectionStage, KernelStage, MetadataValidationStage, SourceIsoStage, WorkspaceStage,
+        find_initramfs, find_kernel, validate_tool,
     };
     use crate::backend::iso::{
         GrubConfig, IsoConfig, IsoContext, IsoState, Layout, SquashFsConfig,
@@ -494,6 +494,29 @@ mod tests {
         boot_directory.create_file("config-6.12.0-amd64");
 
         let kernel = find_kernel(boot_directory.path()).expect("kernel should be found");
+
+        assert_eq!(kernel, expected);
+    }
+    #[test]
+    fn kernel_stage_finds_kernel_from_rootfs() {
+        let directory = TestDirectory::create();
+        let rootfs = directory.path().join("rootfs");
+        let boot = rootfs.join("boot");
+
+        fs::create_dir_all(&boot).expect("boot directory should be created");
+
+        let expected = boot.join("vmlinuz-6.12.0-amd64");
+        File::create(&expected).expect("kernel file should be created");
+
+        let context = IsoContext {
+            config: IsoConfig {
+                rootfs,
+                ..iso_context(Path::new("debian.iso"), None).config
+            },
+            state: IsoState::default(),
+        };
+
+        let kernel = KernelStage::run(&context).expect("kernel stage should find kernel");
 
         assert_eq!(kernel, expected);
     }
