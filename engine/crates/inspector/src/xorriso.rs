@@ -46,6 +46,17 @@ impl XorrisoReader {
 
 impl IsoReader for XorrisoReader {
     fn read_file(&self, iso_path: &str) -> Result<Vec<u8>, InspectError> {
+        let temp_directory = tempfile::tempdir()
+            .map_err(|error| InspectError::Io(error))?;
+
+        let filename = Path::new(iso_path)
+            .file_name()
+.ok_or(InspectError::InvalidDiskInfo {
+    reason: "invalid ISO path",
+})?;
+
+        let destination = temp_directory.path().join(filename);
+
         let output = Command::new(&self.command)
             .arg("-osirrox")
             .arg("on")
@@ -53,7 +64,7 @@ impl IsoReader for XorrisoReader {
             .arg(&self.iso)
             .arg("-extract")
             .arg(iso_path)
-            .arg("-")
+            .arg(&destination)
             .output()?;
 
         if !output.status.success() {
@@ -64,7 +75,7 @@ impl IsoReader for XorrisoReader {
             });
         }
 
-        Ok(output.stdout)
+        Ok(std::fs::read(destination)?)
     }
     fn path_exists(&self, iso_path: &str) -> Result<bool, InspectError> {
         let output = Command::new(&self.command)

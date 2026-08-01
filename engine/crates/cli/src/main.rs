@@ -16,6 +16,13 @@ struct BuildOptions {
     work_directory: PathBuf,
     output_iso: PathBuf,
 }
+
+fn main() -> ExitCode {
+    let arguments = env::args().skip(1).collect::<Vec<_>>();
+
+    run(arguments)
+}
+
 fn run(arguments: Vec<String>) -> ExitCode {
     match arguments.as_slice() {
         [capability_name] => run_plan(capability_name),

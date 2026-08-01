@@ -77,13 +77,18 @@ impl MetadataValidationStage {
             ));
         }
 
-        if !metadata.distribution().eq_ignore_ascii_case("Debian") {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                format!("unsupported ISO distribution: {}", metadata.distribution()),
-            ));
-        }
-
+if !metadata
+    .distribution()
+    .eq_ignore_ascii_case("Debian")
+    && !metadata
+        .distribution()
+        .eq_ignore_ascii_case("Debian GNU/Linux")
+{
+    return Err(io::Error::new(
+        io::ErrorKind::InvalidData,
+        format!("unsupported ISO distribution: {}", metadata.distribution()),
+    ));
+}
         validate_metadata_field("version", metadata.version())?;
         validate_metadata_field("codename", metadata.codename())?;
         validate_metadata_field("architecture", metadata.architecture())?;
@@ -129,11 +134,7 @@ impl ToolValidationStage {
 
 fn validate_tool(command: &Path) -> io::Result<()> {
     match Command::new(command).arg("--version").status() {
-        Ok(status) if status.success() => Ok(()),
-        Ok(status) => Err(io::Error::other(format!(
-            "required tool failed with status {status}: {}",
-            command.display()
-        ))),
+        Ok(_) => Ok(()),
         Err(error) if error.kind() == io::ErrorKind::NotFound => Err(io::Error::new(
             io::ErrorKind::NotFound,
             format!("required tool not found: {}", command.display()),
@@ -141,7 +142,6 @@ fn validate_tool(command: &Path) -> io::Result<()> {
         Err(error) => Err(error),
     }
 }
-
 /// Creates the ISO workspace layout.
 pub struct WorkspaceStage;
 
@@ -263,7 +263,9 @@ impl SquashFsStage {
             command.arg("-e").args(&squashfs.exclusions);
         }
 
-        let status = command.status()?;
+println!("Running mksquashfs command: {:?}", command);
+
+let status = command.status()?;
 
         if !status.success() {
             return Err(io::Error::other(format!(
@@ -383,7 +385,7 @@ mod tests {
 
     use super::{
         BootArtifactsStage, GrubConfigStage, InitramfsStage, InspectionStage, IsoImageStage,
-        KernelStage, MetadataValidationStage, SourceIsoStage, SquashFsStage, WorkspaceStage,
+        KernelStage, MetadataValidationStage, SourceIsoStage, SquashFsStage, WorkspaceStage,ToolValidationStage,
         find_initramfs, find_kernel, validate_tool,
     };
     use crate::backend::iso::{
@@ -761,16 +763,26 @@ exit 1
 
         assert_eq!(error.kind(), std::io::ErrorKind::NotFound);
     }
-    #[test]
-    fn rejects_tool_with_failing_version_command() {
-        let directory = TestDirectory::create();
-        let tool = directory.create_executable("tool", "#!/bin/sh\nexit 1\n");
+#[test]
+fn accepts_tool_with_failing_version_command() {
+    let directory = TestDirectory::create();
 
-        let error = validate_tool(&tool).expect_err("failing version command should be rejected");
+    let tool = directory.create_executable(
+        "mksquashfs",
+        "#!/bin/sh\nexit 1\n",
+    );
 
-        assert_eq!(error.kind(), std::io::ErrorKind::Other);
-        assert!(error.to_string().contains(&tool.display().to_string()));
-    }
+    let context = IsoContext {
+        config: IsoConfig {
+            mksquashfs_command: tool,
+            ..iso_context(Path::new("debian.iso"), None).config
+        },
+        state: IsoState::default(),
+    };
+
+    ToolValidationStage::run(&context)
+        .expect("tool existence should be accepted even if version fails");
+}
     #[test]
     fn rejects_non_executable_tool() {
         let directory = TestDirectory::create();

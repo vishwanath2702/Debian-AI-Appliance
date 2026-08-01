@@ -21,8 +21,8 @@ impl BootstrapConfig {
             .unwrap_or_else(|| vec!["main".to_owned()]);
 
         Self::new(
-            metadata.codename(),
-            metadata.architecture(),
+            metadata.codename().to_ascii_lowercase(),
+            metadata.architecture().to_owned(),
             "https://deb.debian.org/debian",
             components,
             "minbase",

@@ -1,4 +1,7 @@
 name: desktop
+
 packages:
+  - linux-image-amd64
+  - initramfs-tools
   - gnome-shell
   - gdm3
