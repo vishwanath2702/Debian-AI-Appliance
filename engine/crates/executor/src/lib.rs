@@ -9,7 +9,6 @@ use std::{
     fmt::{self, Display, Formatter},
     fs, io,
     path::PathBuf,
-    process::Command,
 };
 /// Error returned when plan execution fails.
 #[derive(Debug)]
@@ -72,13 +71,6 @@ pub trait ExecutionEnvironment {
     ///
     /// Returns any I/O error encountered while preparing the environment.
     fn prepare(&self) -> io::Result<()>;
-
-    /// Bootstraps the execution environment.
-    ///
-    /// # Errors
-    ///
-    /// Returns any I/O error encountered while bootstrapping the environment.
-    fn bootstrap(&self) -> io::Result<()>;
 }
 /// Installs packages into a root filesystem.
 pub trait PackageInstaller {
@@ -210,23 +202,8 @@ impl ExecutionEnvironment for RootfsRunner {
         fs::create_dir_all(&self.rootfs)?;
         Ok(())
     }
-
-    fn bootstrap(&self) -> io::Result<()> {
-        let status = Command::new("debootstrap")
-            .arg("--variant=minbase")
-            .arg("trixie")
-            .arg(&self.rootfs)
-            .status()?;
-
-        if status.success() {
-            Ok(())
-        } else {
-            Err(io::Error::other(format!(
-                "debootstrap exited with status {status}"
-            )))
-        }
-    }
 }
+
 /// Error returned when a root filesystem action cannot be executed.
 #[derive(Debug)]
 pub enum RootfsRunError {
@@ -312,7 +289,6 @@ where
     /// Returns the first error produced by the runner.
     pub fn execute(&mut self, plan: &Plan) -> Result<(), ExecuteError<R::Error>> {
         self.runner.prepare().map_err(ExecuteError::Environment)?;
-        self.runner.bootstrap().map_err(ExecuteError::Environment)?;
 
         for (step, plan_step) in plan.steps.iter().enumerate() {
             self.runner
@@ -347,10 +323,6 @@ mod tests {
         fn prepare(&self) -> std::io::Result<()> {
             Ok(())
         }
-
-        fn bootstrap(&self) -> std::io::Result<()> {
-            Ok(())
-        }
     }
 
     impl ActionRunner for RecordingRunner {
@@ -382,10 +354,6 @@ mod tests {
     }
     impl ExecutionEnvironment for FailingRunner {
         fn prepare(&self) -> std::io::Result<()> {
-            Ok(())
-        }
-
-        fn bootstrap(&self) -> std::io::Result<()> {
             Ok(())
         }
     }
