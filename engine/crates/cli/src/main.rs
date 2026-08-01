@@ -27,7 +27,7 @@ fn main() -> ExitCode {
 impl Default for BuildConfiguration {
     fn default() -> Self {
         Self {
-bootstrap: BootstrapConfig::default(),
+            bootstrap: BootstrapConfig::default(),
             asset_directory: PathBuf::from(env!("CARGO_MANIFEST_DIR"))
                 .join("../../registry/assets"),
         }

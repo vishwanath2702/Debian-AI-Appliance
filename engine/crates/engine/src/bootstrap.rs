@@ -29,7 +29,6 @@ impl BootstrapConfig {
         }
     }
 
-
     /// Returns the Debian release or suite.
     #[must_use]
     pub fn release(&self) -> &str {
@@ -58,7 +57,7 @@ impl BootstrapConfig {
     #[must_use]
     pub fn variant(&self) -> &str {
         &self.variant
-    }  
+    }
 }
 impl Default for BootstrapConfig {
     fn default() -> Self {
@@ -95,18 +94,14 @@ mod tests {
         );
         assert_eq!(config.variant(), "minbase");
     }
-#[test]
-fn default_bootstrap_configuration_is_debian_bookworm() {
-    let config = BootstrapConfig::default();
+    #[test]
+    fn default_bootstrap_configuration_is_debian_bookworm() {
+        let config = BootstrapConfig::default();
 
-    assert_eq!(config.release(), "bookworm");
-    assert_eq!(config.architecture(), "amd64");
-    assert_eq!(
-        config.mirror(),
-        "https://deb.debian.org/debian"
-    );
-    assert_eq!(config.components(), &["main".to_owned()]);
-    assert_eq!(config.variant(), "minbase");
+        assert_eq!(config.release(), "bookworm");
+        assert_eq!(config.architecture(), "amd64");
+        assert_eq!(config.mirror(), "https://deb.debian.org/debian");
+        assert_eq!(config.components(), &["main".to_owned()]);
+        assert_eq!(config.variant(), "minbase");
+    }
 }
-}
-
