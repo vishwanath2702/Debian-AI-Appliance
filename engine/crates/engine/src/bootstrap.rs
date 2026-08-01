@@ -1,5 +1,5 @@
 //! Debian root filesystem bootstrap configuration.
-
+use inspector::IsoMetadata;
 /// Configuration used to bootstrap a Debian root filesystem.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct BootstrapConfig {
@@ -11,6 +11,23 @@ pub struct BootstrapConfig {
 }
 
 impl BootstrapConfig {
+    /// Creates bootstrap configuration from inspected ISO metadata.
+    #[must_use]
+    pub fn from_iso_metadata(metadata: &IsoMetadata) -> Self {
+        let components = metadata
+            .repositories()
+            .first()
+            .map(|repository| repository.components().to_vec())
+            .unwrap_or_else(|| vec!["main".to_owned()]);
+
+        Self::new(
+            metadata.codename(),
+            metadata.architecture(),
+            "https://deb.debian.org/debian",
+            components,
+            "minbase",
+        )
+    }
     /// Creates a bootstrap configuration.
     #[must_use]
     pub fn new(

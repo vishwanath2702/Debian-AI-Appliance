@@ -8,6 +8,7 @@ license.workspace = true
 engine = { path = "../engine" }
 model = { path = "../model" }
 registry = { path = "../registry" }
+inspector = { path = "../inspector" }
 
 [lints]
 workspace = true

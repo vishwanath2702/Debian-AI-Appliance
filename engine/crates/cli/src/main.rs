@@ -5,6 +5,7 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use engine::{BootstrapConfig, BuildContext, Engine};
+use inspector::{DebianIsoInspector, IsoInspector};
 use model::{Capability, Plan};
 use registry::PackageRepository;
 
@@ -14,24 +15,6 @@ struct BuildOptions {
     source_iso: PathBuf,
     work_directory: PathBuf,
     output_iso: PathBuf,
-}
-struct BuildConfiguration {
-    bootstrap: BootstrapConfig,
-    asset_directory: PathBuf,
-}
-fn main() -> ExitCode {
-    let arguments = env::args().skip(1).collect::<Vec<_>>();
-
-    run(arguments)
-}
-impl Default for BuildConfiguration {
-    fn default() -> Self {
-        Self {
-            bootstrap: BootstrapConfig::default(),
-            asset_directory: PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                .join("../../registry/assets"),
-        }
-    }
 }
 fn run(arguments: Vec<String>) -> ExitCode {
     match arguments.as_slice() {
@@ -92,7 +75,13 @@ fn run_iso_build(capability_name: &str, options: BuildOptions) -> ExitCode {
         }
     };
 
-    let context = create_build_context(&options);
+    let context = match create_build_context(&options) {
+        Ok(context) => context,
+        Err(error) => {
+            eprintln!("Error preparing build context: {error}");
+            return ExitCode::FAILURE;
+        }
+    };
     match engine.build_iso(
         &Capability::new(capability_name),
         &context,
@@ -110,26 +99,23 @@ fn run_iso_build(capability_name: &str, options: BuildOptions) -> ExitCode {
         }
     }
 }
-fn create_build_context(options: &BuildOptions) -> BuildContext {
-    let configuration = BuildConfiguration::default();
+fn create_build_context(
+    options: &BuildOptions,
+) -> Result<BuildContext, Box<dyn std::error::Error>> {
+    let inspector = DebianIsoInspector::new();
 
-    BuildContext::new(
+    let metadata = inspector.inspect(&options.source_iso)?;
+
+    let bootstrap = BootstrapConfig::from_iso_metadata(&metadata);
+
+    Ok(BuildContext::new(
         options.rootfs.clone(),
         options.source_iso.clone(),
         options.work_directory.clone(),
         options.output_iso.clone(),
-        configuration.asset_directory,
-        configuration.bootstrap,
-    )
-}
-fn load_engine() -> Option<Engine> {
-    match provider_registry::load() {
-        Ok(registry) => Some(Engine::from_registry(registry)),
-        Err(error) => {
-            eprintln!("Error loading provider registry: {error}");
-            None
-        }
-    }
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../registry/assets"),
+        bootstrap,
+    ))
 }
 
 fn print_plan(plan: &Plan) {
@@ -156,9 +142,19 @@ fn print_usage() {
     eprintln!("    daia plan desktop");
     eprintln!("    daia build-iso desktop /rootfs source.iso /tmp/daia-work output.iso");
 }
+fn load_engine() -> Option<Engine> {
+    match provider_registry::load() {
+        Ok(registry) => Some(Engine::from_registry(registry)),
+        Err(error) => {
+            eprintln!("Error loading provider registry: {error}");
+            None
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{BuildConfiguration, BuildOptions, create_build_context, run};
+    use super::{BuildOptions, run};
     use std::path::PathBuf;
     use std::process::ExitCode;
 
@@ -176,31 +172,17 @@ mod tests {
         assert_eq!(result, ExitCode::FAILURE);
     }
     #[test]
-    fn creates_iso_build_context() {
-        let context = create_build_context(&BuildOptions {
+    fn build_options_store_paths() {
+        let options = BuildOptions {
             rootfs: PathBuf::from("rootfs"),
             source_iso: PathBuf::from("source.iso"),
             work_directory: PathBuf::from("work"),
             output_iso: PathBuf::from("output.iso"),
-        });
-        assert_eq!(context.rootfs(), PathBuf::from("rootfs"));
-        assert_eq!(context.source_iso(), PathBuf::from("source.iso"));
-        assert_eq!(context.work_directory(), PathBuf::from("work"));
-        assert_eq!(context.output_iso(), PathBuf::from("output.iso"));
-    }
-    #[test]
-    fn default_build_configuration_has_debian_defaults() {
-        let configuration = BuildConfiguration::default();
+        };
 
-        assert_eq!(configuration.bootstrap.release(), "bookworm");
-        assert_eq!(configuration.bootstrap.architecture(), "amd64");
-        assert_eq!(
-            configuration.bootstrap.mirror(),
-            "https://deb.debian.org/debian"
-        );
-        assert_eq!(configuration.bootstrap.components(), &["main".to_owned()]);
-        assert_eq!(configuration.bootstrap.variant(), "minbase");
-
-        assert!(configuration.asset_directory.ends_with("registry/assets"));
+        assert_eq!(options.rootfs, PathBuf::from("rootfs"));
+        assert_eq!(options.source_iso, PathBuf::from("source.iso"));
+        assert_eq!(options.work_directory, PathBuf::from("work"));
+        assert_eq!(options.output_iso, PathBuf::from("output.iso"));
     }
 }
