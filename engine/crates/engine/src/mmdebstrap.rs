@@ -97,6 +97,7 @@ impl MmdebstrapBootstrapper {
         let mut command = Command::new("mmdebstrap");
         command
             .arg("--mode=root")
+            .arg("--include=ca-certificates,gnupg")
             .arg(format!("--variant={}", config.variant()))
             .arg(format!("--architectures={}", config.architecture()))
             .arg(format!("--components={}", config.components().join(",")))
@@ -192,6 +193,7 @@ mod tests {
             arguments,
             vec![
                 OsStr::new("--mode=root"),
+                OsStr::new("--include=ca-certificates,gnupg"),
                 OsStr::new("--variant=minbase"),
                 OsStr::new("--architectures=amd64"),
                 OsStr::new("--components=main,non-free-firmware"),
