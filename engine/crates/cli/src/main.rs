@@ -27,13 +27,7 @@ fn main() -> ExitCode {
 impl Default for BuildConfiguration {
     fn default() -> Self {
         Self {
-            bootstrap: BootstrapConfig::new(
-                "bookworm",
-                "amd64",
-                "https://deb.debian.org/debian",
-                vec!["main".to_owned()],
-                "minbase",
-            ),
+bootstrap: BootstrapConfig::default(),
             asset_directory: PathBuf::from(env!("CARGO_MANIFEST_DIR"))
                 .join("../../registry/assets"),
         }
