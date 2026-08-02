@@ -107,6 +107,29 @@ impl MmdebstrapBootstrapper {
 
         command
     }
+    #[must_use]
+    pub fn sudo_command(&self, context: &BuildContext) -> Command {
+        let mut command = Command::new("sudo");
+
+        command
+            .arg("mmdebstrap")
+            .arg("--mode=root")
+            .arg("--include=ca-certificates,gnupg")
+            .arg(format!("--variant={}", context.bootstrap().variant()))
+            .arg(format!(
+                "--architectures={}",
+                context.bootstrap().architecture()
+            ))
+            .arg(format!(
+                "--components={}",
+                context.bootstrap().components().join(",")
+            ))
+            .arg(context.bootstrap().release())
+            .arg(context.rootfs())
+            .arg(context.bootstrap().mirror());
+
+        command
+    }
 }
 
 impl Bootstrapper for MmdebstrapBootstrapper {
@@ -114,15 +137,27 @@ impl Bootstrapper for MmdebstrapBootstrapper {
 
     fn bootstrap(&self, context: &BuildContext) -> Result<(), Self::Error> {
         let mut command = self.command(context);
+
         let status = self
             .runner
             .status(&mut command)
             .map_err(MmdebstrapError::Process)?;
 
         if status.success() {
+            return Ok(());
+        }
+
+        let mut sudo_command = self.sudo_command(context);
+
+        let sudo_status = self
+            .runner
+            .status(&mut sudo_command)
+            .map_err(MmdebstrapError::Process)?;
+
+        if sudo_status.success() {
             Ok(())
         } else {
-            Err(MmdebstrapError::Unsuccessful(status))
+            Err(MmdebstrapError::Unsuccessful(sudo_status))
         }
     }
 }
@@ -141,27 +176,22 @@ mod tests {
     use crate::{BootstrapConfig, Bootstrapper, BuildContext};
 
     struct RecordingCommandRunner {
-        result: Mutex<Option<io::Result<ExitStatus>>>,
+        result: Mutex<Vec<io::Result<ExitStatus>>>,
     }
 
     impl RecordingCommandRunner {
-        fn returning(result: io::Result<ExitStatus>) -> Self {
+        fn returning(results: Vec<io::Result<ExitStatus>>) -> Self {
             Self {
-                result: Mutex::new(Some(result)),
+                result: Mutex::new(results),
             }
         }
     }
 
     impl CommandRunner for RecordingCommandRunner {
         fn status(&self, _command: &mut Command) -> io::Result<ExitStatus> {
-            self.result
-                .lock()
-                .unwrap()
-                .take()
-                .expect("recording runner should only be invoked once")
+            self.result.lock().unwrap().remove(0)
         }
     }
-
     fn test_context() -> BuildContext {
         let config = BootstrapConfig::new(
             "bookworm",
@@ -206,7 +236,7 @@ mod tests {
 
     #[test]
     fn bootstrap_succeeds_when_command_succeeds() {
-        let runner = RecordingCommandRunner::returning(Ok(ExitStatus::from_raw(0)));
+        let runner = RecordingCommandRunner::returning(vec![Ok(ExitStatus::from_raw(0))]);
         let bootstrapper = MmdebstrapBootstrapper::with_runner(runner);
 
         bootstrapper.bootstrap(&test_context()).unwrap();
@@ -215,7 +245,7 @@ mod tests {
     #[test]
     fn bootstrap_returns_process_error_when_command_cannot_run() {
         let runner =
-            RecordingCommandRunner::returning(Err(io::Error::other("process unavailable")));
+            RecordingCommandRunner::returning(vec![Err(io::Error::other("process unavailable"))]);
         let bootstrapper = MmdebstrapBootstrapper::with_runner(runner);
 
         let error = bootstrapper.bootstrap(&test_context()).unwrap_err();
@@ -225,11 +255,23 @@ mod tests {
 
     #[test]
     fn bootstrap_returns_error_when_command_exits_unsuccessfully() {
-        let runner = RecordingCommandRunner::returning(Ok(ExitStatus::from_raw(1 << 8)));
+        let runner = RecordingCommandRunner::returning(vec![
+            Ok(ExitStatus::from_raw(1 << 8)),
+            Ok(ExitStatus::from_raw(1 << 8)),
+        ]);
+
         let bootstrapper = MmdebstrapBootstrapper::with_runner(runner);
 
         let error = bootstrapper.bootstrap(&test_context()).unwrap_err();
 
         assert!(matches!(error, MmdebstrapError::Unsuccessful(_)));
+    }
+    #[test]
+    fn constructs_sudo_mmdebstrap_command() {
+        let context = test_context();
+
+        let command = MmdebstrapBootstrapper::new().sudo_command(&context);
+
+        assert_eq!(command.get_program(), OsStr::new("sudo"));
     }
 }
