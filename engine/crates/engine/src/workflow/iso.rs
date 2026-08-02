@@ -1,12 +1,12 @@
 //! Bootable ISO build workflow.
 
-use executor::RootfsRunError;
-use model::Plan;
-
 use crate::{
     Bootstrapper, BuildBackend, BuildContext, BuildError, IsoBackend, MmdebstrapBootstrapper,
     MmdebstrapError, RootfsBackend,
 };
+use executor::RootfsRunError;
+use model::Plan;
+use std::fs;
 
 use registry::PackageRepository;
 
@@ -25,14 +25,25 @@ where
     R: BuildBackend<Error = RootfsRunError>,
     I: BuildBackend<Error = std::io::Error>,
 {
+    fn prepare(&self, build_context: &BuildContext) -> Result<(), BuildError> {
+        clean_directory(build_context.rootfs())?;
+        clean_directory(build_context.work_directory())?;
+
+        if build_context.output_iso().exists() {
+            fs::remove_file(build_context.output_iso()).map_err(BuildError::Workspace)?;
+        }
+
+        Ok(())
+    }
     fn execute(mut self, build_context: &BuildContext, plan: &Plan) -> Result<(), BuildError> {
+        self.prepare(build_context)?;
+
         self.bootstrap(build_context)?;
         self.build_rootfs(plan)?;
         self.build_iso(plan)?;
 
         Ok(())
     }
-
     fn bootstrap(&self, build_context: &BuildContext) -> Result<(), BuildError> {
         self.bootstrapper.bootstrap(build_context)?;
 
@@ -46,6 +57,15 @@ where
     fn build_iso(&mut self, plan: &Plan) -> Result<(), BuildError> {
         self.iso_backend.build(plan).map_err(BuildError::Iso)
     }
+}
+fn clean_directory(path: &std::path::Path) -> Result<(), BuildError> {
+    if path.exists() {
+        fs::remove_dir_all(path).map_err(BuildError::Workspace)?;
+    }
+
+    fs::create_dir_all(path).map_err(BuildError::Workspace)?;
+
+    Ok(())
 }
 impl IsoWorkflow {
     /// Runs the bootable ISO workflow.

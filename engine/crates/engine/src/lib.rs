@@ -28,6 +28,9 @@ pub enum BuildError {
     /// An execution plan could not be produced.
     Plan(PlanError),
 
+    /// The build workspace could not be prepared.
+    Workspace(std::io::Error),
+
     /// The root filesystem could not be bootstrapped.
     Bootstrap(MmdebstrapError),
 
@@ -42,13 +45,21 @@ impl Display for BuildError {
     fn fmt(&self, formatter: &mut Formatter<'_>) -> fmt::Result {
         match self {
             Self::Plan(error) => write!(formatter, "failed to build execution plan: {error}"),
+            Self::Workspace(error) => {
+                write!(formatter, "failed to prepare build workspace: {error}")
+            }
             Self::Bootstrap(error) => {
                 write!(formatter, "failed to bootstrap root filesystem: {error}")
             }
             Self::Rootfs(error) => {
-                write!(formatter, "failed to execute root filesystem plan: {error}")
+                write!(
+                    formatter,
+                    "failed to execute root filesystem build: {error}"
+                )
             }
-            Self::Iso(error) => write!(formatter, "failed to generate ISO image: {error}"),
+            Self::Iso(error) => {
+                write!(formatter, "failed to generate ISO image: {error}")
+            }
         }
     }
 }
@@ -57,6 +68,7 @@ impl Error for BuildError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
             Self::Plan(error) => Some(error),
+            Self::Workspace(error) => Some(error),
             Self::Bootstrap(error) => Some(error),
             Self::Rootfs(error) => Some(error),
             Self::Iso(error) => Some(error),
