@@ -304,18 +304,19 @@ impl IsoImageStage {
             fs::remove_file(output)?;
         }
 
-        let status = Command::new(&context.config.xorriso_command)
-            .arg("-indev")
-            .arg(&context.config.source_iso)
-            .arg("-outdev")
-            .arg(output)
-            .args(["-boot_image", "any", "replay"])
-            .arg("-map")
-            .arg(context.config.layout.root())
-            .arg("/")
-            .arg("-commit")
-            .status()?;
-
+let status = Command::new(&context.config.xorriso_command)
+    .args([
+        "-as",
+        "mkisofs",
+        "-iso-level",
+        "3",
+        "-o",
+    ])
+    .arg(output)
+    .arg("-V")
+    .arg("Debian AI Appliance")
+    .arg(context.config.layout.root())
+    .status()?;
         if !status.success() {
             return Err(io::Error::other(format!(
                 "xorriso failed with status {status}"
@@ -625,7 +626,7 @@ mod tests {
             "xorriso",
             r#"#!/bin/sh
 while [ "$#" -gt 0 ]; do
-    if [ "$1" = "-outdev" ]; then
+    if [ "$1" = "-o" ]; then
         shift
         printf iso > "$1"
         exit 0

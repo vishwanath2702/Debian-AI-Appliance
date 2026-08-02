@@ -120,14 +120,13 @@ if [ "$1" = "--version" ]; then
 fi
 
 while [ "$#" -gt 0 ]; do
-    if [ "$1" = "-outdev" ]; then
+    if [ "$1" = "-o" ]; then
         shift
         printf iso > "$1"
         exit 0
     fi
     shift
 done
-
 exit 1
 "#,
         );

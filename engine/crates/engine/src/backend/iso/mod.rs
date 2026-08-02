@@ -200,7 +200,7 @@ mod tests {
                 "    exit 0\n",
                 "fi\n",
                 "while [ \"$#\" -gt 0 ]; do\n",
-                "    if [ \"$1\" = \"-outdev\" ]; then\n",
+                "    if [ \"$1\" = \"-o\" ]; then\n",
                 "        shift\n",
                 "        : > \"$1\"\n",
                 "        exit 0\n",
