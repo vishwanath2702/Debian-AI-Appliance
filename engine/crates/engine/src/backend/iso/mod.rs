@@ -9,9 +9,9 @@ pub use context::{GrubConfig, IsoConfig, IsoContext, IsoState, SquashFsConfig};
 pub use layout::Layout;
 pub use pipeline::IsoPipeline;
 pub use stage::{
-    BootArtifactsStage, GrubConfigStage, InitramfsStage, InspectionStage, IsoImageStage,
-    KernelStage, MetadataValidationStage, SourceIsoStage, SquashFsStage, ToolValidationStage,
-    WorkspaceStage,
+    BootArtifactsStage, GrubConfigStage, InitramfsStage, InspectionStage,
+    IsoImageStage, KernelStage, MetadataValidationStage, SourceIsoStage, SquashFsStage,
+    ToolValidationStage, WorkspaceStage,
 };
 use std::path::{Path, PathBuf};
 
@@ -348,9 +348,20 @@ mod tests {
             timeout: 12,
             kernel_command_line: "boot=live debug splash".to_owned(),
         });
+let boot_directory = backend.rootfs().join("boot");
 
-        backend.build(&test_plan()).unwrap();
+fs::create_dir_all(&boot_directory).unwrap();
+fs::write(
+    boot_directory.join("vmlinuz-test"),
+    b"test kernel",
+).unwrap();
 
+fs::write(
+    boot_directory.join("initrd.img-test"),
+    b"test initramfs",
+).unwrap();
+
+backend.build(&test_plan()).unwrap();
         assert_eq!(
             fs::read_to_string(backend.layout().grub_config()).unwrap(),
             concat!(

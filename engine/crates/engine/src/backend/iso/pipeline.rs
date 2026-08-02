@@ -5,9 +5,9 @@ use std::io;
 use inspector::IsoInspector;
 
 use super::{
-    BootArtifactsStage, GrubConfigStage, InitramfsStage, InspectionStage, IsoContext,
-    IsoImageStage, KernelStage, MetadataValidationStage, SourceIsoStage, SquashFsStage,
-    ToolValidationStage, WorkspaceStage,
+    BootArtifactsStage, GrubConfigStage, InitramfsStage, InspectionStage,
+    IsoContext, IsoImageStage, KernelStage, MetadataValidationStage, SourceIsoStage,
+    SquashFsStage, ToolValidationStage, WorkspaceStage,
 };
 /// Coordinates the ISO build process.
 pub struct IsoPipeline;
@@ -76,6 +76,7 @@ mod tests {
             Err(InspectError::Io(io::Error::other("inspection failed")))
         }
     }
+
     fn create_executable(path: &Path, contents: &str) {
         fs::write(path, contents).expect("test executable should be written");
         fs::set_permissions(path, fs::Permissions::from_mode(0o755))
@@ -182,9 +183,11 @@ exit 1
     #[test]
     fn pipeline_populates_build_state() {
         let temp = tempdir().expect("temporary directory should be created");
-        let mut context = create_test_context(temp.path());
+let mut context = create_test_context(temp.path());
 
-        IsoPipeline::run(&mut context, &TestIsoInspector).expect("ISO pipeline should complete");
+
+IsoPipeline::run(&mut context, &TestIsoInspector)
+    .expect("ISO pipeline should complete");
 
         assert!(context.state.metadata.is_some());
         assert!(context.state.kernel.is_some());
