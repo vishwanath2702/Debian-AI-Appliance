@@ -26,11 +26,11 @@ pub struct IsoConfig {
     pub output_iso: PathBuf,
     pub mksquashfs_command: PathBuf,
     pub xorriso_command: PathBuf,
+    pub grub_mkrescue_command: PathBuf,
     pub layout: Layout,
     pub grub: GrubConfig,
     pub squashfs: SquashFsConfig,
 }
-
 /// Mutable state produced while running the ISO pipeline.
 #[derive(Default)]
 pub struct IsoState {

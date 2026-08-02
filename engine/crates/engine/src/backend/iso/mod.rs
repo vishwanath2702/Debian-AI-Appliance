@@ -10,8 +10,8 @@ pub use layout::Layout;
 pub use pipeline::IsoPipeline;
 pub use stage::{
     BootArtifactsStage, GrubConfigStage, InitramfsStage, InspectionStage,
-    IsoImageStage, KernelStage, MetadataValidationStage, SourceIsoStage, SquashFsStage,
-    ToolValidationStage, WorkspaceStage,
+    KernelStage, MetadataValidationStage, SourceIsoStage, SquashFsStage,
+    ToolValidationStage, WorkspaceStage, GrubRescueStage,
 };
 use std::path::{Path, PathBuf};
 
@@ -29,6 +29,7 @@ pub struct IsoBackend {
     output_path: PathBuf,
     mksquashfs_command: PathBuf,
     xorriso_command: PathBuf,
+    grub_mkrescue_command: PathBuf,
     grub: GrubConfig,
     squashfs: SquashFsConfig,
     inspector: Box<dyn IsoInspector>,
@@ -49,6 +50,7 @@ impl IsoBackend {
             output_path: output_path.into(),
             mksquashfs_command: PathBuf::from("mksquashfs"),
             xorriso_command: PathBuf::from("xorriso"),
+            grub_mkrescue_command: PathBuf::from("grub-mkrescue"),
             grub: GrubConfig {
                 menu_title: "Debian AI Appliance".to_owned(),
                 timeout: 5,
@@ -146,6 +148,7 @@ impl BuildBackend for IsoBackend {
                 output_iso: self.output_path.clone(),
                 mksquashfs_command: self.mksquashfs_command.clone(),
                 xorriso_command: self.xorriso_command.clone(),
+                grub_mkrescue_command: self.grub_mkrescue_command.clone(),
                 layout: self.layout(),
                 grub: GrubConfig {
                     menu_title: self.grub.menu_title.clone(),

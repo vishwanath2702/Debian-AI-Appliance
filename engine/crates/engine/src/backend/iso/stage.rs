@@ -128,6 +128,7 @@ impl ToolValidationStage {
     pub fn run(context: &IsoContext) -> io::Result<()> {
         validate_tool(&context.config.mksquashfs_command)?;
         validate_tool(&context.config.xorriso_command)?;
+        validate_tool(&context.config.grub_mkrescue_command)?;
         Ok(())
     }
 }
@@ -276,61 +277,45 @@ let status = command.status()?;
         Ok(output)
     }
 }
-/// Produces the final ISO while replaying boot metadata from a source ISO.
-pub struct IsoImageStage;
+/// Generates a bootable GRUB ISO image.
+pub struct GrubRescueStage;
 
-impl IsoImageStage {
-    /// Builds the final ISO image from the prepared ISO workspace.
-    ///
-    /// The source ISO supplies the existing BIOS and UEFI boot metadata. The
-    /// prepared workspace is mapped over the source ISO filesystem tree.
+impl GrubRescueStage {
+    /// Creates the GRUB boot image.
     ///
     /// # Errors
     ///
-    /// Returns an error if the output directory cannot be prepared,
-    /// `xorriso` cannot be started, `xorriso` exits unsuccessfully, or the
-    /// command completes without creating the requested output image.
+    /// Returns an error if grub-mkrescue fails.
     pub fn run(context: &IsoContext) -> io::Result<PathBuf> {
-        let output = &context.config.output_iso;
+        let output = context.config.output_iso.clone();
 
-        if let Some(parent) = output
-            .parent()
-            .filter(|parent| !parent.as_os_str().is_empty())
-        {
+        if let Some(parent) = output.parent() {
             fs::create_dir_all(parent)?;
         }
 
-        if output.exists() {
-            fs::remove_file(output)?;
-        }
+        let status = Command::new(&context.config.grub_mkrescue_command)
+            .arg("-o")
+            .arg(&output)
+            .arg(context.config.layout.root())
+            .status()?;
 
-let status = Command::new(&context.config.xorriso_command)
-    .args([
-        "-as",
-        "mkisofs",
-        "-iso-level",
-        "3",
-        "-o",
-    ])
-    .arg(output)
-    .arg("-V")
-    .arg("Debian AI Appliance")
-    .arg(context.config.layout.root())
-    .status()?;
         if !status.success() {
             return Err(io::Error::other(format!(
-                "xorriso failed with status {status}"
+                "grub-mkrescue failed with status {status}"
             )));
         }
 
         if !output.is_file() {
             return Err(io::Error::new(
                 io::ErrorKind::NotFound,
-                format!("xorriso completed without producing {}", output.display()),
+                format!(
+                    "grub-mkrescue completed without creating {}",
+                    output.display()
+                ),
             ));
         }
 
-        Ok(output.clone())
+        Ok(output)
     }
 }
 fn find_kernel(boot_directory: &Path) -> io::Result<PathBuf> {
@@ -385,7 +370,7 @@ mod tests {
     };
 
     use super::{
-        BootArtifactsStage, GrubConfigStage, InitramfsStage, InspectionStage, IsoImageStage,
+        BootArtifactsStage, GrubConfigStage, InitramfsStage, InspectionStage, GrubRescueStage,
         KernelStage, MetadataValidationStage, SourceIsoStage, SquashFsStage, WorkspaceStage,ToolValidationStage,
         find_initramfs, find_kernel, validate_tool,
     };
@@ -459,6 +444,8 @@ mod tests {
                 output_iso: PathBuf::from("build/output.iso"),
                 mksquashfs_command: PathBuf::from("mksquashfs"),
                 xorriso_command: PathBuf::from("xorriso"),
+                
+                grub_mkrescue_command: PathBuf::from("grub-mkrescue"),
                 layout: Layout::new("build/work/iso"),
                 grub: GrubConfig {
                     menu_title: "Debian AI Appliance".to_owned(),
@@ -619,7 +606,7 @@ mod tests {
         assert!(output.exists());
     }
     #[test]
-    fn creates_iso_image() {
+    fn creates_grub_rescue_iso() {
         let directory = TestDirectory::create();
 
         let xorriso = directory.create_executable(
@@ -653,8 +640,8 @@ exit 1
 
         WorkspaceStage::run(&context).expect("workspace should be created");
 
-        let output = IsoImageStage::run(&context).expect("ISO image should be created");
-
+let output = GrubRescueStage::run(&context)
+    .expect("GRUB rescue ISO should be created");
         assert_eq!(output, output_iso);
         assert!(output.is_file());
     }
