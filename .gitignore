@@ -8,11 +8,13 @@
 *.tar
 *.tar.gz
 *.zip
+build/
 
 # Temporary and backup files
 *.orig
 *.rej
 *.bak
+*.tmp
 *~
 .daia-shellcheck-backup-*/
 
