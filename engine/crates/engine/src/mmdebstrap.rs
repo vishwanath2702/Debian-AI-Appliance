@@ -155,13 +155,31 @@ impl Bootstrapper for MmdebstrapBootstrapper {
             .map_err(MmdebstrapError::Process)?;
 
         if sudo_status.success() {
+            restore_rootfs_ownership(context)?;
             Ok(())
         } else {
             Err(MmdebstrapError::Unsuccessful(sudo_status))
         }
     }
 }
+fn restore_rootfs_ownership(context: &BuildContext) -> Result<(), MmdebstrapError> {
+    let user = std::env::var("USER").unwrap_or_else(|_| "root".to_owned());
 
+    let status = Command::new("sudo")
+        .arg("chown")
+        .arg("-R")
+        .arg(format!("{user}:{user}"))
+        .arg(context.rootfs())
+        .status()
+        .map_err(MmdebstrapError::Process)?;
+
+    if status.success() {
+        restore_rootfs_ownership(context)?;
+        Ok(())
+    } else {
+        Err(MmdebstrapError::Unsuccessful(status))
+    }
+}
 #[cfg(test)]
 mod tests {
     use std::{
