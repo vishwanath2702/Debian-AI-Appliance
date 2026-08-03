@@ -46,14 +46,13 @@ impl XorrisoReader {
 
 impl IsoReader for XorrisoReader {
     fn read_file(&self, iso_path: &str) -> Result<Vec<u8>, InspectError> {
-        let temp_directory = tempfile::tempdir()
-            .map_err(|error| InspectError::Io(error))?;
+        let temp_directory = tempfile::tempdir().map_err(|error| InspectError::Io(error))?;
 
         let filename = Path::new(iso_path)
             .file_name()
-.ok_or(InspectError::InvalidDiskInfo {
-    reason: "invalid ISO path",
-})?;
+            .ok_or(InspectError::InvalidDiskInfo {
+                reason: "invalid ISO path",
+            })?;
 
         let destination = temp_directory.path().join(filename);
 

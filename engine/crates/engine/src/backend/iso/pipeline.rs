@@ -6,8 +6,8 @@ use inspector::IsoInspector;
 
 use super::{
     BootArtifactsStage, GrubConfigStage, GrubRescueStage, InitramfsStage, InspectionStage,
-    IsoContext, KernelStage, MetadataValidationStage, SourceIsoStage,
-    SquashFsStage, ToolValidationStage, WorkspaceStage,
+    IsoContext, KernelStage, MetadataValidationStage, SourceIsoStage, SquashFsStage,
+    ToolValidationStage, WorkspaceStage,
 };
 /// Coordinates the ISO build process.
 pub struct IsoPipeline;
@@ -34,21 +34,25 @@ impl IsoPipeline {
         context.state.kernel = Some(kernel);
         context.state.initramfs = Some(initramfs);
 
-let squashfs = SquashFsStage::run(context)?;
-context.state.squashfs = Some(squashfs);
+        let squashfs = SquashFsStage::run(context)?;
+        context.state.squashfs = Some(squashfs);
 
-let grub_config = GrubConfigStage::run(context)?;
-context.state.grub_config = Some(grub_config);
+        let grub_config = GrubConfigStage::run(context)?;
+        context.state.grub_config = Some(grub_config);
 
-let iso_image = GrubRescueStage::run(context)?;
-context.state.iso_image = Some(iso_image);
+        let iso_image = GrubRescueStage::run(context)?;
+        context.state.iso_image = Some(iso_image);
 
-Ok(())
+        Ok(())
     }
 }
 #[cfg(test)]
 mod tests {
-    use std::{fs, io, os::unix::fs::PermissionsExt, path::{Path,PathBuf}};
+    use std::{
+        fs, io,
+        os::unix::fs::PermissionsExt,
+        path::{Path, PathBuf},
+    };
 
     use inspector::{BootMode, InspectError, IsoInspector, IsoMetadata};
     use tempfile::tempdir;
@@ -145,7 +149,7 @@ exit 1
                 grub: GrubConfig {
                     menu_title: "Debian AI Appliance".to_owned(),
                     timeout: 5,
-                    kernel_command_line: "boot=live quiet".to_owned(),
+                    kernel_command_line: "boot=live components quiet".to_owned(),
                 },
                 squashfs: SquashFsConfig {
                     compression: "xz".to_owned(),
@@ -169,10 +173,10 @@ exit 1
 "#,
         );
     }
-fn create_failing_grub_mkrescue(path: &Path) {
-    create_executable(
-        path,
-        r#"#!/bin/sh
+    fn create_failing_grub_mkrescue(path: &Path) {
+        create_executable(
+            path,
+            r#"#!/bin/sh
 if [ "$1" = "--version" ]; then
     echo "grub-mkrescue test version"
     exit 0
@@ -181,23 +185,21 @@ fi
 echo "grub failed" >&2
 exit 1
 "#,
-    );
-}
+        );
+    }
     #[test]
     fn pipeline_populates_build_state() {
         let temp = tempdir().expect("temporary directory should be created");
-let mut context = create_test_context(temp.path());
+        let mut context = create_test_context(temp.path());
 
-
-IsoPipeline::run(&mut context, &TestIsoInspector)
-    .expect("ISO pipeline should complete");
+        IsoPipeline::run(&mut context, &TestIsoInspector).expect("ISO pipeline should complete");
 
         assert!(context.state.metadata.is_some());
-assert!(context.state.kernel.is_some());
-assert!(context.state.initramfs.is_some());
-assert!(context.state.squashfs.is_some());
-assert!(context.state.grub_config.is_some());
-assert!(context.state.iso_image.is_some());
+        assert!(context.state.kernel.is_some());
+        assert!(context.state.initramfs.is_some());
+        assert!(context.state.squashfs.is_some());
+        assert!(context.state.grub_config.is_some());
+        assert!(context.state.iso_image.is_some());
         assert_eq!(
             fs::read(context.state.kernel.as_ref().unwrap()).expect("kernel should be readable"),
             b"kernel"
@@ -245,26 +247,26 @@ assert!(context.state.iso_image.is_some());
 
         assert!(error.to_string().contains("mksquashfs"));
     }
-      #[test]
-fn grub_rescue_failure_stops_pipeline() {
-    let temp = tempdir().expect("temporary directory should be created");
-    let mut context = create_test_context(temp.path());
+    #[test]
+    fn grub_rescue_failure_stops_pipeline() {
+        let temp = tempdir().expect("temporary directory should be created");
+        let mut context = create_test_context(temp.path());
 
-    let failing_grub = temp.path().join("grub-mkrescue");
-    create_failing_grub_mkrescue(&failing_grub);
+        let failing_grub = temp.path().join("grub-mkrescue");
+        create_failing_grub_mkrescue(&failing_grub);
 
-    context.config.grub_mkrescue_command = failing_grub;
+        context.config.grub_mkrescue_command = failing_grub;
 
-    let error = IsoPipeline::run(&mut context, &TestIsoInspector)
-        .expect_err("grub-mkrescue failure should stop pipeline");
+        let error = IsoPipeline::run(&mut context, &TestIsoInspector)
+            .expect_err("grub-mkrescue failure should stop pipeline");
 
-    assert!(context.state.kernel.is_some());
-    assert!(context.state.initramfs.is_some());
-    assert!(context.state.squashfs.is_some());
-    assert!(context.state.grub_config.is_some());
+        assert!(context.state.kernel.is_some());
+        assert!(context.state.initramfs.is_some());
+        assert!(context.state.squashfs.is_some());
+        assert!(context.state.grub_config.is_some());
 
-    assert!(context.state.iso_image.is_none());
+        assert!(context.state.iso_image.is_none());
 
-    assert!(error.to_string().contains("grub"));
-}
+        assert!(error.to_string().contains("grub"));
+    }
 }

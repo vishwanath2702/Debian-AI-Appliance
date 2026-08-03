@@ -1,7 +1,10 @@
 name: desktop
 
 packages:
+  - live-boot
+  - live-config
+  - systemd-sysv
   - linux-image-amd64
   - initramfs-tools
-  - gnome-shell
+  - task-gnome-desktop
   - gdm3

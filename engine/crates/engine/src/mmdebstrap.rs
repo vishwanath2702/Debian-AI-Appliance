@@ -174,7 +174,6 @@ fn restore_rootfs_ownership(context: &BuildContext) -> Result<(), MmdebstrapErro
         .map_err(MmdebstrapError::Process)?;
 
     if status.success() {
-        restore_rootfs_ownership(context)?;
         Ok(())
     } else {
         Err(MmdebstrapError::Unsuccessful(status))

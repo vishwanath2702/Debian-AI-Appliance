@@ -21,6 +21,8 @@ impl Layout {
     }
 
     pub fn create(&self) -> io::Result<()> {
+        println!("ISO layout root: {}", self.root.display());
+
         fs::create_dir_all(self.boot_grub())?;
         fs::create_dir_all(self.efi_boot())?;
         fs::create_dir_all(self.live())?;

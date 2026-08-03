@@ -150,10 +150,18 @@ packages:
             .expect("desktop package manifest should exist");
 
         assert_eq!(manifest.name(), "desktop");
-        assert_eq!(
-            manifest.packages(),
-            &["gnome-shell".to_owned(), "gdm3".to_owned()]
-        );
+assert_eq!(
+    manifest.packages(),
+    &[
+        "live-boot".to_owned(),
+        "live-config".to_owned(),
+        "systemd-sysv".to_owned(),
+        "linux-image-amd64".to_owned(),
+        "initramfs-tools".to_owned(),
+        "task-gnome-desktop".to_owned(),
+        "gdm3".to_owned(),
+    ]
+);
     }
     #[test]
     fn new_repository_is_empty() {

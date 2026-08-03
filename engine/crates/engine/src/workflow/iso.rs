@@ -25,9 +25,9 @@ where
     R: BuildBackend<Error = RootfsRunError>,
     I: BuildBackend<Error = std::io::Error>,
 {
-    fn prepare(&self, build_context: &BuildContext) -> Result<(), BuildError> {
-        clean_directory(build_context.rootfs())?;
-        clean_directory(build_context.work_directory())?;
+fn prepare(&self, build_context: &BuildContext) -> Result<(), BuildError> {
+    clean_directory(build_context.rootfs())?;
+    clean_directory(build_context.work_directory())?;
 
         if build_context.output_iso().exists() {
             fs::remove_file(build_context.output_iso()).map_err(BuildError::Workspace)?;
@@ -63,7 +63,20 @@ fn clean_directory(path: &std::path::Path) -> Result<(), BuildError> {
         fs::remove_dir_all(path).map_err(BuildError::Workspace)?;
     }
 
-    fs::create_dir_all(path).map_err(BuildError::Workspace)?;
+fs::create_dir_all(path).map_err(BuildError::Workspace)?;
+
+let status = std::process::Command::new("sudo")
+    .arg("chown")
+    .arg("root:root")
+    .arg(path)
+    .status()
+    .map_err(BuildError::Workspace)?;
+
+if !status.success() {
+    return Err(BuildError::Workspace(std::io::Error::other(
+        "failed setting rootfs ownership",
+    )));
+}
 
     Ok(())
 }

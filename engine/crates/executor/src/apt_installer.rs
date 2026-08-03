@@ -58,6 +58,14 @@ impl AptInstaller {
         }
     }
 
+fn update_initramfs_command_args() -> Vec<String> {
+    vec![
+        String::from("update-initramfs"),
+        String::from("-u"),
+        String::from("-k"),
+        String::from("all"),
+    ]
+}
     fn update_command_args() -> Vec<String> {
         vec![String::from("apt-get"), String::from("update")]
     }
@@ -75,11 +83,11 @@ impl AptInstaller {
     }
 
     fn run_in_rootfs(rootfs: &Path, args: &[String]) -> Result<(), AptInstallerError> {
-        let status = std::process::Command::new("chroot")
+        let status = std::process::Command::new("sudo")
+            .arg("/usr/sbin/chroot")
             .arg(rootfs)
             .args(args)
             .status()?;
-
         if !status.success() {
             return Err(AptInstallerError::CommandFailed(status));
         }
@@ -105,20 +113,43 @@ impl PackageInstaller for AptInstaller {
         self.update_once(rootfs)?;
 
         let args = Self::install_command_args(packages);
-        Self::run_in_rootfs(rootfs, &args)
+        Self::run_in_rootfs(rootfs, &args)?;
+
+        let initramfs_args = Self::update_initramfs_command_args();
+        Self::run_in_rootfs(rootfs, &initramfs_args)?;
+
+        Ok(())
     }
 }
 #[cfg(test)]
 mod tests {
-
     use super::AptInstaller;
+
+    #[test]
+    fn builds_expected_update_initramfs_command_arguments() {
+        let args = AptInstaller::update_initramfs_command_args();
+
+        assert_eq!(
+            args,
+            vec![
+                String::from("update-initramfs"),
+                String::from("-u"),
+                String::from("-k"),
+                String::from("all"),
+            ]
+        );
+    }
 
     #[test]
     fn builds_expected_update_command_arguments() {
         let args = AptInstaller::update_command_args();
 
-        assert_eq!(args, vec![String::from("apt-get"), String::from("update")]);
+        assert_eq!(
+            args,
+            vec![String::from("apt-get"), String::from("update")]
+        );
     }
+
     #[test]
     fn builds_expected_install_command_arguments() {
         let packages = vec![String::from("vim"), String::from("curl")];

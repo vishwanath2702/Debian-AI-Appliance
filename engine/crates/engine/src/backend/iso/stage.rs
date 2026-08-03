@@ -77,18 +77,16 @@ impl MetadataValidationStage {
             ));
         }
 
-if !metadata
-    .distribution()
-    .eq_ignore_ascii_case("Debian")
-    && !metadata
-        .distribution()
-        .eq_ignore_ascii_case("Debian GNU/Linux")
-{
-    return Err(io::Error::new(
-        io::ErrorKind::InvalidData,
-        format!("unsupported ISO distribution: {}", metadata.distribution()),
-    ));
-}
+        if !metadata.distribution().eq_ignore_ascii_case("Debian")
+            && !metadata
+                .distribution()
+                .eq_ignore_ascii_case("Debian GNU/Linux")
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("unsupported ISO distribution: {}", metadata.distribution()),
+            ));
+        }
         validate_metadata_field("version", metadata.version())?;
         validate_metadata_field("codename", metadata.codename())?;
         validate_metadata_field("architecture", metadata.architecture())?;
@@ -264,9 +262,9 @@ impl SquashFsStage {
             command.arg("-e").args(&squashfs.exclusions);
         }
 
-println!("Running mksquashfs command: {:?}", command);
+        println!("Running mksquashfs command: {:?}", command);
 
-let status = command.status()?;
+        let status = command.status()?;
 
         if !status.success() {
             return Err(io::Error::other(format!(
@@ -370,9 +368,9 @@ mod tests {
     };
 
     use super::{
-        BootArtifactsStage, GrubConfigStage, InitramfsStage, InspectionStage, GrubRescueStage,
-        KernelStage, MetadataValidationStage, SourceIsoStage, SquashFsStage, WorkspaceStage,ToolValidationStage,
-        find_initramfs, find_kernel, validate_tool,
+        BootArtifactsStage, GrubConfigStage, GrubRescueStage, InitramfsStage, InspectionStage,
+        KernelStage, MetadataValidationStage, SourceIsoStage, SquashFsStage, ToolValidationStage,
+        WorkspaceStage, find_initramfs, find_kernel, validate_tool,
     };
     use crate::backend::iso::{
         GrubConfig, IsoConfig, IsoContext, IsoState, Layout, SquashFsConfig,
@@ -444,13 +442,14 @@ mod tests {
                 output_iso: PathBuf::from("build/output.iso"),
                 mksquashfs_command: PathBuf::from("mksquashfs"),
                 xorriso_command: PathBuf::from("xorriso"),
-                
+
                 grub_mkrescue_command: PathBuf::from("grub-mkrescue"),
                 layout: Layout::new("build/work/iso"),
                 grub: GrubConfig {
                     menu_title: "Debian AI Appliance".to_owned(),
                     timeout: 5,
-                    kernel_command_line: "boot=live quiet".to_owned(),
+
+                    kernel_command_line: "boot=live components quiet".to_owned(),
                 },
                 squashfs: SquashFsConfig {
                     compression: "xz".to_owned(),
@@ -579,7 +578,7 @@ mod tests {
         let contents = fs::read_to_string(output).expect("grub configuration should be readable");
 
         assert!(contents.contains("Debian AI Appliance"));
-        assert!(contents.contains("boot=live quiet"));
+        assert!(contents.contains("boot=live components quiet"));
     }
     #[test]
     fn creates_squashfs_image() {
@@ -640,8 +639,7 @@ exit 1
 
         WorkspaceStage::run(&context).expect("workspace should be created");
 
-let output = GrubRescueStage::run(&context)
-    .expect("GRUB rescue ISO should be created");
+        let output = GrubRescueStage::run(&context).expect("GRUB rescue ISO should be created");
         assert_eq!(output, output_iso);
         assert!(output.is_file());
     }
@@ -751,26 +749,23 @@ let output = GrubRescueStage::run(&context)
 
         assert_eq!(error.kind(), std::io::ErrorKind::NotFound);
     }
-#[test]
-fn accepts_tool_with_failing_version_command() {
-    let directory = TestDirectory::create();
+    #[test]
+    fn accepts_tool_with_failing_version_command() {
+        let directory = TestDirectory::create();
 
-    let tool = directory.create_executable(
-        "mksquashfs",
-        "#!/bin/sh\nexit 1\n",
-    );
+        let tool = directory.create_executable("mksquashfs", "#!/bin/sh\nexit 1\n");
 
-    let context = IsoContext {
-        config: IsoConfig {
-            mksquashfs_command: tool,
-            ..iso_context(Path::new("debian.iso"), None).config
-        },
-        state: IsoState::default(),
-    };
+        let context = IsoContext {
+            config: IsoConfig {
+                mksquashfs_command: tool,
+                ..iso_context(Path::new("debian.iso"), None).config
+            },
+            state: IsoState::default(),
+        };
 
-    ToolValidationStage::run(&context)
-        .expect("tool existence should be accepted even if version fails");
-}
+        ToolValidationStage::run(&context)
+            .expect("tool existence should be accepted even if version fails");
+    }
     #[test]
     fn rejects_non_executable_tool() {
         let directory = TestDirectory::create();
