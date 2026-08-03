@@ -21,6 +21,9 @@ pub enum RegistryError {
     /// A package-manifest document parsed successfully but contained invalid data.
     InvalidPackageManifest(String),
 
+    /// An appliance-profile document parsed successfully but contained invalid data.
+    InvalidApplianceProfile(String),
+
     /// More than one provider used the same provider identifier.
     DuplicateProviderId(ProviderId),
 
@@ -29,6 +32,9 @@ pub enum RegistryError {
 
     /// More than one package manifest used the same name.
     DuplicatePackageManifest(String),
+
+    /// More than one appliance profile used the same name.
+    DuplicateApplianceProfile(String),
 }
 
 impl Display for RegistryError {
@@ -46,6 +52,9 @@ impl Display for RegistryError {
             Self::InvalidPackageManifest(message) => {
                 write!(formatter, "invalid package manifest: {message}")
             }
+            Self::InvalidApplianceProfile(message) => {
+                write!(formatter, "invalid appliance profile: {message}")
+            }
             Self::DuplicateProviderId(provider_id) => {
                 write!(formatter, "duplicate provider id: {provider_id}")
             }
@@ -54,6 +63,9 @@ impl Display for RegistryError {
             }
             Self::DuplicatePackageManifest(name) => {
                 write!(formatter, "duplicate package manifest: {name}")
+            }
+            Self::DuplicateApplianceProfile(name) => {
+                write!(formatter, "duplicate appliance profile: {name}")
             }
         }
     }
@@ -66,9 +78,11 @@ impl Error for RegistryError {
             Self::Parse(error) => Some(error),
             Self::InvalidProvider(_)
             | Self::InvalidPackageManifest(_)
+            | Self::InvalidApplianceProfile(_)
             | Self::DuplicateProviderId(_)
             | Self::DuplicateCapability(_)
             | Self::DuplicatePackageManifest(_) => None,
+            Self::DuplicateApplianceProfile(_) => None,
         }
     }
 }

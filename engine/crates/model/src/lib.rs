@@ -211,7 +211,52 @@ impl PackageManifest {
         &self.packages
     }
 }
+/// A DAIA appliance profile describing a desired appliance configuration.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ApplianceProfile {
+    /// Human-readable profile name.
+    pub name: String,
 
+    /// Description of the appliance purpose.
+    pub description: String,
+
+    /// Capabilities included in this appliance.
+    pub capabilities: Vec<Capability>,
+}
+
+impl ApplianceProfile {
+    /// Creates an appliance profile.
+    #[must_use]
+    pub fn new(
+        name: impl Into<String>,
+        description: impl Into<String>,
+        capabilities: Vec<Capability>,
+    ) -> Self {
+        Self {
+            name: name.into(),
+            description: description.into(),
+            capabilities,
+        }
+    }
+
+    /// Returns the profile name.
+    #[must_use]
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    /// Returns the profile description.
+    #[must_use]
+    pub fn description(&self) -> &str {
+        &self.description
+    }
+
+    /// Returns capabilities provided by this profile.
+    #[must_use]
+    pub fn capabilities(&self) -> &[Capability] {
+        &self.capabilities
+    }
+}
 /// A deterministic execution plan.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Plan {
