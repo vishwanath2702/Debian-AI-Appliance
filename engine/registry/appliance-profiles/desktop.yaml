@@ -1,0 +1,5 @@
+name: desktop
+description: Graphical Debian desktop appliance
+
+capabilities:
+  - desktop

@@ -112,7 +112,7 @@ impl ApplianceProfileRepository {
 }
 #[cfg(test)]
 mod tests {
-    use std::fs;
+    use std::{fs, path::Path};
 
     use model::{ApplianceProfile, Capability};
 
@@ -243,5 +243,22 @@ capabilities:
             .expect("empty directory should load");
 
         assert!(repository.profiles().is_empty());
+    }
+
+    #[test]
+    fn repository_appliance_profile_directory_contains_desktop_profile() {
+        let profile_directory =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../registry/appliance-profiles");
+
+        let repository = ApplianceProfileRepository::from_directory(profile_directory)
+            .expect("repository appliance-profile directory should load");
+
+        let profile = repository
+            .profile("desktop")
+            .expect("desktop appliance profile should exist");
+
+        assert_eq!(profile.name(), "desktop");
+        assert_eq!(profile.description(), "Graphical Debian desktop appliance");
+        assert_eq!(profile.capabilities(), &[Capability::new("desktop")]);
     }
 }
