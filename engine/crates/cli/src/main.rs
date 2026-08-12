@@ -1,15 +1,15 @@
 //! DAIA command-line interface.
 
-use std::env;
-use std::path::PathBuf;
-use std::process::ExitCode;
-
 use engine::{BootstrapConfig, BuildContext, Engine};
 use inspector::{DebianIsoInspector, IsoInspector};
 use model::{Capability, Plan};
 use registry::PackageRepository;
-
+use std::env;
+use std::path::PathBuf;
+use std::process::ExitCode;
+mod appliance_profile_repository;
 mod provider_registry;
+
 struct BuildOptions {
     rootfs: PathBuf,
     source_iso: PathBuf,
@@ -27,6 +27,7 @@ fn run(arguments: Vec<String>) -> ExitCode {
     match arguments.as_slice() {
         [capability_name] => run_plan(capability_name),
         [command, capability_name] if command == "plan" => run_plan(capability_name),
+        [command, profile_name] if command == "plan-profile" => run_profile_plan(profile_name),
         [
             command,
             capability_name,
@@ -49,6 +50,44 @@ fn run(arguments: Vec<String>) -> ExitCode {
         }
     }
 }
+
+fn run_profile_plan(profile_name: &str) -> ExitCode {
+    let Some(engine) = load_engine() else {
+        return ExitCode::FAILURE;
+    };
+
+    let repository = match appliance_profile_repository::load() {
+        Ok(repository) => repository,
+        Err(error) => {
+            eprintln!("Error loading appliance profile repository: {error}");
+            return ExitCode::FAILURE;
+        }
+    };
+
+    let Some(profile) = repository.profile(profile_name) else {
+        eprintln!("Error: appliance profile \"{profile_name}\" not found");
+        return ExitCode::FAILURE;
+    };
+
+    match engine.plan_profile(profile) {
+        Ok(plans) => {
+            for (index, plan) in plans.iter().enumerate() {
+                if index > 0 {
+                    println!();
+                }
+
+                print_plan(plan);
+            }
+
+            ExitCode::SUCCESS
+        }
+        Err(error) => {
+            eprintln!("Error: {error}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
 fn run_plan(capability_name: &str) -> ExitCode {
     let Some(engine) = load_engine() else {
         return ExitCode::FAILURE;
@@ -148,6 +187,8 @@ fn print_usage() {
     eprintln!("    daia desktop");
     eprintln!("    daia plan desktop");
     eprintln!("    daia build-iso desktop /rootfs source.iso /tmp/daia-work output.iso");
+    eprintln!("    daia plan-profile <profile>");
+    eprintln!("    daia plan-profile desktop");
 }
 fn load_engine() -> Option<Engine> {
     match provider_registry::load() {
@@ -165,6 +206,19 @@ mod tests {
     use std::path::PathBuf;
     use std::process::ExitCode;
 
+    #[test]
+    fn plans_repository_appliance_profile() {
+        let result = run(vec!["plan-profile".to_owned(), "desktop".to_owned()]);
+
+        assert_eq!(result, ExitCode::SUCCESS);
+    }
+
+    #[test]
+    fn rejects_unknown_appliance_profile() {
+        let result = run(vec!["plan-profile".to_owned(), "does-not-exist".to_owned()]);
+
+        assert_eq!(result, ExitCode::FAILURE);
+    }
     #[test]
     fn rejects_unknown_command() {
         let result = run(vec!["unknown".to_owned()]);
