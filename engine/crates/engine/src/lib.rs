@@ -17,7 +17,7 @@ pub use bootstrapper::Bootstrapper;
 pub use context::BuildContext;
 use executor::{ExecuteError, RootfsRunError};
 pub use mmdebstrap::{MmdebstrapBootstrapper, MmdebstrapError};
-use model::{Capability, Plan};
+use model::{ApplianceProfile, Capability, Plan};
 use planner::{PlanError, Planner};
 use registry::{PackageRepository, Registry};
 use resolver::Resolver;
@@ -148,6 +148,15 @@ impl Engine {
 
         Ok(plan)
     }
+    /// Builds execution plans for an appliance profile.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`PlanError`] if any capability in the profile cannot
+    /// be satisfied by a provider.
+    pub fn plan_profile(&self, profile: &ApplianceProfile) -> Result<Vec<Plan>, PlanError> {
+        self.planner.build_profile(profile)
+    }
     /// Builds and executes an appliance plan as a bootable ISO image.
     ///
     /// # Errors
@@ -183,7 +192,10 @@ impl Engine {
 }
 #[cfg(test)]
 mod tests {
-    use model::{Action, Capability, CapabilityId, PlanStep, Provider, ProviderId};
+
+    use model::{
+        Action, ApplianceProfile, Capability, CapabilityId, PlanStep, Provider, ProviderId,
+    };
     use registry::{PackageRepository, Registry};
 
     use super::{BootstrapConfig, BuildContext, BuildError, Engine, RootfsRunError};
@@ -199,6 +211,24 @@ mod tests {
         .expect("desktop test registry should be valid")
     }
 
+    #[test]
+    fn builds_plans_for_appliance_profile() {
+        let engine = Engine::from_registry(desktop_registry());
+
+        let profile = ApplianceProfile::new(
+            "desktop",
+            "Graphical desktop appliance",
+            vec![Capability::new("desktop")],
+        );
+
+        let plans = engine
+            .plan_profile(&profile)
+            .expect("desktop profile plans should build");
+
+        assert_eq!(plans.len(), 1);
+        assert_eq!(plans[0].capability, Capability::new("desktop"));
+        assert_eq!(plans[0].provider, ProviderId::new("desktop"));
+    }
     #[test]
     fn builds_desktop_plan() {
         let engine = Engine::from_registry(desktop_registry());
