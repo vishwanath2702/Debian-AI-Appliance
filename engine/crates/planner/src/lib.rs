@@ -2,7 +2,7 @@
 
 use std::fmt;
 
-use model::{Capability, Plan};
+use model::{ApplianceProfile, Capability, Plan};
 use resolver::{ResolveError, Resolver};
 
 /// Errors that can occur while generating a plan.
@@ -62,11 +62,28 @@ impl Planner {
             steps: provider.steps,
         })
     }
-}
 
+    /// Builds execution plans for every capability in an appliance profile.
+    ///
+    /// Plans preserve the capability order declared by the profile.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PlanError::Resolve`] when no provider can be resolved for any
+    /// capability in the profile.
+    pub fn build_profile(&self, profile: &ApplianceProfile) -> Result<Vec<Plan>, PlanError> {
+        profile
+            .capabilities()
+            .iter()
+            .map(|capability| self.build(capability))
+            .collect()
+    }
+}
 #[cfg(test)]
 mod tests {
-    use model::{Action, Capability, CapabilityId, PlanStep, Provider, ProviderId};
+    use model::{
+        Action, ApplianceProfile, Capability, CapabilityId, PlanStep, Provider, ProviderId,
+    };
     use registry::Registry;
     use resolver::{ResolveError, Resolver};
 
@@ -82,6 +99,26 @@ mod tests {
             ],
         }])
         .expect("desktop test registry should be valid")
+    }
+    #[test]
+    fn builds_plans_for_appliance_profile() {
+        let registry = desktop_registry();
+        let resolver = Resolver::new(registry);
+        let planner = Planner::new(resolver);
+
+        let profile = ApplianceProfile::new(
+            "desktop",
+            "Graphical desktop appliance",
+            vec![Capability::new("desktop")],
+        );
+
+        let plans = planner
+            .build_profile(&profile)
+            .expect("desktop profile plans should build");
+
+        assert_eq!(plans.len(), 1);
+        assert_eq!(plans[0].capability, Capability::new("desktop"));
+        assert_eq!(plans[0].provider, ProviderId::new("desktop"));
     }
 
     #[test]
@@ -129,6 +166,28 @@ mod tests {
         assert_eq!(
             error.to_string(),
             "no provider found for capability \"unknown\""
+        );
+    }
+
+    #[test]
+    fn profile_build_returns_error_for_unknown_capability() {
+        let registry = desktop_registry();
+        let resolver = Resolver::new(registry);
+        let planner = Planner::new(resolver);
+
+        let profile = ApplianceProfile::new(
+            "invalid",
+            "Profile containing an unknown capability",
+            vec![Capability::new("desktop"), Capability::new("unknown")],
+        );
+
+        let result = planner.build_profile(&profile);
+
+        assert_eq!(
+            result,
+            Err(PlanError::Resolve(ResolveError::ProviderNotFound(
+                Capability::new("unknown"),
+            )))
         );
     }
 
