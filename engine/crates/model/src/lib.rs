@@ -50,6 +50,36 @@ impl fmt::Display for ContentRepositoryId {
     }
 }
 
+/// Describes a logical collection of content available to an appliance.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ContentRepository {
+    id: ContentRepositoryId,
+    description: String,
+}
+
+impl ContentRepository {
+    /// Creates a content repository.
+    #[must_use]
+    pub fn new(id: impl Into<String>, description: impl Into<String>) -> Self {
+        Self {
+            id: ContentRepositoryId::new(id),
+            description: description.into(),
+        }
+    }
+
+    /// Returns the repository identifier.
+    #[must_use]
+    pub const fn id(&self) -> &ContentRepositoryId {
+        &self.id
+    }
+
+    /// Returns the repository description.
+    #[must_use]
+    pub fn description(&self) -> &str {
+        &self.description
+    }
+}
+
 /// Stable identifier for a DAIA capability.
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub struct CapabilityId(String);
@@ -296,10 +326,22 @@ pub struct Plan {
 #[cfg(test)]
 mod tests {
     use super::{
-        Action, AssetId, Capability, CapabilityId, ContentRepositoryId, PackageManifest, PlanStep,
-        ProviderId,
+        Action, AssetId, Capability, CapabilityId, ContentRepository, ContentRepositoryId,
+        PackageManifest, PlanStep, ProviderId,
     };
     use std::path::PathBuf;
+
+    #[test]
+    fn content_repository_exposes_its_metadata() {
+        let repository =
+            ContentRepository::new("documents", "Documents available to the appliance");
+
+        assert_eq!(repository.id(), &ContentRepositoryId::new("documents"));
+        assert_eq!(
+            repository.description(),
+            "Documents available to the appliance"
+        );
+    }
 
     #[test]
     fn content_repository_id_exposes_value() {
