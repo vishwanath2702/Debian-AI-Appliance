@@ -80,6 +80,30 @@ impl ContentRepository {
     }
 }
 
+/// Stable identifier for a DAIA content source.
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub struct ContentSourceId(String);
+
+impl ContentSourceId {
+    /// Creates a content source identifier.
+    #[must_use]
+    pub fn new(value: impl Into<String>) -> Self {
+        Self(value.into())
+    }
+
+    /// Returns the content source identifier as a string slice.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl fmt::Display for ContentSourceId {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.as_str())
+    }
+}
+
 /// Stable identifier for a DAIA capability.
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub struct CapabilityId(String);
@@ -327,7 +351,7 @@ pub struct Plan {
 mod tests {
     use super::{
         Action, AssetId, Capability, CapabilityId, ContentRepository, ContentRepositoryId,
-        PackageManifest, PlanStep, ProviderId,
+        ContentSourceId, PackageManifest, PlanStep, ProviderId,
     };
     use std::path::PathBuf;
 
@@ -357,6 +381,14 @@ mod tests {
 
         assert_eq!(asset_id.as_str(), "desktop/files/lightdm.conf");
         assert_eq!(asset_id.to_string(), "desktop/files/lightdm.conf");
+    }
+
+    #[test]
+    fn content_source_id_exposes_value() {
+        let source_id = ContentSourceId::new("documents-usb");
+
+        assert_eq!(source_id.as_str(), "documents-usb");
+        assert_eq!(source_id.to_string(), "documents-usb");
     }
 
     #[test]
