@@ -104,6 +104,48 @@ impl fmt::Display for ContentSourceId {
     }
 }
 
+/// Describes a source from which appliance content can be acquired.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ContentSource {
+    id: ContentSourceId,
+    repository: ContentRepositoryId,
+    locator: String,
+}
+
+impl ContentSource {
+    /// Creates a content source.
+    #[must_use]
+    pub fn new(
+        id: impl Into<String>,
+        repository: ContentRepositoryId,
+        locator: impl Into<String>,
+    ) -> Self {
+        Self {
+            id: ContentSourceId::new(id),
+            repository,
+            locator: locator.into(),
+        }
+    }
+
+    /// Returns the content source identifier.
+    #[must_use]
+    pub const fn id(&self) -> &ContentSourceId {
+        &self.id
+    }
+
+    /// Returns the repository supplied by this source.
+    #[must_use]
+    pub const fn repository(&self) -> &ContentRepositoryId {
+        &self.repository
+    }
+
+    /// Returns the source locator.
+    #[must_use]
+    pub fn locator(&self) -> &str {
+        &self.locator
+    }
+}
+
 /// Stable identifier for a DAIA capability.
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub struct CapabilityId(String);
@@ -351,9 +393,22 @@ pub struct Plan {
 mod tests {
     use super::{
         Action, AssetId, Capability, CapabilityId, ContentRepository, ContentRepositoryId,
-        ContentSourceId, PackageManifest, PlanStep, ProviderId,
+        ContentSource, ContentSourceId, PackageManifest, PlanStep, ProviderId,
     };
     use std::path::PathBuf;
+
+    #[test]
+    fn content_source_exposes_acquisition_metadata() {
+        let source = ContentSource::new(
+            "wikipedia-en",
+            ContentRepositoryId::new("wikipedia"),
+            "https://example.invalid/wikipedia-en",
+        );
+
+        assert_eq!(source.id(), &ContentSourceId::new("wikipedia-en"));
+        assert_eq!(source.repository(), &ContentRepositoryId::new("wikipedia"));
+        assert_eq!(source.locator(), "https://example.invalid/wikipedia-en");
+    }
 
     #[test]
     fn content_repository_exposes_its_metadata() {
