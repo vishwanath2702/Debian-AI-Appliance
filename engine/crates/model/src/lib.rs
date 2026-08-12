@@ -26,6 +26,30 @@ impl fmt::Display for AssetId {
     }
 }
 
+/// Stable identifier for a DAIA content repository.
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub struct ContentRepositoryId(String);
+
+impl ContentRepositoryId {
+    /// Creates a content repository identifier.
+    #[must_use]
+    pub fn new(value: impl Into<String>) -> Self {
+        Self(value.into())
+    }
+
+    /// Returns the content repository identifier as a string slice.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl fmt::Display for ContentRepositoryId {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.as_str())
+    }
+}
+
 /// Stable identifier for a DAIA capability.
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub struct CapabilityId(String);
@@ -271,8 +295,20 @@ pub struct Plan {
 }
 #[cfg(test)]
 mod tests {
-    use super::{Action, AssetId, Capability, CapabilityId, PackageManifest, PlanStep, ProviderId};
+    use super::{
+        Action, AssetId, Capability, CapabilityId, ContentRepositoryId, PackageManifest, PlanStep,
+        ProviderId,
+    };
     use std::path::PathBuf;
+
+    #[test]
+    fn content_repository_id_exposes_value() {
+        let repository_id = ContentRepositoryId::new("documents");
+
+        assert_eq!(repository_id.as_str(), "documents");
+        assert_eq!(repository_id.to_string(), "documents");
+    }
+
     #[test]
     fn asset_id_exposes_its_identifier() {
         let asset_id = AssetId::new("desktop/files/lightdm.conf");
