@@ -146,6 +146,30 @@ impl ContentSource {
     }
 }
 
+/// Stable identifier for a DAIA storage target.
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub struct StorageTargetId(String);
+
+impl StorageTargetId {
+    /// Creates a storage target identifier.
+    #[must_use]
+    pub fn new(value: impl Into<String>) -> Self {
+        Self(value.into())
+    }
+
+    /// Returns the storage target identifier as a string slice.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl fmt::Display for StorageTargetId {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.as_str())
+    }
+}
+
 /// Stable identifier for a DAIA capability.
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub struct CapabilityId(String);
@@ -393,9 +417,17 @@ pub struct Plan {
 mod tests {
     use super::{
         Action, AssetId, Capability, CapabilityId, ContentRepository, ContentRepositoryId,
-        ContentSource, ContentSourceId, PackageManifest, PlanStep, ProviderId,
+        ContentSource, ContentSourceId, PackageManifest, PlanStep, ProviderId, StorageTargetId,
     };
     use std::path::PathBuf;
+
+    #[test]
+    fn storage_target_id_exposes_value() {
+        let target_id = StorageTargetId::new("secondary-disk");
+
+        assert_eq!(target_id.as_str(), "secondary-disk");
+        assert_eq!(target_id.to_string(), "secondary-disk");
+    }
 
     #[test]
     fn content_source_exposes_acquisition_metadata() {
