@@ -146,6 +146,29 @@ impl ContentSource {
     }
 }
 
+/// Describes the role of a DAIA storage target.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum StorageKind {
+    /// Storage provided by the system's primary/native disk.
+    System,
+
+    /// Additional non-removable storage.
+    Secondary,
+
+    /// Removable storage such as a USB device.
+    Removable,
+}
+
+impl fmt::Display for StorageKind {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::System => formatter.write_str("system"),
+            Self::Secondary => formatter.write_str("secondary"),
+            Self::Removable => formatter.write_str("removable"),
+        }
+    }
+}
+
 /// Stable identifier for a DAIA storage target.
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub struct StorageTargetId(String);
@@ -446,10 +469,17 @@ pub struct Plan {
 mod tests {
     use super::{
         Action, AssetId, Capability, CapabilityId, ContentRepository, ContentRepositoryId,
-        ContentSource, ContentSourceId, PackageManifest, PlanStep, ProviderId, StorageTarget,
-        StorageTargetId,
+        ContentSource, ContentSourceId, PackageManifest, PlanStep, ProviderId, StorageKind,
+        StorageTarget, StorageTargetId,
     };
     use std::path::PathBuf;
+
+    #[test]
+    fn storage_kinds_describe_storage_roles() {
+        assert_eq!(StorageKind::System.to_string(), "system");
+        assert_eq!(StorageKind::Secondary.to_string(), "secondary");
+        assert_eq!(StorageKind::Removable.to_string(), "removable");
+    }
 
     #[test]
     fn storage_target_exposes_its_metadata() {
