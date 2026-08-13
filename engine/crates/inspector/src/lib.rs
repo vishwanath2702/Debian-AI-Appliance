@@ -3,13 +3,17 @@
 mod debian;
 mod error;
 mod reader;
+mod storage_error;
 mod xorriso;
 
 use std::path::{Path, PathBuf};
 
+use model::DiscoveredStorage;
+
 pub use debian::{DebianIsoInspector, parse_disk_info};
 pub use error::InspectError;
 pub use reader::IsoReader;
+pub use storage_error::StorageInspectError;
 pub use xorriso::XorrisoReader;
 
 /// Metadata discovered from an installation ISO.
@@ -175,11 +179,20 @@ pub trait IsoInspector {
     fn inspect(&self, path: &Path) -> Result<IsoMetadata, InspectError>;
 }
 
+/// Discovers storage available to DAIA.
+pub trait StorageInspector {
+    /// Discovers storage currently available on the system.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when system storage cannot be inspected.
+    fn inspect(&self) -> Result<Vec<DiscoveredStorage>, StorageInspectError>;
+}
+
 #[cfg(test)]
 mod tests {
-    use std::path::{Path, PathBuf};
-
     use super::{BootMode, IsoMetadata, RepositoryInfo};
+    use std::path::{Path, PathBuf};
 
     #[test]
     fn iso_metadata_exposes_discovered_values() {

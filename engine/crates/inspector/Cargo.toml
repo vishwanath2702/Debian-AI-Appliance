@@ -5,6 +5,7 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+model = { path = "../model" }
 tempfile = "3"
 
 [lints]
