@@ -19,6 +19,9 @@ pub enum StorageInspectError {
         /// Diagnostic output written to standard error.
         stderr: String,
     },
+
+    /// Storage-inspection output could not be parsed.
+    InvalidOutput(String),
 }
 
 impl fmt::Display for StorageInspectError {
@@ -40,6 +43,9 @@ impl fmt::Display for StorageInspectError {
 
                 Ok(())
             }
+            Self::InvalidOutput(message) => {
+                write!(formatter, "invalid storage inspection output: {message}")
+            }
         }
     }
 }
@@ -48,7 +54,7 @@ impl Error for StorageInspectError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
             Self::Io(error) => Some(error),
-            Self::ProcessFailed { .. } => None,
+            Self::ProcessFailed { .. } | Self::InvalidOutput(_) => None,
         }
     }
 }
@@ -64,6 +70,16 @@ mod tests {
     use std::process::Command;
 
     use super::StorageInspectError;
+
+    #[test]
+    fn invalid_output_describes_parse_failure() {
+        let error = StorageInspectError::InvalidOutput("expected lsblk JSON".to_owned());
+
+        assert_eq!(
+            error.to_string(),
+            "invalid storage inspection output: expected lsblk JSON"
+        );
+    }
 
     #[test]
     fn process_failure_describes_failed_command() {

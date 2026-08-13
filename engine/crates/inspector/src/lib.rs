@@ -2,6 +2,8 @@
 
 mod debian;
 mod error;
+mod linux_storage;
+mod lsblk;
 mod reader;
 mod storage_error;
 mod xorriso;
@@ -12,6 +14,7 @@ use model::DiscoveredStorage;
 
 pub use debian::{DebianIsoInspector, parse_disk_info};
 pub use error::InspectError;
+pub use linux_storage::LinuxStorageInspector;
 pub use reader::IsoReader;
 pub use storage_error::StorageInspectError;
 pub use xorriso::XorrisoReader;
