@@ -146,6 +146,30 @@ impl ContentSource {
     }
 }
 
+/// Stable identifier for storage discovered by DAIA.
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub struct DiscoveredStorageId(String);
+
+impl DiscoveredStorageId {
+    /// Creates a discovered storage identifier.
+    #[must_use]
+    pub fn new(value: impl Into<String>) -> Self {
+        Self(value.into())
+    }
+
+    /// Returns the discovered storage identifier as a string slice.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl fmt::Display for DiscoveredStorageId {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.as_str())
+    }
+}
+
 /// Describes the role of a DAIA storage target.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum StorageKind {
@@ -469,10 +493,18 @@ pub struct Plan {
 mod tests {
     use super::{
         Action, AssetId, Capability, CapabilityId, ContentRepository, ContentRepositoryId,
-        ContentSource, ContentSourceId, PackageManifest, PlanStep, ProviderId, StorageKind,
-        StorageTarget, StorageTargetId,
+        ContentSource, ContentSourceId, DiscoveredStorageId, PackageManifest, PlanStep, ProviderId,
+        StorageKind, StorageTarget, StorageTargetId,
     };
     use std::path::PathBuf;
+
+    #[test]
+    fn discovered_storage_id_exposes_value() {
+        let storage_id = DiscoveredStorageId::new("disk-1");
+
+        assert_eq!(storage_id.as_str(), "disk-1");
+        assert_eq!(storage_id.to_string(), "disk-1");
+    }
 
     #[test]
     fn storage_kinds_describe_storage_roles() {
