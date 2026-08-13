@@ -170,6 +170,36 @@ impl fmt::Display for DiscoveredStorageId {
     }
 }
 
+/// Describes storage discovered by DAIA.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DiscoveredStorage {
+    id: DiscoveredStorageId,
+    kind: StorageKind,
+}
+
+impl DiscoveredStorage {
+    /// Creates discovered storage.
+    #[must_use]
+    pub fn new(id: impl Into<String>, kind: StorageKind) -> Self {
+        Self {
+            id: DiscoveredStorageId::new(id),
+            kind,
+        }
+    }
+
+    /// Returns the discovered storage identifier.
+    #[must_use]
+    pub const fn id(&self) -> &DiscoveredStorageId {
+        &self.id
+    }
+
+    /// Returns the storage role.
+    #[must_use]
+    pub const fn kind(&self) -> StorageKind {
+        self.kind
+    }
+}
+
 /// Describes the role of a DAIA storage target.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum StorageKind {
@@ -493,10 +523,18 @@ pub struct Plan {
 mod tests {
     use super::{
         Action, AssetId, Capability, CapabilityId, ContentRepository, ContentRepositoryId,
-        ContentSource, ContentSourceId, DiscoveredStorageId, PackageManifest, PlanStep, ProviderId,
-        StorageKind, StorageTarget, StorageTargetId,
+        ContentSource, ContentSourceId, DiscoveredStorage, DiscoveredStorageId, PackageManifest,
+        PlanStep, ProviderId, StorageKind, StorageTarget, StorageTargetId,
     };
     use std::path::PathBuf;
+
+    #[test]
+    fn discovered_storage_exposes_identity_and_kind() {
+        let storage = DiscoveredStorage::new("disk-1", StorageKind::Secondary);
+
+        assert_eq!(storage.id(), &DiscoveredStorageId::new("disk-1"));
+        assert_eq!(storage.kind(), StorageKind::Secondary);
+    }
 
     #[test]
     fn discovered_storage_id_exposes_value() {
