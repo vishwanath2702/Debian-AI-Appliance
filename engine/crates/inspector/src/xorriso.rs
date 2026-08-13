@@ -46,7 +46,7 @@ impl XorrisoReader {
 
 impl IsoReader for XorrisoReader {
     fn read_file(&self, iso_path: &str) -> Result<Vec<u8>, InspectError> {
-let temp_directory = tempfile::tempdir().map_err(InspectError::Io)?;
+        let temp_directory = tempfile::tempdir().map_err(InspectError::Io)?;
         let filename = Path::new(iso_path)
             .file_name()
             .ok_or(InspectError::InvalidDiskInfo {
