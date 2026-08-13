@@ -1,6 +1,9 @@
 //! Core domain types shared across the DAIA engine.
 
-use std::{fmt, path::PathBuf};
+use std::{
+    fmt,
+    path::{Path, PathBuf},
+};
 
 /// Stable identifier for a DAIA asset.
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
@@ -175,16 +178,24 @@ impl fmt::Display for DiscoveredStorageId {
 pub struct DiscoveredStorage {
     id: DiscoveredStorageId,
     kind: StorageKind,
+    device_path: PathBuf,
 }
 
 impl DiscoveredStorage {
     /// Creates discovered storage.
     #[must_use]
-    pub fn new(id: impl Into<String>, kind: StorageKind) -> Self {
+    pub fn new(id: impl Into<String>, kind: StorageKind, device_path: impl Into<PathBuf>) -> Self {
         Self {
             id: DiscoveredStorageId::new(id),
             kind,
+            device_path: device_path.into(),
         }
+    }
+
+    /// Returns the current Linux device path.
+    #[must_use]
+    pub fn device_path(&self) -> &Path {
+        &self.device_path
     }
 
     /// Returns the discovered storage identifier.
@@ -529,9 +540,16 @@ mod tests {
     use std::path::PathBuf;
 
     #[test]
-    fn discovered_storage_exposes_identity_and_kind() {
-        let storage = DiscoveredStorage::new("disk-1", StorageKind::Secondary);
+    fn discovered_storage_exposes_current_device_path() {
+        let storage = DiscoveredStorage::new("disk-1", StorageKind::Secondary, "/dev/sdb");
+        assert_eq!(storage.id(), &DiscoveredStorageId::new("disk-1"));
+        assert_eq!(storage.kind(), StorageKind::Secondary);
+        assert_eq!(storage.device_path(), "/dev/sdb");
+    }
 
+    #[test]
+    fn discovered_storage_exposes_identity_and_kind() {
+        let storage = DiscoveredStorage::new("disk-1", StorageKind::Secondary, "/dev/sdb");
         assert_eq!(storage.id(), &DiscoveredStorageId::new("disk-1"));
         assert_eq!(storage.kind(), StorageKind::Secondary);
     }
