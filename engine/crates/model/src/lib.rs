@@ -170,6 +170,35 @@ impl fmt::Display for StorageTargetId {
     }
 }
 
+/// Describes a logical storage target available to DAIA.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct StorageTarget {
+    id: StorageTargetId,
+    description: String,
+}
+
+impl StorageTarget {
+    /// Creates a storage target.
+    #[must_use]
+    pub fn new(id: impl Into<String>, description: impl Into<String>) -> Self {
+        Self {
+            id: StorageTargetId::new(id),
+            description: description.into(),
+        }
+    }
+
+    /// Returns the storage target identifier.
+    #[must_use]
+    pub const fn id(&self) -> &StorageTargetId {
+        &self.id
+    }
+
+    /// Returns the storage target description.
+    #[must_use]
+    pub fn description(&self) -> &str {
+        &self.description
+    }
+}
 /// Stable identifier for a DAIA capability.
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub struct CapabilityId(String);
@@ -417,9 +446,18 @@ pub struct Plan {
 mod tests {
     use super::{
         Action, AssetId, Capability, CapabilityId, ContentRepository, ContentRepositoryId,
-        ContentSource, ContentSourceId, PackageManifest, PlanStep, ProviderId, StorageTargetId,
+        ContentSource, ContentSourceId, PackageManifest, PlanStep, ProviderId, StorageTarget,
+        StorageTargetId,
     };
     use std::path::PathBuf;
+
+    #[test]
+    fn storage_target_exposes_its_metadata() {
+        let target = StorageTarget::new("secondary-disk", "Secondary storage disk");
+
+        assert_eq!(target.id(), &StorageTargetId::new("secondary-disk"));
+        assert_eq!(target.description(), "Secondary storage disk");
+    }
 
     #[test]
     fn storage_target_id_exposes_value() {
