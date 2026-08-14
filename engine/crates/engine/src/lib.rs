@@ -16,12 +16,14 @@ pub use bootstrap::BootstrapConfig;
 pub use bootstrapper::Bootstrapper;
 pub use context::BuildContext;
 use executor::{ExecuteError, RootfsRunError};
+use inspector::{StorageInspectError, StorageInspector};
 pub use mmdebstrap::{MmdebstrapBootstrapper, MmdebstrapError};
-use model::{ApplianceProfile, Capability, Plan};
+use model::{ApplianceProfile, Capability, DiscoveredStorage, Plan};
 use planner::{PlanError, Planner};
 use registry::{PackageRepository, Registry};
 use resolver::Resolver;
 use workflow::IsoWorkflow;
+
 /// Error returned when an appliance build cannot be completed.
 #[derive(Debug)]
 pub enum BuildError {
@@ -163,6 +165,27 @@ impl Engine {
     ///
     /// Returns a [`BuildError`] if planning, bootstrapping, root filesystem
     /// execution, or ISO generation fails.
+    /// Discovers storage devices using the supplied storage inspector.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`StorageInspectError`] if storage discovery fails.
+    pub fn discover_storage<I>(
+        &self,
+        inspector: &I,
+    ) -> Result<Vec<DiscoveredStorage>, StorageInspectError>
+    where
+        I: StorageInspector,
+    {
+        inspector.inspect()
+    }
+
+    /// Builds and executes an appliance plan as a bootable ISO image.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`BuildError`] if planning, bootstrapping, root filesystem
+    /// execution, or ISO generation fails.
     pub fn build_iso(
         &self,
         capability: &Capability,
@@ -193,12 +216,26 @@ impl Engine {
 #[cfg(test)]
 mod tests {
 
+    use inspector::{StorageInspectError, StorageInspector};
     use model::{
-        Action, ApplianceProfile, Capability, CapabilityId, PlanStep, Provider, ProviderId,
+        Action, ApplianceProfile, Capability, CapabilityId, DiscoveredStorage, PlanStep, Provider,
+        ProviderId, StorageKind,
     };
     use registry::{PackageRepository, Registry};
 
     use super::{BootstrapConfig, BuildContext, BuildError, Engine, RootfsRunError};
+
+    struct TestStorageInspector;
+
+    impl StorageInspector for TestStorageInspector {
+        fn inspect(&self) -> Result<Vec<DiscoveredStorage>, StorageInspectError> {
+            Ok(vec![
+                DiscoveredStorage::new("wwn:system-disk", StorageKind::System, "/dev/sda"),
+                DiscoveredStorage::new("serial:usb-disk", StorageKind::Removable, "/dev/sdb"),
+            ])
+        }
+    }
+
     fn desktop_registry() -> Registry {
         Registry::from_providers(vec![Provider {
             id: ProviderId::new("desktop"),
@@ -211,6 +248,18 @@ mod tests {
         .expect("desktop test registry should be valid")
     }
 
+    #[test]
+    fn discovers_storage_through_inspector() {
+        let engine = Engine::from_registry(desktop_registry());
+
+        let storage = engine
+            .discover_storage(&TestStorageInspector)
+            .expect("storage discovery should succeed");
+
+        assert_eq!(storage.len(), 2);
+        assert_eq!(storage[0].kind(), StorageKind::System);
+        assert_eq!(storage[1].kind(), StorageKind::Removable);
+    }
     #[test]
     fn builds_plans_for_appliance_profile() {
         let engine = Engine::from_registry(desktop_registry());
