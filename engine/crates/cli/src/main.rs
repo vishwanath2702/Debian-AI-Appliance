@@ -224,7 +224,7 @@ fn run_wizard() -> ExitCode {
     println!();
     println!("Storage devices:");
 
-    for storage in state.discovered_storage() {
+    for storage in state.selectable_storage() {
         println!(
             "  {}  {}  {}",
             storage.kind(),
