@@ -159,12 +159,6 @@ impl Engine {
     pub fn plan_profile(&self, profile: &ApplianceProfile) -> Result<Vec<Plan>, PlanError> {
         self.planner.build_profile(profile)
     }
-    /// Builds and executes an appliance plan as a bootable ISO image.
-    ///
-    /// # Errors
-    ///
-    /// Returns a [`BuildError`] if planning, bootstrapping, root filesystem
-    /// execution, or ISO generation fails.
     /// Discovers storage devices using the supplied storage inspector.
     ///
     /// # Errors
