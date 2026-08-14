@@ -5,6 +5,7 @@ use inspector::{DebianIsoInspector, IsoInspector, LinuxStorageInspector};
 use model::{Capability, Plan};
 use registry::PackageRepository;
 use std::env;
+use std::io::{self, Write};
 use std::path::PathBuf;
 use std::process::ExitCode;
 use wizard::WizardState;
@@ -222,22 +223,58 @@ fn run_wizard() -> ExitCode {
 
     println!("DAIA Wizard");
     println!();
+
     let selectable = state.selectable_storage().collect::<Vec<_>>();
 
     println!("Storage devices:");
 
     if selectable.is_empty() {
         println!("  No selectable storage devices found.");
-    } else {
-        for storage in selectable {
-            println!(
-                "  {}  {}  {}",
-                storage.kind(),
-                storage.id(),
-                storage.device_path().display()
-            );
-        }
+        return ExitCode::SUCCESS;
     }
+
+    for (index, storage) in selectable.iter().enumerate() {
+        println!(
+            "  {}. {}  {}  {}",
+            index + 1,
+            storage.kind(),
+            storage.id(),
+            storage.device_path().display()
+        );
+    }
+
+    print!("Select storage target [1-{}]: ", selectable.len());
+
+    if let Err(error) = io::stdout().flush() {
+        eprintln!("Error writing prompt: {error}");
+        return ExitCode::FAILURE;
+    }
+
+    let mut input = String::new();
+
+    if let Err(error) = io::stdin().read_line(&mut input) {
+        eprintln!("Error reading selection: {error}");
+        return ExitCode::FAILURE;
+    }
+
+    let selection = match input.trim().parse::<usize>() {
+        Ok(selection) if (1..=selectable.len()).contains(&selection) => selection,
+        _ => {
+            eprintln!("Error: invalid storage selection");
+            return ExitCode::FAILURE;
+        }
+    };
+
+    let selected_id = selectable[selection - 1].id().clone();
+    state.select_storage(selected_id);
+
+    println!(
+        "Selected storage: {}",
+        state
+            .selected_storage()
+            .expect("validated storage selection should exist")
+    );
+
     ExitCode::SUCCESS
 }
 #[cfg(test)]
