@@ -66,10 +66,10 @@ mod tests {
             DiscoveredStorage::new("serial:usb-disk", StorageKind::Removable, "/dev/sdc"),
         ]);
 
-let selectable = state.selectable_storage().collect::<Vec<_>>();
+        let selectable = state.selectable_storage().collect::<Vec<_>>();
 
-assert_eq!(selectable.len(), 2);
-assert_eq!(selectable[0].kind(), StorageKind::Secondary);
-assert_eq!(selectable[1].kind(), StorageKind::Removable);
+        assert_eq!(selectable.len(), 2);
+        assert_eq!(selectable[0].kind(), StorageKind::Secondary);
+        assert_eq!(selectable[1].kind(), StorageKind::Removable);
     }
 }

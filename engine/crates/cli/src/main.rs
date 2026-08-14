@@ -222,17 +222,22 @@ fn run_wizard() -> ExitCode {
 
     println!("DAIA Wizard");
     println!();
+    let selectable = state.selectable_storage().collect::<Vec<_>>();
+
     println!("Storage devices:");
 
-    for storage in state.selectable_storage() {
-        println!(
-            "  {}  {}  {}",
-            storage.kind(),
-            storage.id(),
-            storage.device_path().display()
-        );
+    if selectable.is_empty() {
+        println!("  No selectable storage devices found.");
+    } else {
+        for storage in selectable {
+            println!(
+                "  {}  {}  {}",
+                storage.kind(),
+                storage.id(),
+                storage.device_path().display()
+            );
+        }
     }
-
     ExitCode::SUCCESS
 }
 #[cfg(test)]
