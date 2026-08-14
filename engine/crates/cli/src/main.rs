@@ -1,14 +1,16 @@
 //! DAIA command-line interface.
 
 use engine::{BootstrapConfig, BuildContext, Engine};
-use inspector::{DebianIsoInspector, IsoInspector};
+use inspector::{DebianIsoInspector, IsoInspector, LinuxStorageInspector};
 use model::{Capability, Plan};
 use registry::PackageRepository;
 use std::env;
 use std::path::PathBuf;
 use std::process::ExitCode;
+use wizard::WizardState;
 mod appliance_profile_repository;
 mod provider_registry;
+mod wizard;
 
 struct BuildOptions {
     rootfs: PathBuf,
@@ -20,11 +22,12 @@ struct BuildOptions {
 fn main() -> ExitCode {
     let arguments = env::args().skip(1).collect::<Vec<_>>();
 
-    run(arguments)
+    run(&arguments)
 }
 
-fn run(arguments: Vec<String>) -> ExitCode {
-    match arguments.as_slice() {
+fn run(arguments: &[String]) -> ExitCode {
+    match arguments {
+        [command] if command == "wizard" => run_wizard(),
         [capability_name] => run_plan(capability_name),
         [command, capability_name] if command == "plan" => run_plan(capability_name),
         [command, profile_name] if command == "plan-profile" => run_profile_plan(profile_name),
@@ -37,7 +40,7 @@ fn run(arguments: Vec<String>) -> ExitCode {
             output_iso,
         ] if command == "build-iso" => run_iso_build(
             capability_name,
-            BuildOptions {
+            &BuildOptions {
                 rootfs: PathBuf::from(rootfs),
                 source_iso: PathBuf::from(source_iso),
                 work_directory: PathBuf::from(work_directory),
@@ -105,7 +108,7 @@ fn run_plan(capability_name: &str) -> ExitCode {
     }
 }
 
-fn run_iso_build(capability_name: &str, options: BuildOptions) -> ExitCode {
+fn run_iso_build(capability_name: &str, options: &BuildOptions) -> ExitCode {
     let Some(engine) = load_engine() else {
         return ExitCode::FAILURE;
     };
@@ -121,7 +124,7 @@ fn run_iso_build(capability_name: &str, options: BuildOptions) -> ExitCode {
         }
     };
 
-    let context = match create_build_context(&options) {
+    let context = match create_build_context(options) {
         Ok(context) => context,
         Err(error) => {
             eprintln!("Error preparing build context: {error}");
@@ -199,7 +202,39 @@ fn load_engine() -> Option<Engine> {
         }
     }
 }
+fn run_wizard() -> ExitCode {
+    let Some(engine) = load_engine() else {
+        return ExitCode::FAILURE;
+    };
 
+    let inspector = LinuxStorageInspector::new();
+
+    let storage = match engine.discover_storage(&inspector) {
+        Ok(storage) => storage,
+        Err(error) => {
+            eprintln!("Error discovering storage: {error}");
+            return ExitCode::FAILURE;
+        }
+    };
+
+    let mut state = WizardState::new();
+    state.set_discovered_storage(storage);
+
+    println!("DAIA Wizard");
+    println!();
+    println!("Storage devices:");
+
+    for storage in state.discovered_storage() {
+        println!(
+            "  {}  {}  {}",
+            storage.kind(),
+            storage.id(),
+            storage.device_path().display()
+        );
+    }
+
+    ExitCode::SUCCESS
+}
 #[cfg(test)]
 mod tests {
     use super::{BuildOptions, run};
@@ -208,27 +243,33 @@ mod tests {
 
     #[test]
     fn plans_repository_appliance_profile() {
-        let result = run(vec!["plan-profile".to_owned(), "desktop".to_owned()]);
+        let arguments = vec!["plan-profile".to_owned(), "desktop".to_owned()];
+
+        let result = run(&arguments);
 
         assert_eq!(result, ExitCode::SUCCESS);
     }
-
     #[test]
     fn rejects_unknown_appliance_profile() {
-        let result = run(vec!["plan-profile".to_owned(), "does-not-exist".to_owned()]);
+        let arguments = vec!["plan-profile".to_owned(), "does-not-exist".to_owned()];
+
+        let result = run(&arguments);
 
         assert_eq!(result, ExitCode::FAILURE);
     }
     #[test]
     fn rejects_unknown_command() {
-        let result = run(vec!["unknown".to_owned()]);
+        let arguments = vec!["unknown".to_owned()];
+
+        let result = run(&arguments);
 
         assert_eq!(result, ExitCode::FAILURE);
     }
-
     #[test]
     fn rejects_incomplete_iso_build_arguments() {
-        let result = run(vec!["build-iso".to_owned(), "desktop".to_owned()]);
+        let arguments = vec!["build-iso".to_owned(), "desktop".to_owned()];
+
+        let result = run(&arguments);
 
         assert_eq!(result, ExitCode::FAILURE);
     }
