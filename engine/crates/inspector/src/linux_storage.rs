@@ -16,10 +16,13 @@ use crate::{
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct LinuxStorageInspector {
     command: PathBuf,
+    findmnt_command: PathBuf,
 }
 
 impl StorageInspector for LinuxStorageInspector {
     fn inspect(&self) -> Result<Vec<DiscoveredStorage>, StorageInspectError> {
+        let system_disk_path = self.system_disk_path()?;
+
         let output = Command::new(&self.command)
             .arg("--json")
             .arg("--paths")
@@ -43,7 +46,9 @@ impl StorageInspector for LinuxStorageInspector {
             .into_iter()
             .filter(|device| device.device_type == "disk")
             .map(|device| {
-                let kind = if device.rm {
+                let kind = if Path::new(&device.path) == system_disk_path {
+                    model::StorageKind::System
+                } else if device.rm {
                     model::StorageKind::Removable
                 } else {
                     model::StorageKind::Secondary
@@ -67,6 +72,7 @@ impl LinuxStorageInspector {
     pub fn new() -> Self {
         Self {
             command: PathBuf::from("lsblk"),
+            findmnt_command: PathBuf::from("findmnt"),
         }
     }
 
@@ -77,10 +83,82 @@ impl LinuxStorageInspector {
         self
     }
 
+    /// Uses a custom `findmnt` executable.
+    #[must_use]
+    pub fn with_findmnt_command(mut self, command: impl Into<PathBuf>) -> Self {
+        self.findmnt_command = command.into();
+        self
+    }
+
     /// Returns the configured executable.
     #[must_use]
     pub fn command(&self) -> &Path {
         &self.command
+    }
+
+    /// Returns the configured `findmnt` executable.
+    #[must_use]
+    pub fn findmnt_command(&self) -> &Path {
+        &self.findmnt_command
+    }
+
+    fn root_source(&self) -> Result<PathBuf, StorageInspectError> {
+        let output = Command::new(&self.findmnt_command)
+            .arg("--noheadings")
+            .arg("--output")
+            .arg("SOURCE")
+            .arg("/")
+            .output()?;
+
+        if !output.status.success() {
+            return Err(StorageInspectError::ProcessFailed {
+                command: self.findmnt_command.display().to_string(),
+                status: output.status,
+                stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+            });
+        }
+
+        let source = String::from_utf8_lossy(&output.stdout);
+        let source = source.trim();
+
+        if source.is_empty() {
+            return Err(StorageInspectError::InvalidOutput(
+                "findmnt returned an empty root filesystem source".to_owned(),
+            ));
+        }
+
+        Ok(PathBuf::from(source))
+    }
+
+    fn system_disk_path(&self) -> Result<PathBuf, StorageInspectError> {
+        let root_source = self.root_source()?;
+
+        let output = Command::new(&self.command)
+            .arg("--paths")
+            .arg("--noheadings")
+            .arg("--output")
+            .arg("PKNAME")
+            .arg(&root_source)
+            .output()?;
+
+        if !output.status.success() {
+            return Err(StorageInspectError::ProcessFailed {
+                command: self.command.display().to_string(),
+                status: output.status,
+                stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+            });
+        }
+
+        let parent = String::from_utf8_lossy(&output.stdout);
+        let parent = parent.trim();
+
+        if parent.is_empty() {
+            return Err(StorageInspectError::InvalidOutput(
+                "lsblk returned an empty root parent disk".to_owned(),
+            ));
+        }
+
+        Ok(PathBuf::from(parent))
     }
 }
 
@@ -120,6 +198,79 @@ mod tests {
         fs::set_permissions(&command, permissions).expect("test command should be executable");
 
         (directory, command)
+    }
+
+    #[test]
+    fn reports_failed_findmnt_command() {
+        let (_findmnt_directory, findmnt_command) = command_script(
+            r"#!/bin/sh
+echo 'findmnt failed' >&2
+exit 1
+",
+        );
+
+        let inspector = LinuxStorageInspector::new().with_findmnt_command(findmnt_command);
+
+        let error = inspector
+            .root_source()
+            .expect_err("root-source inspection should fail");
+
+        assert!(matches!(error, StorageInspectError::ProcessFailed { .. }));
+        assert!(error.to_string().contains("findmnt failed"));
+    }
+
+    #[test]
+    fn reports_empty_root_parent_disk() {
+        let (_findmnt_directory, findmnt_command) = command_script(
+            r"#!/bin/sh
+echo '/dev/sda2'
+",
+        );
+
+        let (_lsblk_directory, lsblk_command) = command_script(
+            r"#!/bin/sh
+exit 0
+",
+        );
+
+        let inspector = LinuxStorageInspector::new()
+            .with_command(lsblk_command)
+            .with_findmnt_command(findmnt_command);
+
+        let error = inspector
+            .system_disk_path()
+            .expect_err("empty root parent should fail");
+
+        assert!(matches!(error, StorageInspectError::InvalidOutput(_)));
+        assert!(error.to_string().contains("empty root parent disk"));
+    }
+
+    #[test]
+    fn discovers_root_filesystem_source() {
+        let (_directory, command) = command_script(
+            r"#!/bin/sh
+echo '/dev/nvme0n1p2'
+",
+        );
+
+        let inspector = LinuxStorageInspector::new().with_findmnt_command(command);
+
+        assert_eq!(
+            inspector
+                .root_source()
+                .expect("root source should be discovered"),
+            std::path::PathBuf::from("/dev/nvme0n1p2")
+        );
+    }
+
+    #[test]
+    fn configures_findmnt_command() {
+        let inspector = LinuxStorageInspector::new().with_findmnt_command("/custom/findmnt");
+
+        assert_eq!(
+            inspector.findmnt_command(),
+            std::path::Path::new("/custom/findmnt")
+        );
     }
 
     #[test]
@@ -163,30 +314,68 @@ mod tests {
 
     #[test]
     fn discovers_disks_from_lsblk_json() {
-        let (_directory, command) = command_script(
+        let (_findmnt_directory, findmnt_command) = command_script(
+            r"#!/bin/sh
+echo '/dev/sda2'
+",
+        );
+
+        let (_lsblk_directory, lsblk_command) = command_script(
             r#"#!/bin/sh
-cat <<'EOF'
+
+case "$*" in
+  *"PKNAME"*)
+    echo '/dev/sda'
+    ;;
+  *)
+    cat <<'EOF'
 {
   "blockdevices": [
-    {"path": "/dev/sda", "type": "disk", "rm": false},
-    {"path": "/dev/sda1", "type": "part", "rm": false},
-    {"path": "/dev/sdb", "type": "disk", "rm": true}
+    {
+      "path": "/dev/sda",
+      "type": "disk",
+      "rm": false,
+      "wwn": "0x5001b448bd521e4b",
+      "serial": "223020803525"
+    },
+    {
+      "path": "/dev/sdb",
+      "type": "disk",
+      "rm": false,
+      "wwn": "0x5001b448bd999999",
+      "serial": "SECONDARY001"
+    },
+    {
+      "path": "/dev/sdc",
+      "type": "disk",
+      "rm": true,
+      "wwn": null,
+      "serial": "USB001"
+    }
   ]
 }
 EOF
+    ;;
+esac
 "#,
         );
 
-        let inspector = LinuxStorageInspector::new().with_command(command);
+        let inspector = LinuxStorageInspector::new()
+            .with_command(lsblk_command)
+            .with_findmnt_command(findmnt_command);
+
         let storage = inspector.inspect().expect("storage should be discovered");
 
-        assert_eq!(storage.len(), 2);
+        assert_eq!(storage.len(), 3);
 
         assert_eq!(storage[0].device_path(), std::path::Path::new("/dev/sda"));
-        assert_eq!(storage[0].kind(), StorageKind::Secondary);
+        assert_eq!(storage[0].kind(), StorageKind::System);
 
         assert_eq!(storage[1].device_path(), std::path::Path::new("/dev/sdb"));
-        assert_eq!(storage[1].kind(), StorageKind::Removable);
+        assert_eq!(storage[1].kind(), StorageKind::Secondary);
+
+        assert_eq!(storage[2].device_path(), std::path::Path::new("/dev/sdc"));
+        assert_eq!(storage[2].kind(), StorageKind::Removable);
     }
 
     #[test]
