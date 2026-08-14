@@ -203,10 +203,73 @@ fn load_engine() -> Option<Engine> {
         }
     }
 }
+
+fn select_appliance_profile(state: &mut WizardState) -> Result<(), String> {
+    let repository = appliance_profile_repository::load()
+        .map_err(|error| format!("Error loading appliance profiles: {error}"))?;
+
+    println!("Appliance profiles:");
+
+    for (index, profile) in repository.profiles().iter().enumerate() {
+        println!(
+            "  {}. {} - {}",
+            index + 1,
+            profile.name(),
+            profile.description()
+        );
+    }
+
+    print!(
+        "Select appliance profile [1-{}]: ",
+        repository.profiles().len()
+    );
+
+    io::stdout()
+        .flush()
+        .map_err(|error| format!("Error writing prompt: {error}"))?;
+
+    let mut input = String::new();
+
+    io::stdin()
+        .read_line(&mut input)
+        .map_err(|error| format!("Error reading selection: {error}"))?;
+
+    let selection = input
+        .trim()
+        .parse::<usize>()
+        .ok()
+        .filter(|selection| (1..=repository.profiles().len()).contains(selection))
+        .ok_or_else(|| "Error: invalid appliance profile selection".to_owned())?;
+
+    let selected_profile = &repository.profiles()[selection - 1];
+
+    state.set_profile_name(selected_profile.name());
+
+    println!(
+        "Selected profile: {}",
+        state
+            .profile_name()
+            .expect("validated profile selection should exist")
+    );
+    println!();
+
+    Ok(())
+}
+
 fn run_wizard() -> ExitCode {
     let Some(engine) = load_engine() else {
         return ExitCode::FAILURE;
     };
+
+    let mut state = WizardState::new();
+
+    println!("DAIA Wizard");
+    println!();
+
+    if let Err(error) = select_appliance_profile(&mut state) {
+        eprintln!("{error}");
+        return ExitCode::FAILURE;
+    }
 
     let inspector = LinuxStorageInspector::new();
 
@@ -218,11 +281,7 @@ fn run_wizard() -> ExitCode {
         }
     };
 
-    let mut state = WizardState::new();
     state.set_discovered_storage(storage);
-
-    println!("DAIA Wizard");
-    println!();
 
     let selectable = state.selectable_storage().collect::<Vec<_>>();
 

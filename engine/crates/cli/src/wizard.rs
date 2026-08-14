@@ -4,20 +4,31 @@ use model::{DiscoveredStorage, DiscoveredStorageId, StorageKind};
 /// State accumulated while configuring an appliance through the wizard.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct WizardState {
+    profile_name: Option<String>,
     discovered_storage: Vec<DiscoveredStorage>,
     selected_storage: Option<DiscoveredStorageId>,
 }
-
 impl WizardState {
     /// Creates an empty wizard state.
     #[must_use]
     pub const fn new() -> Self {
         Self {
+            profile_name: None,
             discovered_storage: Vec::new(),
             selected_storage: None,
         }
     }
 
+    /// Sets the selected appliance profile.
+    pub fn set_profile_name(&mut self, profile_name: impl Into<String>) {
+        self.profile_name = Some(profile_name.into());
+    }
+
+    /// Returns the selected appliance profile name.
+    #[must_use]
+    pub fn profile_name(&self) -> Option<&str> {
+        self.profile_name.as_deref()
+    }
     /// Replaces the storage discovered for the current system.
     pub fn set_discovered_storage(&mut self, storage: Vec<DiscoveredStorage>) {
         self.discovered_storage = storage;
@@ -53,6 +64,15 @@ mod tests {
         let state = WizardState::new();
 
         assert_eq!(state.selectable_storage().count(), 0);
+    }
+
+    #[test]
+    fn wizard_state_stores_profile_name() {
+        let mut state = WizardState::new();
+
+        state.set_profile_name("desktop");
+
+        assert_eq!(state.profile_name(), Some("desktop"));
     }
 
     #[test]
