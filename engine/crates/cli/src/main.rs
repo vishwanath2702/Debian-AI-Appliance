@@ -256,6 +256,42 @@ fn select_appliance_profile(state: &mut WizardState) -> Result<(), String> {
     Ok(())
 }
 
+fn review_wizard_state(state: &WizardState) {
+    println!();
+    println!("Review:");
+    println!(
+        "  Profile : {}",
+        state
+            .profile_name()
+            .expect("profile should be selected before review")
+    );
+    println!(
+        "  Storage : {}",
+        state
+            .selected_storage()
+            .expect("storage should be selected before review")
+    );
+}
+
+fn confirm_wizard_state() -> Result<bool, String> {
+    print!("Continue with this configuration? [y/N]: ");
+
+    io::stdout()
+        .flush()
+        .map_err(|error| format!("Error writing prompt: {error}"))?;
+
+    let mut input = String::new();
+
+    io::stdin()
+        .read_line(&mut input)
+        .map_err(|error| format!("Error reading confirmation: {error}"))?;
+
+    Ok(matches!(
+        input.trim().to_ascii_lowercase().as_str(),
+        "y" | "yes"
+    ))
+}
+
 fn run_wizard() -> ExitCode {
     let Some(engine) = load_engine() else {
         return ExitCode::FAILURE;
@@ -334,8 +370,24 @@ fn run_wizard() -> ExitCode {
             .expect("validated storage selection should exist")
     );
 
-    ExitCode::SUCCESS
+    review_wizard_state(&state);
+
+    match confirm_wizard_state() {
+        Ok(true) => {
+            println!("Configuration confirmed.");
+            ExitCode::SUCCESS
+        }
+        Ok(false) => {
+            println!("Configuration cancelled.");
+            ExitCode::SUCCESS
+        }
+        Err(error) => {
+            eprintln!("{error}");
+            ExitCode::FAILURE
+        }
+    }
 }
+
 #[cfg(test)]
 mod tests {
     use super::{BuildOptions, run};
