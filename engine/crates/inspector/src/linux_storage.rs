@@ -7,7 +7,10 @@ use std::{
 
 use model::DiscoveredStorage;
 
-use crate::{StorageInspectError, StorageInspector, lsblk::LsblkOutput};
+use crate::{
+    StorageInspectError, StorageInspector,
+    lsblk::{LsblkDevice, LsblkOutput},
+};
 
 /// Discovers Linux storage using `lsblk`.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -21,7 +24,7 @@ impl StorageInspector for LinuxStorageInspector {
             .arg("--json")
             .arg("--paths")
             .arg("--output")
-            .arg("PATH,TYPE,RM")
+            .arg("PATH,TYPE,RM,WWN,SERIAL")
             .output()?;
 
         if !output.status.success() {
@@ -46,7 +49,7 @@ impl StorageInspector for LinuxStorageInspector {
                     model::StorageKind::Secondary
                 };
 
-                DiscoveredStorage::new(device.path.clone(), kind, device.path)
+                DiscoveredStorage::new(storage_identity(&device), kind, device.path)
             })
             .collect())
     }
@@ -81,15 +84,26 @@ impl LinuxStorageInspector {
     }
 }
 
+fn storage_identity(device: &LsblkDevice) -> String {
+    if let Some(wwn) = device.wwn.as_deref() {
+        return format!("wwn:{wwn}");
+    }
+
+    if let Some(serial) = device.serial.as_deref() {
+        return format!("serial:{serial}");
+    }
+
+    format!("path:{}", device.path)
+}
+
 #[cfg(test)]
 mod tests {
     use std::{fs, os::unix::fs::PermissionsExt};
 
+    use super::{LinuxStorageInspector, storage_identity};
+    use crate::{StorageInspectError, StorageInspector, lsblk::LsblkDevice};
     use model::StorageKind;
     use tempfile::TempDir;
-
-    use super::LinuxStorageInspector;
-    use crate::{StorageInspectError, StorageInspector};
 
     fn command_script(contents: &str) -> (TempDir, std::path::PathBuf) {
         let directory = TempDir::new().expect("temporary directory should be created");
@@ -106,6 +120,45 @@ mod tests {
         fs::set_permissions(&command, permissions).expect("test command should be executable");
 
         (directory, command)
+    }
+
+    #[test]
+    fn storage_identity_prefers_wwn() {
+        let device = LsblkDevice {
+            path: "/dev/nvme0n1".to_owned(),
+            device_type: "disk".to_owned(),
+            rm: false,
+            wwn: Some("eui.2c3ebffff000220b".to_owned()),
+            serial: Some("AA000000000000008715".to_owned()),
+        };
+
+        assert_eq!(storage_identity(&device), "wwn:eui.2c3ebffff000220b");
+    }
+
+    #[test]
+    fn storage_identity_falls_back_to_serial() {
+        let device = LsblkDevice {
+            path: "/dev/sda".to_owned(),
+            device_type: "disk".to_owned(),
+            rm: true,
+            wwn: None,
+            serial: Some("E0D55E6B6466E78088300791".to_owned()),
+        };
+
+        assert_eq!(storage_identity(&device), "serial:E0D55E6B6466E78088300791");
+    }
+
+    #[test]
+    fn storage_identity_uses_path_as_runtime_fallback() {
+        let device = LsblkDevice {
+            path: "/dev/sdz".to_owned(),
+            device_type: "disk".to_owned(),
+            rm: false,
+            wwn: None,
+            serial: None,
+        };
+
+        assert_eq!(storage_identity(&device), "path:/dev/sdz");
     }
 
     #[test]
@@ -148,7 +201,10 @@ exit 1
         let inspector = LinuxStorageInspector::new().with_command(command);
         let error = inspector.inspect().expect_err("inspection should fail");
 
-        assert!(matches!(error, StorageInspectError::ProcessFailed { .. }));
+        assert!(
+            matches!(error, StorageInspectError::ProcessFailed { .. }),
+            "unexpected error: {error:?}"
+        );
         assert!(error.to_string().contains("lsblk failed"));
     }
 
