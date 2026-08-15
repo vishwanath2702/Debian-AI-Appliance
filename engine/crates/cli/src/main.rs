@@ -1,6 +1,6 @@
 //! DAIA command-line interface.
 
-use engine::{BootstrapConfig, BuildContext, Engine};
+use engine::{BootstrapConfig, BuildContext, DryRunInstallationExecutor, Engine};
 use inspector::{DebianIsoInspector, IsoInspector, LinuxStorageInspector};
 use model::{Capability, Plan};
 use registry::PackageRepository;
@@ -409,9 +409,18 @@ fn run_wizard() -> ExitCode {
                 }
             };
 
+            let mut executor = DryRunInstallationExecutor::default();
+
+            if let Err(error) = engine.execute_installation(&prepared, &mut executor) {
+                match error {}
+            }
+
             println!("Configuration confirmed.");
             println!();
-            println!("{}", prepared.summary());
+
+            if let Some(summary) = executor.summary() {
+                println!("{summary}");
+            }
 
             ExitCode::SUCCESS
         }
