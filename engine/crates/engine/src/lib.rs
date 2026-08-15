@@ -150,6 +150,21 @@ impl InstallationPlan {
     pub fn operations(&self) -> &[InstallationOperation] {
         &self.operations
     }
+    /// Executes the planned operations in order.
+    ///
+    /// # Errors
+    ///
+    /// Returns the first error produced by the operation executor.
+    pub fn execute<E>(&self, executor: &mut E) -> Result<(), E::Error>
+    where
+        E: InstallationOperationExecutor,
+    {
+        for operation in &self.operations {
+            executor.execute_operation(operation)?;
+        }
+
+        Ok(())
+    }
 }
 
 /// Executes a prepared installation.
@@ -529,6 +544,36 @@ mod tests {
             self.operations.push(operation.clone());
             Ok(())
         }
+    }
+
+    #[test]
+    fn installation_plan_executes_operations_in_order() {
+        let plan = InstallationPlan::new(vec![
+            InstallationOperation::PrepareDisk {
+                storage_id: DiscoveredStorageId::new("serial:usb-disk"),
+            },
+            InstallationOperation::CreateFilesystems {
+                filesystem: "ext4".to_owned(),
+            },
+            InstallationOperation::MountFilesystems {
+                mount_point: "/target".to_owned(),
+            },
+            InstallationOperation::BootstrapSystem {
+                root: "/target".to_owned(),
+            },
+            InstallationOperation::ApplyPlans { count: 1 },
+        ]);
+
+        let expected = plan.operations().to_vec();
+
+        let mut executor = RecordingOperationExecutor {
+            operations: Vec::new(),
+        };
+
+        plan.execute(&mut executor)
+            .expect("installation plan should execute");
+
+        assert_eq!(executor.operations, expected);
     }
 
     #[test]
