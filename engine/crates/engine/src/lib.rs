@@ -119,6 +119,19 @@ pub enum InstallationOperation {
     /// Apply the appliance execution plans.
     ApplyPlans { count: usize },
 }
+/// Executes one planned installation operation.
+pub trait InstallationOperationExecutor {
+    /// Error produced while executing an operation.
+    type Error;
+
+    /// Executes one installation operation.
+    ///
+    /// # Errors
+    ///
+    /// Returns an executor-specific error if the operation fails.
+    fn execute_operation(&mut self, operation: &InstallationOperation) -> Result<(), Self::Error>;
+}
+
 /// Ordered non-executed operations for installing an appliance.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct InstallationPlan {
@@ -463,8 +476,8 @@ mod tests {
 
     use super::{
         BootstrapConfig, BuildContext, BuildError, DryRunInstallationExecutor, Engine,
-        InstallationExecutor, InstallationOperation, InstallationPlan, PreparedInstallation,
-        RootfsRunError,
+        InstallationExecutor, InstallationOperation, InstallationOperationExecutor,
+        InstallationPlan, PreparedInstallation, RootfsRunError,
     };
     struct TestStorageInspector;
 
@@ -500,6 +513,39 @@ mod tests {
             self.executed = true;
             Ok(())
         }
+    }
+
+    struct RecordingOperationExecutor {
+        operations: Vec<InstallationOperation>,
+    }
+
+    impl InstallationOperationExecutor for RecordingOperationExecutor {
+        type Error = std::convert::Infallible;
+
+        fn execute_operation(
+            &mut self,
+            operation: &InstallationOperation,
+        ) -> Result<(), Self::Error> {
+            self.operations.push(operation.clone());
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn records_installation_operations_through_executor() {
+        let mut executor = RecordingOperationExecutor {
+            operations: Vec::new(),
+        };
+
+        let operation = InstallationOperation::PrepareDisk {
+            storage_id: DiscoveredStorageId::new("serial:usb-disk"),
+        };
+
+        executor
+            .execute_operation(&operation)
+            .expect("recording executor should accept operation");
+
+        assert_eq!(executor.operations, vec![operation]);
     }
 
     #[test]
