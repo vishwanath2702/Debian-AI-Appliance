@@ -394,19 +394,26 @@ fn run_wizard() -> ExitCode {
 
     match confirm_wizard_state() {
         Ok(true) => {
-            let Some(selected_storage_id) = state.selected_storage() else {
-                eprintln!("Error: no storage target is selected");
-                return ExitCode::FAILURE;
-            };
-
-            if state.storage(selected_storage_id).is_none() {
-                eprintln!("Error: selected storage is no longer available");
-                return ExitCode::FAILURE;
-            }
             let Some(config) = state.into_config() else {
                 eprintln!("Error: wizard configuration is incomplete");
                 return ExitCode::FAILURE;
             };
+
+            let intent = config.installation_intent();
+
+            let storage = match engine.discover_storage(&LinuxStorageInspector::new()) {
+                Ok(storage) => storage,
+                Err(error) => {
+                    eprintln!("Error discovering storage: {error}");
+                    return ExitCode::FAILURE;
+                }
+            };
+
+            if let Err(error) = engine.validate_installation_storage(&intent, &storage) {
+                eprintln!("Error validating installation storage: {error}");
+                return ExitCode::FAILURE;
+            }
+
             let plan_count = match plan_wizard_config(&engine, &config) {
                 Ok(plan_count) => plan_count,
                 Err(error) => {
@@ -414,14 +421,15 @@ fn run_wizard() -> ExitCode {
                     return ExitCode::FAILURE;
                 }
             };
-            let intent = config.installation_intent();
 
             println!("Configuration confirmed.");
             println!("Profile : {}", intent.profile_name());
             println!("Storage : {}", intent.storage_id());
             println!("Plans   : {plan_count}");
+
             ExitCode::SUCCESS
         }
+
         Ok(false) => {
             println!("Configuration cancelled.");
             ExitCode::SUCCESS
