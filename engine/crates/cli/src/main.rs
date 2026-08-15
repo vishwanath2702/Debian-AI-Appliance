@@ -319,7 +319,7 @@ fn prepare_wizard_installation(
 
 fn installation_operation_name(operation: &InstallationOperation) -> String {
     match operation {
-        InstallationOperation::PrepareDisk { storage_id } => {
+        InstallationOperation::PrepareDisk { storage_id, .. } => {
             format!("Prepare disk {storage_id}")
         }
         InstallationOperation::CreateFilesystems { filesystem } => {

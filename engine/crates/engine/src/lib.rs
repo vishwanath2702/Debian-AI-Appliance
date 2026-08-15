@@ -3,17 +3,13 @@
 mod bootstrap;
 mod bootstrapper;
 mod context;
+mod installation;
 mod mmdebstrap;
 mod workflow;
-mod installation;
 
 pub use installation::{
-    DryRunInstallationExecutor,
-    InstallationExecutor,
-    InstallationOperation,
-    InstallationOperationExecutor,
-    InstallationPlan,
-    PreparedInstallation,
+    DryRunInstallationExecutor, InstallationExecutor, InstallationOperation,
+    InstallationOperationExecutor, InstallationPlan, PreparedInstallation,
 };
 use std::{
     error::Error,
@@ -34,7 +30,6 @@ use planner::{PlanError, Planner};
 use registry::{PackageRepository, Registry};
 use resolver::Resolver;
 use workflow::IsoWorkflow;
-
 
 /// Error returned when an appliance build cannot be completed.
 #[derive(Debug)]
@@ -404,6 +399,7 @@ mod tests {
         let plan = InstallationPlan::new(vec![
             InstallationOperation::PrepareDisk {
                 storage_id: DiscoveredStorageId::new("serial:usb-disk"),
+                device_path: "/dev/sdb".into(),
             },
             InstallationOperation::CreateFilesystems {
                 filesystem: "ext4".to_owned(),
@@ -432,6 +428,7 @@ mod tests {
             vec![
                 InstallationOperation::PrepareDisk {
                     storage_id: DiscoveredStorageId::new("serial:usb-disk"),
+                    device_path: "/dev/sdb".into(),
                 },
                 InstallationOperation::CreateFilesystems {
                     filesystem: "ext4".to_owned(),
@@ -466,6 +463,7 @@ mod tests {
         let plan = InstallationPlan::new(vec![
             InstallationOperation::PrepareDisk {
                 storage_id: DiscoveredStorageId::new("serial:usb-disk"),
+                device_path: "/dev/sdb".into(),
             },
             InstallationOperation::CreateFilesystems {
                 filesystem: "ext4".to_owned(),
@@ -499,8 +497,8 @@ mod tests {
 
         let operation = InstallationOperation::PrepareDisk {
             storage_id: DiscoveredStorageId::new("serial:usb-disk"),
+            device_path: "/dev/sdb".into(),
         };
-
         executor
             .execute_operation(&operation)
             .expect("recording executor should accept operation");
@@ -534,6 +532,7 @@ mod tests {
             &[
                 InstallationOperation::PrepareDisk {
                     storage_id: DiscoveredStorageId::new("serial:usb-disk"),
+                    device_path: "/dev/sdb".into(),
                 },
                 InstallationOperation::CreateFilesystems {
                     filesystem: "ext4".to_owned(),
@@ -554,6 +553,7 @@ mod tests {
         let plan = InstallationPlan::new(vec![
             InstallationOperation::PrepareDisk {
                 storage_id: DiscoveredStorageId::new("serial:usb-disk"),
+                device_path: "/dev/sdb".into(),
             },
             InstallationOperation::CreateFilesystems {
                 filesystem: "ext4".to_owned(),
@@ -572,6 +572,7 @@ mod tests {
             &[
                 InstallationOperation::PrepareDisk {
                     storage_id: DiscoveredStorageId::new("serial:usb-disk"),
+                    device_path: "/dev/sdb".into(),
                 },
                 InstallationOperation::CreateFilesystems {
                     filesystem: "ext4".to_owned(),

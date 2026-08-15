@@ -1,9 +1,7 @@
-use model::{
-    DiscoveredStorage,
-    DiscoveredStorageId,
-    InstallationIntent,
-    Plan,
-};
+use model::{DiscoveredStorage, DiscoveredStorageId, InstallationIntent, Plan};
+
+use std::path::PathBuf;
+
 /// A non-executed operation required to prepare an installation target.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum InstallationOperation {
@@ -11,6 +9,9 @@ pub enum InstallationOperation {
     PrepareDisk {
         /// Stable identifier of the selected physical storage.
         storage_id: DiscoveredStorageId,
+
+        /// Validated Linux device path for the selected storage.
+        device_path: PathBuf,
     },
 
     /// Create the filesystems required by the installed system.
@@ -35,10 +36,7 @@ pub trait InstallationOperationExecutor {
     /// # Errors
     ///
     /// Returns an executor-specific error if the operation fails.
-    fn execute_operation(
-        &mut self,
-        operation: &InstallationOperation,
-    ) -> Result<(), Self::Error>;
+    fn execute_operation(&mut self, operation: &InstallationOperation) -> Result<(), Self::Error>;
 }
 /// Ordered non-executed operations for installing an appliance.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -104,6 +102,7 @@ impl PreparedInstallation {
         InstallationPlan::new(vec![
             InstallationOperation::PrepareDisk {
                 storage_id: self.intent.storage_id().clone(),
+                device_path: self.storage.device_path().to_path_buf(),
             },
             InstallationOperation::CreateFilesystems {
                 filesystem: "ext4".to_owned(),
@@ -161,10 +160,7 @@ pub trait InstallationExecutor {
     /// # Errors
     ///
     /// Returns an executor-specific error if execution fails.
-    fn execute(
-        &mut self,
-        installation: &PreparedInstallation,
-    ) -> Result<(), Self::Error>;
+    fn execute(&mut self, installation: &PreparedInstallation) -> Result<(), Self::Error>;
 }
 /// Non-destructive installation executor used for validation and previews.
 #[derive(Clone, Debug, Default)]
@@ -197,10 +193,7 @@ impl DryRunInstallationExecutor {
 impl InstallationExecutor for DryRunInstallationExecutor {
     type Error = std::convert::Infallible;
 
-    fn execute(
-        &mut self,
-        installation: &PreparedInstallation,
-    ) -> Result<(), Self::Error> {
+    fn execute(&mut self, installation: &PreparedInstallation) -> Result<(), Self::Error> {
         self.summary = Some(installation.summary());
 
         let plan = installation.installation_plan();
@@ -215,10 +208,7 @@ impl InstallationExecutor for DryRunInstallationExecutor {
 impl InstallationOperationExecutor for DryRunInstallationExecutor {
     type Error = std::convert::Infallible;
 
-    fn execute_operation(
-        &mut self,
-        operation: &InstallationOperation,
-    ) -> Result<(), Self::Error> {
+    fn execute_operation(&mut self, operation: &InstallationOperation) -> Result<(), Self::Error> {
         self.executed_operations.push(operation.clone());
         Ok(())
     }
