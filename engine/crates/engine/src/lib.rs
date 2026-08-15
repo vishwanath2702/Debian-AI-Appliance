@@ -56,7 +56,9 @@ impl PreparedInstallation {
             InstallationOperation::PrepareDisk {
                 storage_id: self.intent.storage_id().clone(),
             },
-            InstallationOperation::CreateFilesystems,
+            InstallationOperation::CreateFilesystems {
+                filesystem: "ext4".to_owned(),
+            },
             InstallationOperation::MountFilesystems,
             InstallationOperation::BootstrapSystem,
             InstallationOperation::ApplyPlans,
@@ -103,8 +105,7 @@ pub enum InstallationOperation {
     },
 
     /// Create the filesystems required by the installed system.
-    CreateFilesystems,
-
+    CreateFilesystems { filesystem: String },
     /// Mount the prepared target filesystems.
     MountFilesystems,
 
@@ -524,7 +525,9 @@ mod tests {
                 InstallationOperation::PrepareDisk {
                     storage_id: DiscoveredStorageId::new("serial:usb-disk"),
                 },
-                InstallationOperation::CreateFilesystems,
+                InstallationOperation::CreateFilesystems {
+                    filesystem: "ext4".to_owned(),
+                },
                 InstallationOperation::MountFilesystems,
                 InstallationOperation::BootstrapSystem,
                 InstallationOperation::ApplyPlans,
@@ -538,7 +541,9 @@ mod tests {
             InstallationOperation::PrepareDisk {
                 storage_id: DiscoveredStorageId::new("serial:usb-disk"),
             },
-            InstallationOperation::CreateFilesystems,
+            InstallationOperation::CreateFilesystems {
+                filesystem: "ext4".to_owned(),
+            },
             InstallationOperation::MountFilesystems,
             InstallationOperation::BootstrapSystem,
             InstallationOperation::ApplyPlans,
@@ -550,7 +555,9 @@ mod tests {
                 InstallationOperation::PrepareDisk {
                     storage_id: DiscoveredStorageId::new("serial:usb-disk"),
                 },
-                InstallationOperation::CreateFilesystems,
+                InstallationOperation::CreateFilesystems {
+                    filesystem: "ext4".to_owned(),
+                },
                 InstallationOperation::MountFilesystems,
                 InstallationOperation::BootstrapSystem,
                 InstallationOperation::ApplyPlans,
