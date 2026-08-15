@@ -58,6 +58,13 @@ impl WizardState {
             storage_id: self.selected_storage?,
         })
     }
+    /// Finds discovered storage by its stable identifier.
+    #[must_use]
+    pub fn storage(&self, storage_id: &DiscoveredStorageId) -> Option<&DiscoveredStorage> {
+        self.discovered_storage
+            .iter()
+            .find(|storage| storage.id() == storage_id)
+    }
 }
 
 /// Confirmed wizard configuration ready for planning or execution.
@@ -96,6 +103,24 @@ mod tests {
         ApplianceProfile, Capability, DiscoveredStorage, DiscoveredStorageId, StorageKind,
     };
     use registry::ApplianceProfileRepository;
+
+    #[test]
+    fn wizard_state_resolves_discovered_storage_by_id() {
+        let mut state = WizardState::new();
+
+        state.set_discovered_storage(vec![DiscoveredStorage::new(
+            "serial:usb-disk",
+            StorageKind::Removable,
+            "/dev/sdb",
+        )]);
+
+        let storage = state
+            .storage(&DiscoveredStorageId::new("serial:usb-disk"))
+            .expect("storage should resolve by identifier");
+
+        assert_eq!(storage.device_path(), std::path::Path::new("/dev/sdb"));
+        assert_eq!(storage.kind(), StorageKind::Removable);
+    }
 
     #[test]
     fn wizard_configuration_resolves_appliance_profile() {

@@ -392,6 +392,15 @@ fn run_wizard() -> ExitCode {
 
     match confirm_wizard_state() {
         Ok(true) => {
+            let Some(selected_storage_id) = state.selected_storage() else {
+                eprintln!("Error: no storage target is selected");
+                return ExitCode::FAILURE;
+            };
+
+            if state.storage(selected_storage_id).is_none() {
+                eprintln!("Error: selected storage is no longer available");
+                return ExitCode::FAILURE;
+            }
             let Some(config) = state.into_config() else {
                 eprintln!("Error: wizard configuration is incomplete");
                 return ExitCode::FAILURE;
