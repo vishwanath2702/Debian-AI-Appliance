@@ -79,7 +79,18 @@ impl PreparedInstallation {
         )
     }
 }
+/// Executes a prepared installation.
+pub trait InstallationExecutor {
+    /// Error produced by the executor.
+    type Error;
 
+    /// Executes the prepared installation.
+    ///
+    /// # Errors
+    ///
+    /// Returns an executor-specific error if execution fails.
+    fn execute(&mut self, installation: &PreparedInstallation) -> Result<(), Self::Error>;
+}
 /// Error returned when an appliance build cannot be completed.
 #[derive(Debug)]
 pub enum BuildError {
@@ -301,6 +312,22 @@ impl Engine {
         Ok(PreparedInstallation::new(intent, selected, plans))
     }
 
+    /// Executes a prepared installation using the supplied executor.
+    ///
+    /// # Errors
+    ///
+    /// Returns the executor error if installation execution fails.
+    pub fn execute_installation<E>(
+        &self,
+        installation: &PreparedInstallation,
+        executor: &mut E,
+    ) -> Result<(), E::Error>
+    where
+        E: InstallationExecutor,
+    {
+        executor.execute(installation)
+    }
+
     /// Builds and executes an appliance plan as a bootable ISO image.
     ///
     /// # Errors
@@ -345,9 +372,9 @@ mod tests {
     use registry::{PackageRepository, Registry};
 
     use super::{
-        BootstrapConfig, BuildContext, BuildError, Engine, PreparedInstallation, RootfsRunError,
+        BootstrapConfig, BuildContext, BuildError, Engine, InstallationExecutor,
+        PreparedInstallation, RootfsRunError,
     };
-
     struct TestStorageInspector;
 
     impl StorageInspector for TestStorageInspector {
@@ -369,6 +396,39 @@ mod tests {
             ],
         }])
         .expect("desktop test registry should be valid")
+    }
+
+    struct RecordingInstallationExecutor {
+        executed: bool,
+    }
+
+    impl InstallationExecutor for RecordingInstallationExecutor {
+        type Error = std::convert::Infallible;
+
+        fn execute(&mut self, _installation: &PreparedInstallation) -> Result<(), Self::Error> {
+            self.executed = true;
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn executes_prepared_installation_through_executor() {
+        let engine = Engine::from_registry(desktop_registry());
+
+        let intent =
+            InstallationIntent::new("desktop", DiscoveredStorageId::new("serial:usb-disk"));
+
+        let storage = DiscoveredStorage::new("serial:usb-disk", StorageKind::Removable, "/dev/sdb");
+
+        let prepared = PreparedInstallation::new(intent, storage, Vec::new());
+
+        let mut executor = RecordingInstallationExecutor { executed: false };
+
+        engine
+            .execute_installation(&prepared, &mut executor)
+            .expect("prepared installation should execute");
+
+        assert!(executor.executed);
     }
 
     #[test]
