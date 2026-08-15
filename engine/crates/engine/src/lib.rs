@@ -566,6 +566,72 @@ mod tests {
         }
     }
 
+    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+    enum RecordingOperationError {
+        Failed,
+    }
+
+    struct FailingOperationExecutor {
+        operations: Vec<InstallationOperation>,
+        fail_at: usize,
+    }
+
+    impl InstallationOperationExecutor for FailingOperationExecutor {
+        type Error = RecordingOperationError;
+
+        fn execute_operation(
+            &mut self,
+            operation: &InstallationOperation,
+        ) -> Result<(), Self::Error> {
+            if self.operations.len() == self.fail_at {
+                return Err(RecordingOperationError::Failed);
+            }
+
+            self.operations.push(operation.clone());
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn installation_plan_stops_after_operation_failure() {
+        let plan = InstallationPlan::new(vec![
+            InstallationOperation::PrepareDisk {
+                storage_id: DiscoveredStorageId::new("serial:usb-disk"),
+            },
+            InstallationOperation::CreateFilesystems {
+                filesystem: "ext4".to_owned(),
+            },
+            InstallationOperation::MountFilesystems {
+                mount_point: "/target".to_owned(),
+            },
+            InstallationOperation::BootstrapSystem {
+                root: "/target".to_owned(),
+            },
+            InstallationOperation::ApplyPlans { count: 1 },
+        ]);
+
+        let mut executor = FailingOperationExecutor {
+            operations: Vec::new(),
+            fail_at: 2,
+        };
+
+        let error = plan
+            .execute(&mut executor)
+            .expect_err("installation plan should stop on operation failure");
+
+        assert_eq!(error, RecordingOperationError::Failed);
+        assert_eq!(
+            executor.operations,
+            vec![
+                InstallationOperation::PrepareDisk {
+                    storage_id: DiscoveredStorageId::new("serial:usb-disk"),
+                },
+                InstallationOperation::CreateFilesystems {
+                    filesystem: "ext4".to_owned(),
+                },
+            ]
+        );
+    }
     #[test]
     fn dry_run_executor_records_executed_operations_in_order() {
         let engine = Engine::from_registry(desktop_registry());
