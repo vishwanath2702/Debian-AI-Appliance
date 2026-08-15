@@ -328,7 +328,9 @@ fn installation_operation_name(operation: &InstallationOperation) -> String {
         InstallationOperation::MountFilesystems { mount_point } => {
             format!("Mount filesystems at {mount_point}")
         }
-        InstallationOperation::BootstrapSystem => "Bootstrap system".to_owned(),
+        InstallationOperation::BootstrapSystem { root } => {
+            format!("Bootstrap system at {root}")
+        }
         InstallationOperation::ApplyPlans => "Apply appliance plans".to_owned(),
     }
 }
