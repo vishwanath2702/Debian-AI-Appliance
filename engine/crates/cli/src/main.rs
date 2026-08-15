@@ -331,7 +331,13 @@ fn installation_operation_name(operation: &InstallationOperation) -> String {
         InstallationOperation::BootstrapSystem { root } => {
             format!("Bootstrap system at {root}")
         }
-        InstallationOperation::ApplyPlans => "Apply appliance plans".to_owned(),
+        InstallationOperation::ApplyPlans { count } => {
+            if *count == 1 {
+                "Apply 1 appliance plan".to_owned()
+            } else {
+                format!("Apply {count} appliance plans")
+            }
+        }
     }
 }
 fn print_installation_operations(executor: &DryRunInstallationExecutor) {
