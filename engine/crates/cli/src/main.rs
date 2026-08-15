@@ -292,7 +292,10 @@ fn confirm_wizard_state() -> Result<bool, String> {
     ))
 }
 
-fn plan_wizard_config(engine: &Engine, config: &wizard::WizardConfig) -> Result<usize, String> {
+fn prepare_wizard_installation(
+    engine: &Engine,
+    config: &wizard::WizardConfig,
+) -> Result<engine::PreparedInstallation, String> {
     let repository = appliance_profile_repository::load()
         .map_err(|error| format!("Error loading appliance profiles: {error}"))?;
 
@@ -305,11 +308,11 @@ fn plan_wizard_config(engine: &Engine, config: &wizard::WizardConfig) -> Result<
 
     let intent = config.installation_intent();
 
-    let plans = engine
-        .plan_installation(&intent, profile)
-        .map_err(|error| format!("Error planning installation: {error}"))?;
+    let storage = engine
+        .discover_storage(&LinuxStorageInspector::new())
+        .map_err(|error| format!("Error discovering storage: {error}"))?;
 
-    Ok(plans.len())
+    engine.prepare_installation(intent, profile, &storage)
 }
 
 fn run_wizard() -> ExitCode {
@@ -398,24 +401,8 @@ fn run_wizard() -> ExitCode {
                 eprintln!("Error: wizard configuration is incomplete");
                 return ExitCode::FAILURE;
             };
-
-            let intent = config.installation_intent();
-
-            let storage = match engine.discover_storage(&LinuxStorageInspector::new()) {
-                Ok(storage) => storage,
-                Err(error) => {
-                    eprintln!("Error discovering storage: {error}");
-                    return ExitCode::FAILURE;
-                }
-            };
-
-            if let Err(error) = engine.validate_installation_storage(&intent, &storage) {
-                eprintln!("Error validating installation storage: {error}");
-                return ExitCode::FAILURE;
-            }
-
-            let plan_count = match plan_wizard_config(&engine, &config) {
-                Ok(plan_count) => plan_count,
+            let prepared = match prepare_wizard_installation(&engine, &config) {
+                Ok(prepared) => prepared,
                 Err(error) => {
                     eprintln!("{error}");
                     return ExitCode::FAILURE;
@@ -423,9 +410,9 @@ fn run_wizard() -> ExitCode {
             };
 
             println!("Configuration confirmed.");
-            println!("Profile : {}", intent.profile_name());
-            println!("Storage : {}", intent.storage_id());
-            println!("Plans   : {plan_count}");
+            println!("Profile : {}", prepared.intent().profile_name());
+            println!("Storage : {}", prepared.intent().storage_id());
+            println!("Plans   : {}", prepared.plans().len());
 
             ExitCode::SUCCESS
         }
@@ -434,13 +421,13 @@ fn run_wizard() -> ExitCode {
             println!("Configuration cancelled.");
             ExitCode::SUCCESS
         }
+
         Err(error) => {
             eprintln!("{error}");
             ExitCode::FAILURE
         }
     }
 }
-
 #[cfg(test)]
 mod tests {
     use super::{BuildOptions, run};
