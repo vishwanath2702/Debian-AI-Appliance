@@ -18,7 +18,7 @@ pub use context::BuildContext;
 use executor::{ExecuteError, RootfsRunError};
 use inspector::{StorageInspectError, StorageInspector};
 pub use mmdebstrap::{MmdebstrapBootstrapper, MmdebstrapError};
-use model::{ApplianceProfile, Capability, DiscoveredStorage, Plan};
+use model::{ApplianceProfile, Capability, DiscoveredStorage, InstallationIntent, Plan};
 use planner::{PlanError, Planner};
 use registry::{PackageRepository, Registry};
 use resolver::Resolver;
@@ -159,6 +159,22 @@ impl Engine {
     pub fn plan_profile(&self, profile: &ApplianceProfile) -> Result<Vec<Plan>, PlanError> {
         self.planner.build_profile(profile)
     }
+
+    /// Plans an installation intent against the supplied appliance profile.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`PlanError`] if the selected appliance profile cannot be planned.
+    pub fn plan_installation(
+        &self,
+        intent: &InstallationIntent,
+        profile: &ApplianceProfile,
+    ) -> Result<Vec<Plan>, PlanError> {
+        debug_assert_eq!(intent.profile_name(), profile.name());
+
+        self.plan_profile(profile)
+    }
+
     /// Discovers storage devices using the supplied storage inspector.
     ///
     /// # Errors
@@ -212,8 +228,8 @@ mod tests {
 
     use inspector::{StorageInspectError, StorageInspector};
     use model::{
-        Action, ApplianceProfile, Capability, CapabilityId, DiscoveredStorage, PlanStep, Provider,
-        ProviderId, StorageKind,
+        Action, ApplianceProfile, Capability, CapabilityId, DiscoveredStorage, DiscoveredStorageId,
+        InstallationIntent, PlanStep, Provider, ProviderId, StorageKind,
     };
     use registry::{PackageRepository, Registry};
 
@@ -240,6 +256,27 @@ mod tests {
             ],
         }])
         .expect("desktop test registry should be valid")
+    }
+
+    #[test]
+    fn plans_installation_intent() {
+        let engine = Engine::from_registry(desktop_registry());
+
+        let profile = ApplianceProfile::new(
+            "desktop",
+            "Graphical desktop appliance",
+            vec![Capability::new("desktop")],
+        );
+
+        let intent =
+            InstallationIntent::new("desktop", DiscoveredStorageId::new("serial:usb-disk"));
+
+        let plans = engine
+            .plan_installation(&intent, &profile)
+            .expect("installation intent should plan");
+
+        assert_eq!(plans.len(), 1);
+        assert_eq!(plans[0].capability, Capability::new("desktop"));
     }
 
     #[test]
