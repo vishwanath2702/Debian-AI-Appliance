@@ -66,6 +66,18 @@ impl PreparedInstallation {
     pub fn plans(&self) -> &[Plan] {
         &self.plans
     }
+    /// Returns a human-readable dry-run summary.
+    #[must_use]
+    pub fn summary(&self) -> String {
+        format!(
+            "Profile: {}\nStorage: {} ({})\nDevice: {}\nPlans: {}",
+            self.intent.profile_name(),
+            self.intent.storage_id(),
+            self.storage.kind(),
+            self.storage.device_path().display(),
+            self.plans.len()
+        )
+    }
 }
 
 /// Error returned when an appliance build cannot be completed.
@@ -332,7 +344,9 @@ mod tests {
     };
     use registry::{PackageRepository, Registry};
 
-    use super::{BootstrapConfig, BuildContext, BuildError, Engine, RootfsRunError};
+    use super::{
+        BootstrapConfig, BuildContext, BuildError, Engine, PreparedInstallation, RootfsRunError,
+    };
 
     struct TestStorageInspector;
 
@@ -355,6 +369,21 @@ mod tests {
             ],
         }])
         .expect("desktop test registry should be valid")
+    }
+
+    #[test]
+    fn prepared_installation_exposes_dry_run_summary() {
+        let intent =
+            InstallationIntent::new("desktop", DiscoveredStorageId::new("serial:usb-disk"));
+
+        let storage = DiscoveredStorage::new("serial:usb-disk", StorageKind::Removable, "/dev/sdb");
+
+        let prepared = PreparedInstallation::new(intent, storage, Vec::new());
+
+        assert_eq!(
+            prepared.summary(),
+            "Profile: desktop\nStorage: serial:usb-disk (removable)\nDevice: /dev/sdb\nPlans: 0"
+        );
     }
 
     #[test]

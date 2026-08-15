@@ -410,9 +410,8 @@ fn run_wizard() -> ExitCode {
             };
 
             println!("Configuration confirmed.");
-            println!("Profile : {}", prepared.intent().profile_name());
-            println!("Storage : {}", prepared.intent().storage_id());
-            println!("Plans   : {}", prepared.plans().len());
+            println!();
+            println!("{}", prepared.summary());
 
             ExitCode::SUCCESS
         }
