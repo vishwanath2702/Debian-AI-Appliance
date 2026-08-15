@@ -91,6 +91,30 @@ pub trait InstallationExecutor {
     /// Returns an executor-specific error if execution fails.
     fn execute(&mut self, installation: &PreparedInstallation) -> Result<(), Self::Error>;
 }
+
+/// Non-destructive installation executor used for validation and previews.
+#[derive(Clone, Debug, Default)]
+pub struct DryRunInstallationExecutor {
+    summary: Option<String>,
+}
+
+impl DryRunInstallationExecutor {
+    /// Returns the summary recorded during the most recent execution.
+    #[must_use]
+    pub fn summary(&self) -> Option<&str> {
+        self.summary.as_deref()
+    }
+}
+
+impl InstallationExecutor for DryRunInstallationExecutor {
+    type Error = std::convert::Infallible;
+
+    fn execute(&mut self, installation: &PreparedInstallation) -> Result<(), Self::Error> {
+        self.summary = Some(installation.summary());
+        Ok(())
+    }
+}
+
 /// Error returned when an appliance build cannot be completed.
 #[derive(Debug)]
 pub enum BuildError {
@@ -372,8 +396,8 @@ mod tests {
     use registry::{PackageRepository, Registry};
 
     use super::{
-        BootstrapConfig, BuildContext, BuildError, Engine, InstallationExecutor,
-        PreparedInstallation, RootfsRunError,
+        BootstrapConfig, BuildContext, BuildError, DryRunInstallationExecutor, Engine,
+        InstallationExecutor, PreparedInstallation, RootfsRunError,
     };
     struct TestStorageInspector;
 
@@ -409,6 +433,31 @@ mod tests {
             self.executed = true;
             Ok(())
         }
+    }
+
+    #[test]
+    fn dry_run_executor_records_installation_summary() {
+        let engine = Engine::from_registry(desktop_registry());
+
+        let intent =
+            InstallationIntent::new("desktop", DiscoveredStorageId::new("serial:usb-disk"));
+
+        let storage = DiscoveredStorage::new("serial:usb-disk", StorageKind::Removable, "/dev/sdb");
+
+        let prepared = PreparedInstallation::new(intent, storage, Vec::new());
+
+        let mut executor = DryRunInstallationExecutor::default();
+
+        engine
+            .execute_installation(&prepared, &mut executor)
+            .expect("dry-run installation should execute");
+
+        assert_eq!(
+            executor.summary(),
+            Some(
+                "Profile: desktop\nStorage: serial:usb-disk (removable)\nDevice: /dev/sdb\nPlans: 0"
+            )
+        );
     }
 
     #[test]
