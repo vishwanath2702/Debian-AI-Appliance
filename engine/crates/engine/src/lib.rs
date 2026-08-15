@@ -53,7 +53,9 @@ impl PreparedInstallation {
     #[must_use]
     pub fn installation_plan(&self) -> InstallationPlan {
         InstallationPlan::new(vec![
-            InstallationOperation::PrepareDisk,
+            InstallationOperation::PrepareDisk {
+                storage_id: self.intent.storage_id().clone(),
+            },
             InstallationOperation::CreateFilesystems,
             InstallationOperation::MountFilesystems,
             InstallationOperation::BootstrapSystem,
@@ -95,7 +97,10 @@ impl PreparedInstallation {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum InstallationOperation {
     /// Prepare the selected physical disk for installation.
-    PrepareDisk,
+    PrepareDisk {
+        /// Stable identifier of the selected physical storage.
+        storage_id: model::DiscoveredStorageId,
+    },
 
     /// Create the filesystems required by the installed system.
     CreateFilesystems,
@@ -109,7 +114,6 @@ pub enum InstallationOperation {
     /// Apply the appliance execution plans.
     ApplyPlans,
 }
-
 /// Ordered non-executed operations for installing an appliance.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct InstallationPlan {
@@ -517,7 +521,9 @@ mod tests {
         assert_eq!(
             plan.operations(),
             &[
-                InstallationOperation::PrepareDisk,
+                InstallationOperation::PrepareDisk {
+                    storage_id: DiscoveredStorageId::new("serial:usb-disk"),
+                },
                 InstallationOperation::CreateFilesystems,
                 InstallationOperation::MountFilesystems,
                 InstallationOperation::BootstrapSystem,
@@ -529,7 +535,9 @@ mod tests {
     #[test]
     fn installation_plan_preserves_operation_order() {
         let plan = InstallationPlan::new(vec![
-            InstallationOperation::PrepareDisk,
+            InstallationOperation::PrepareDisk {
+                storage_id: DiscoveredStorageId::new("serial:usb-disk"),
+            },
             InstallationOperation::CreateFilesystems,
             InstallationOperation::MountFilesystems,
             InstallationOperation::BootstrapSystem,
@@ -539,7 +547,9 @@ mod tests {
         assert_eq!(
             plan.operations(),
             &[
-                InstallationOperation::PrepareDisk,
+                InstallationOperation::PrepareDisk {
+                    storage_id: DiscoveredStorageId::new("serial:usb-disk"),
+                },
                 InstallationOperation::CreateFilesystems,
                 InstallationOperation::MountFilesystems,
                 InstallationOperation::BootstrapSystem,
