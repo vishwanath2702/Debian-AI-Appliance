@@ -18,7 +18,9 @@ pub use context::BuildContext;
 use executor::{ExecuteError, RootfsRunError};
 use inspector::{StorageInspectError, StorageInspector};
 pub use mmdebstrap::{MmdebstrapBootstrapper, MmdebstrapError};
-use model::{ApplianceProfile, Capability, DiscoveredStorage, InstallationIntent, Plan};
+use model::{
+    ApplianceProfile, Capability, DiscoveredStorage, InstallationIntent, Plan, StorageKind,
+};
 use planner::{PlanError, Planner};
 use registry::{PackageRepository, Registry};
 use resolver::Resolver;
@@ -190,6 +192,37 @@ impl Engine {
         inspector.inspect()
     }
 
+    /// Validates and resolves storage selected for an installation.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the selected storage is unavailable or is the
+    /// currently running system disk.
+    pub fn validate_installation_storage<'a>(
+        &self,
+        intent: &InstallationIntent,
+        storage: &'a [DiscoveredStorage],
+    ) -> Result<&'a DiscoveredStorage, String> {
+        let selected = storage
+            .iter()
+            .find(|storage| storage.id() == intent.storage_id())
+            .ok_or_else(|| {
+                format!(
+                    "selected storage {} is no longer available",
+                    intent.storage_id()
+                )
+            })?;
+
+        if selected.kind() == StorageKind::System {
+            return Err(format!(
+                "selected storage {} is the system disk",
+                selected.id()
+            ));
+        }
+
+        Ok(selected)
+    }
+
     /// Builds and executes an appliance plan as a bootable ISO image.
     ///
     /// # Errors
@@ -256,6 +289,46 @@ mod tests {
             ],
         }])
         .expect("desktop test registry should be valid")
+    }
+
+    #[test]
+    fn rejects_system_disk_as_installation_storage() {
+        let engine = Engine::from_registry(desktop_registry());
+
+        let intent =
+            InstallationIntent::new("desktop", DiscoveredStorageId::new("wwn:system-disk"));
+
+        let storage = vec![DiscoveredStorage::new(
+            "wwn:system-disk",
+            StorageKind::System,
+            "/dev/sda",
+        )];
+
+        let error = engine
+            .validate_installation_storage(&intent, &storage)
+            .expect_err("system disk should not be a valid installation target");
+
+        assert!(error.contains("system disk"));
+    }
+
+    #[test]
+    fn validates_removable_installation_storage() {
+        let engine = Engine::from_registry(desktop_registry());
+
+        let intent =
+            InstallationIntent::new("desktop", DiscoveredStorageId::new("serial:usb-disk"));
+
+        let storage = vec![
+            DiscoveredStorage::new("wwn:system-disk", StorageKind::System, "/dev/sda"),
+            DiscoveredStorage::new("serial:usb-disk", StorageKind::Removable, "/dev/sdb"),
+        ];
+
+        let selected = engine
+            .validate_installation_storage(&intent, &storage)
+            .expect("removable installation storage should be valid");
+
+        assert_eq!(selected.id(), intent.storage_id());
+        assert_eq!(selected.kind(), StorageKind::Removable);
     }
 
     #[test]
