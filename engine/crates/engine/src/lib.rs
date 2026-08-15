@@ -62,7 +62,9 @@ impl PreparedInstallation {
             InstallationOperation::MountFilesystems {
                 mount_point: "/target".to_owned(),
             },
-            InstallationOperation::BootstrapSystem,
+            InstallationOperation::BootstrapSystem {
+                root: "/target".to_owned(),
+            },
             InstallationOperation::ApplyPlans,
         ])
     }
@@ -111,8 +113,7 @@ pub enum InstallationOperation {
     /// Mount the prepared target filesystems.
     MountFilesystems { mount_point: String },
     /// Bootstrap the base operating system.
-    BootstrapSystem,
-
+    BootstrapSystem { root: String },
     /// Apply the appliance execution plans.
     ApplyPlans,
 }
@@ -532,7 +533,9 @@ mod tests {
                 InstallationOperation::MountFilesystems {
                     mount_point: "/target".to_owned(),
                 },
-                InstallationOperation::BootstrapSystem,
+                InstallationOperation::BootstrapSystem {
+                    root: "/target".to_owned(),
+                },
                 InstallationOperation::ApplyPlans,
             ]
         );
@@ -550,7 +553,9 @@ mod tests {
             InstallationOperation::MountFilesystems {
                 mount_point: "/target".to_owned(),
             },
-            InstallationOperation::BootstrapSystem,
+            InstallationOperation::BootstrapSystem {
+                root: "/target".to_owned(),
+            },
             InstallationOperation::ApplyPlans,
         ]);
 
@@ -566,7 +571,9 @@ mod tests {
                 InstallationOperation::MountFilesystems {
                     mount_point: "/target".to_owned(),
                 },
-                InstallationOperation::BootstrapSystem,
+                InstallationOperation::BootstrapSystem {
+                    root: "/target".to_owned(),
+                },
                 InstallationOperation::ApplyPlans,
             ]
         );
