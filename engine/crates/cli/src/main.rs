@@ -317,16 +317,17 @@ fn prepare_wizard_installation(
     engine.prepare_installation(intent, profile, &storage)
 }
 
-const fn installation_operation_name(operation: &InstallationOperation) -> &'static str {
+fn installation_operation_name(operation: &InstallationOperation) -> String {
     match operation {
-        InstallationOperation::PrepareDisk => "Prepare disk",
-        InstallationOperation::CreateFilesystems => "Create filesystems",
-        InstallationOperation::MountFilesystems => "Mount filesystems",
-        InstallationOperation::BootstrapSystem => "Bootstrap system",
-        InstallationOperation::ApplyPlans => "Apply appliance plans",
+        InstallationOperation::PrepareDisk { storage_id } => {
+            format!("Prepare disk {storage_id}")
+        }
+        InstallationOperation::CreateFilesystems => "Create filesystems".to_owned(),
+        InstallationOperation::MountFilesystems => "Mount filesystems".to_owned(),
+        InstallationOperation::BootstrapSystem => "Bootstrap system".to_owned(),
+        InstallationOperation::ApplyPlans => "Apply appliance plans".to_owned(),
     }
 }
-
 fn print_installation_operations(executor: &DryRunInstallationExecutor) {
     let Some(plan) = executor.plan() else {
         return;
