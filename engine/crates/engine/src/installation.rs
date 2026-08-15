@@ -38,6 +38,17 @@ pub trait InstallationOperationExecutor {
     /// Returns an executor-specific error if the operation fails.
     fn execute_operation(&mut self, operation: &InstallationOperation) -> Result<(), Self::Error>;
 }
+/// Executes installation operations against the host system.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct SystemInstallationOperationExecutor;
+
+impl SystemInstallationOperationExecutor {
+    /// Creates a system installation operation executor.
+    #[must_use]
+    pub const fn new() -> Self {
+        Self
+    }
+}
 /// Ordered non-executed operations for installing an appliance.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct InstallationPlan {

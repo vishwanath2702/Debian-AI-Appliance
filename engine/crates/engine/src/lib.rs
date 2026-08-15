@@ -10,7 +10,9 @@ mod workflow;
 pub use installation::{
     DryRunInstallationExecutor, InstallationExecutor, InstallationOperation,
     InstallationOperationExecutor, InstallationPlan, PreparedInstallation,
+    SystemInstallationOperationExecutor,
 };
+
 use std::{
     error::Error,
     fmt::{self, Display, Formatter},
@@ -315,6 +317,7 @@ mod tests {
         BootstrapConfig, BuildContext, BuildError, DryRunInstallationExecutor, Engine,
         InstallationExecutor, InstallationOperation, InstallationOperationExecutor,
         InstallationPlan, PreparedInstallation, RootfsRunError,
+        SystemInstallationOperationExecutor,
     };
     struct TestStorageInspector;
 
@@ -392,6 +395,11 @@ mod tests {
             self.operations.push(operation.clone());
             Ok(())
         }
+    }
+
+    #[test]
+    fn creates_system_installation_operation_executor() {
+        let _executor = SystemInstallationOperationExecutor::new();
     }
 
     #[test]
