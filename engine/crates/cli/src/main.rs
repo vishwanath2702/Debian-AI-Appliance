@@ -325,7 +325,9 @@ fn installation_operation_name(operation: &InstallationOperation) -> String {
         InstallationOperation::CreateFilesystems { filesystem } => {
             format!("Create filesystems ({filesystem})")
         }
-        InstallationOperation::MountFilesystems => "Mount filesystems".to_owned(),
+        InstallationOperation::MountFilesystems { mount_point } => {
+            format!("Mount filesystems at {mount_point}")
+        }
         InstallationOperation::BootstrapSystem => "Bootstrap system".to_owned(),
         InstallationOperation::ApplyPlans => "Apply appliance plans".to_owned(),
     }
