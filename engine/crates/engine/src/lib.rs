@@ -185,6 +185,7 @@ pub trait InstallationExecutor {
 pub struct DryRunInstallationExecutor {
     summary: Option<String>,
     plan: Option<InstallationPlan>,
+    executed_operations: Vec<InstallationOperation>,
 }
 impl DryRunInstallationExecutor {
     /// Returns the summary recorded during the most recent execution.
@@ -196,6 +197,11 @@ impl DryRunInstallationExecutor {
     #[must_use]
     pub const fn plan(&self) -> Option<&InstallationPlan> {
         self.plan.as_ref()
+    }
+    /// Returns operations recorded through the execution pipeline.
+    #[must_use]
+    pub fn executed_operations(&self) -> &[InstallationOperation] {
+        &self.executed_operations
     }
 }
 
@@ -217,7 +223,8 @@ impl InstallationExecutor for DryRunInstallationExecutor {
 impl InstallationOperationExecutor for DryRunInstallationExecutor {
     type Error = std::convert::Infallible;
 
-    fn execute_operation(&mut self, _operation: &InstallationOperation) -> Result<(), Self::Error> {
+    fn execute_operation(&mut self, operation: &InstallationOperation) -> Result<(), Self::Error> {
+        self.executed_operations.push(operation.clone());
         Ok(())
     }
 }
@@ -557,6 +564,28 @@ mod tests {
             self.operations.push(operation.clone());
             Ok(())
         }
+    }
+
+    #[test]
+    fn dry_run_executor_records_executed_operations_in_order() {
+        let engine = Engine::from_registry(desktop_registry());
+
+        let intent =
+            InstallationIntent::new("desktop", DiscoveredStorageId::new("serial:usb-disk"));
+
+        let storage = DiscoveredStorage::new("serial:usb-disk", StorageKind::Removable, "/dev/sdb");
+
+        let prepared = PreparedInstallation::new(intent, storage, Vec::new());
+
+        let mut executor = DryRunInstallationExecutor::default();
+
+        engine
+            .execute_installation(&prepared, &mut executor)
+            .expect("dry-run installation should execute");
+
+        let expected = prepared.installation_plan();
+
+        assert_eq!(executor.executed_operations(), expected.operations());
     }
 
     #[test]
