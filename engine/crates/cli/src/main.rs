@@ -1,6 +1,8 @@
 //! DAIA command-line interface.
 
-use engine::{BootstrapConfig, BuildContext, DryRunInstallationExecutor, Engine};
+use engine::{
+    BootstrapConfig, BuildContext, DryRunInstallationExecutor, Engine, InstallationOperation,
+};
 use inspector::{DebianIsoInspector, IsoInspector, LinuxStorageInspector};
 use model::{Capability, Plan};
 use registry::PackageRepository;
@@ -315,6 +317,33 @@ fn prepare_wizard_installation(
     engine.prepare_installation(intent, profile, &storage)
 }
 
+const fn installation_operation_name(operation: &InstallationOperation) -> &'static str {
+    match operation {
+        InstallationOperation::PrepareDisk => "Prepare disk",
+        InstallationOperation::CreateFilesystems => "Create filesystems",
+        InstallationOperation::MountFilesystems => "Mount filesystems",
+        InstallationOperation::BootstrapSystem => "Bootstrap system",
+        InstallationOperation::ApplyPlans => "Apply appliance plans",
+    }
+}
+
+fn print_installation_operations(executor: &DryRunInstallationExecutor) {
+    let Some(plan) = executor.plan() else {
+        return;
+    };
+
+    println!();
+    println!("Planned installation operations:");
+
+    for (index, operation) in plan.operations().iter().enumerate() {
+        println!(
+            "  {}. {}",
+            index + 1,
+            installation_operation_name(operation)
+        );
+    }
+}
+
 fn run_wizard() -> ExitCode {
     let Some(engine) = load_engine() else {
         return ExitCode::FAILURE;
@@ -421,7 +450,7 @@ fn run_wizard() -> ExitCode {
             if let Some(summary) = executor.summary() {
                 println!("{summary}");
             }
-
+            print_installation_operations(&executor);
             ExitCode::SUCCESS
         }
 
