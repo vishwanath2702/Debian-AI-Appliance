@@ -26,6 +26,48 @@ use registry::{PackageRepository, Registry};
 use resolver::Resolver;
 use workflow::IsoWorkflow;
 
+/// A validated installation ready for later execution.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PreparedInstallation {
+    intent: InstallationIntent,
+    storage: DiscoveredStorage,
+    plans: Vec<Plan>,
+}
+
+impl PreparedInstallation {
+    /// Creates a prepared installation from validated components.
+    #[must_use]
+    pub const fn new(
+        intent: InstallationIntent,
+        storage: DiscoveredStorage,
+        plans: Vec<Plan>,
+    ) -> Self {
+        Self {
+            intent,
+            storage,
+            plans,
+        }
+    }
+
+    /// Returns the confirmed installation intent.
+    #[must_use]
+    pub const fn intent(&self) -> &InstallationIntent {
+        &self.intent
+    }
+
+    /// Returns the validated installation storage.
+    #[must_use]
+    pub const fn storage(&self) -> &DiscoveredStorage {
+        &self.storage
+    }
+
+    /// Returns the execution plans for the installation.
+    #[must_use]
+    pub fn plans(&self) -> &[Plan] {
+        &self.plans
+    }
+}
+
 /// Error returned when an appliance build cannot be completed.
 #[derive(Debug)]
 pub enum BuildError {
@@ -223,6 +265,30 @@ impl Engine {
         Ok(selected)
     }
 
+    /// Validates and prepares an installation for later execution.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`PlanError`] if the appliance profile cannot be planned.
+    /// Returns a storage-validation error if the selected storage is unavailable
+    /// or is the currently running system disk.
+    pub fn prepare_installation(
+        &self,
+        intent: InstallationIntent,
+        profile: &ApplianceProfile,
+        storage: &[DiscoveredStorage],
+    ) -> Result<PreparedInstallation, String> {
+        let selected = self
+            .validate_installation_storage(&intent, storage)?
+            .clone();
+
+        let plans = self
+            .plan_installation(&intent, profile)
+            .map_err(|error| error.to_string())?;
+
+        Ok(PreparedInstallation::new(intent, selected, plans))
+    }
+
     /// Builds and executes an appliance plan as a bootable ISO image.
     ///
     /// # Errors
@@ -289,6 +355,83 @@ mod tests {
             ],
         }])
         .expect("desktop test registry should be valid")
+    }
+
+    #[test]
+    fn prepare_installation_rejects_missing_storage() {
+        let engine = Engine::from_registry(desktop_registry());
+
+        let profile = ApplianceProfile::new(
+            "desktop",
+            "Graphical desktop appliance",
+            vec![Capability::new("desktop")],
+        );
+
+        let intent =
+            InstallationIntent::new("desktop", DiscoveredStorageId::new("serial:missing-disk"));
+
+        let error = engine
+            .prepare_installation(intent, &profile, &[])
+            .expect_err("missing installation storage should fail");
+
+        assert!(error.contains("no longer available"));
+    }
+
+    #[test]
+    fn prepare_installation_rejects_system_disk() {
+        let engine = Engine::from_registry(desktop_registry());
+
+        let profile = ApplianceProfile::new(
+            "desktop",
+            "Graphical desktop appliance",
+            vec![Capability::new("desktop")],
+        );
+
+        let intent =
+            InstallationIntent::new("desktop", DiscoveredStorageId::new("wwn:system-disk"));
+
+        let storage = vec![DiscoveredStorage::new(
+            "wwn:system-disk",
+            StorageKind::System,
+            "/dev/sda",
+        )];
+
+        let error = engine
+            .prepare_installation(intent, &profile, &storage)
+            .expect_err("system disk installation should fail");
+
+        assert!(error.contains("system disk"));
+    }
+
+    #[test]
+    fn prepares_valid_installation() {
+        let engine = Engine::from_registry(desktop_registry());
+
+        let profile = ApplianceProfile::new(
+            "desktop",
+            "Graphical desktop appliance",
+            vec![Capability::new("desktop")],
+        );
+
+        let intent =
+            InstallationIntent::new("desktop", DiscoveredStorageId::new("serial:usb-disk"));
+
+        let storage = vec![
+            DiscoveredStorage::new("wwn:system-disk", StorageKind::System, "/dev/sda"),
+            DiscoveredStorage::new("serial:usb-disk", StorageKind::Removable, "/dev/sdb"),
+        ];
+
+        let prepared = engine
+            .prepare_installation(intent, &profile, &storage)
+            .expect("installation should prepare");
+
+        assert_eq!(prepared.intent().profile_name(), "desktop");
+        assert_eq!(prepared.storage().kind(), StorageKind::Removable);
+        assert_eq!(
+            prepared.storage().device_path(),
+            std::path::Path::new("/dev/sdb")
+        );
+        assert_eq!(prepared.plans().len(), 1);
     }
 
     #[test]
