@@ -412,10 +412,11 @@ fn run_wizard() -> ExitCode {
                     return ExitCode::FAILURE;
                 }
             };
-            println!("Configuration confirmed.");
-            println!("Profile : {}", config.profile_name());
-            println!("Storage : {}", config.storage_id());
+            let intent = config.installation_intent();
 
+            println!("Configuration confirmed.");
+            println!("Profile : {}", intent.profile_name());
+            println!("Storage : {}", intent.storage_id());
             println!("Plans   : {plan_count}");
             ExitCode::SUCCESS
         }

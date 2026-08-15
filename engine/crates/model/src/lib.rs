@@ -530,14 +530,57 @@ pub struct Plan {
     /// Ordered actions required by the provider.
     pub steps: Vec<PlanStep>,
 }
+
+/// Describes a confirmed DAIA installation intent.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct InstallationIntent {
+    profile_name: String,
+    storage_id: DiscoveredStorageId,
+}
+
+impl InstallationIntent {
+    /// Creates a confirmed installation intent.
+    #[must_use]
+    pub fn new(profile_name: impl Into<String>, storage_id: DiscoveredStorageId) -> Self {
+        Self {
+            profile_name: profile_name.into(),
+            storage_id,
+        }
+    }
+
+    /// Returns the selected appliance profile name.
+    #[must_use]
+    pub fn profile_name(&self) -> &str {
+        &self.profile_name
+    }
+
+    /// Returns the selected storage identifier.
+    #[must_use]
+    pub const fn storage_id(&self) -> &DiscoveredStorageId {
+        &self.storage_id
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
         Action, AssetId, Capability, CapabilityId, ContentRepository, ContentRepositoryId,
-        ContentSource, ContentSourceId, DiscoveredStorage, DiscoveredStorageId, PackageManifest,
-        PlanStep, ProviderId, StorageKind, StorageTarget, StorageTargetId,
+        ContentSource, ContentSourceId, DiscoveredStorage, DiscoveredStorageId, InstallationIntent,
+        PackageManifest, PlanStep, ProviderId, StorageKind, StorageTarget, StorageTargetId,
     };
     use std::path::PathBuf;
+
+    #[test]
+    fn installation_intent_exposes_profile_and_storage() {
+        let intent =
+            InstallationIntent::new("desktop", DiscoveredStorageId::new("serial:usb-disk"));
+
+        assert_eq!(intent.profile_name(), "desktop");
+        assert_eq!(
+            intent.storage_id(),
+            &DiscoveredStorageId::new("serial:usb-disk")
+        );
+    }
 
     #[test]
     fn discovered_storage_exposes_current_device_path() {

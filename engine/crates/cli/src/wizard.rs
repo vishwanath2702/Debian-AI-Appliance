@@ -1,5 +1,5 @@
 //! Wizard state for interactive DAIA appliance configuration.
-use model::{DiscoveredStorage, DiscoveredStorageId, StorageKind};
+use model::{DiscoveredStorage, DiscoveredStorageId, InstallationIntent, StorageKind};
 use registry::ApplianceProfileRepository;
 /// State accumulated while configuring an appliance through the wizard.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -94,6 +94,11 @@ impl WizardConfig {
     ) -> Option<&'a model::ApplianceProfile> {
         repository.profile(&self.profile_name)
     }
+    /// Converts the confirmed wizard configuration into installation intent.
+    #[must_use]
+    pub fn installation_intent(&self) -> InstallationIntent {
+        InstallationIntent::new(self.profile_name.clone(), self.storage_id().clone())
+    }
 }
 
 #[cfg(test)]
@@ -103,6 +108,26 @@ mod tests {
         ApplianceProfile, Capability, DiscoveredStorage, DiscoveredStorageId, StorageKind,
     };
     use registry::ApplianceProfileRepository;
+
+    #[test]
+    fn wizard_configuration_builds_installation_intent() {
+        let mut state = WizardState::new();
+
+        state.set_profile_name("desktop");
+        state.select_storage(DiscoveredStorageId::new("serial:usb-disk"));
+
+        let config = state
+            .into_config()
+            .expect("completed wizard state should build configuration");
+
+        let intent = config.installation_intent();
+
+        assert_eq!(intent.profile_name(), "desktop");
+        assert_eq!(
+            intent.storage_id(),
+            &DiscoveredStorageId::new("serial:usb-disk")
+        );
+    }
 
     #[test]
     fn wizard_state_resolves_discovered_storage_by_id() {
