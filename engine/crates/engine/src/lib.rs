@@ -147,13 +147,18 @@ pub trait InstallationExecutor {
 #[derive(Clone, Debug, Default)]
 pub struct DryRunInstallationExecutor {
     summary: Option<String>,
+    plan: Option<InstallationPlan>,
 }
-
 impl DryRunInstallationExecutor {
     /// Returns the summary recorded during the most recent execution.
     #[must_use]
     pub fn summary(&self) -> Option<&str> {
         self.summary.as_deref()
+    }
+    /// Returns the installation plan recorded during the most recent execution.
+    #[must_use]
+    pub const fn plan(&self) -> Option<&InstallationPlan> {
+        self.plan.as_ref()
     }
 }
 
@@ -162,6 +167,7 @@ impl InstallationExecutor for DryRunInstallationExecutor {
 
     fn execute(&mut self, installation: &PreparedInstallation) -> Result<(), Self::Error> {
         self.summary = Some(installation.summary());
+        self.plan = Some(installation.installation_plan());
         Ok(())
     }
 }
@@ -485,6 +491,39 @@ mod tests {
             self.executed = true;
             Ok(())
         }
+    }
+
+    #[test]
+    fn dry_run_executor_records_installation_operations() {
+        let engine = Engine::from_registry(desktop_registry());
+
+        let intent =
+            InstallationIntent::new("desktop", DiscoveredStorageId::new("serial:usb-disk"));
+
+        let storage = DiscoveredStorage::new("serial:usb-disk", StorageKind::Removable, "/dev/sdb");
+
+        let prepared = PreparedInstallation::new(intent, storage, Vec::new());
+
+        let mut executor = DryRunInstallationExecutor::default();
+
+        engine
+            .execute_installation(&prepared, &mut executor)
+            .expect("dry-run installation should execute");
+
+        let plan = executor
+            .plan()
+            .expect("dry-run executor should record installation plan");
+
+        assert_eq!(
+            plan.operations(),
+            &[
+                InstallationOperation::PrepareDisk,
+                InstallationOperation::CreateFilesystems,
+                InstallationOperation::MountFilesystems,
+                InstallationOperation::BootstrapSystem,
+                InstallationOperation::ApplyPlans,
+            ]
+        );
     }
 
     #[test]
