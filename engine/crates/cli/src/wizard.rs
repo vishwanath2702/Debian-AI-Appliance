@@ -1,6 +1,6 @@
 //! Wizard state for interactive DAIA appliance configuration.
 use model::{DiscoveredStorage, DiscoveredStorageId, StorageKind};
-
+use registry::ApplianceProfileRepository;
 /// State accumulated while configuring an appliance through the wizard.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct WizardState {
@@ -79,13 +79,48 @@ impl WizardConfig {
     pub const fn storage_id(&self) -> &DiscoveredStorageId {
         &self.storage_id
     }
+    /// Resolves the selected appliance profile from a repository.
+    #[must_use]
+    pub fn profile<'a>(
+        &self,
+        repository: &'a ApplianceProfileRepository,
+    ) -> Option<&'a model::ApplianceProfile> {
+        repository.profile(&self.profile_name)
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use model::{DiscoveredStorage, DiscoveredStorageId, StorageKind};
-
     use super::WizardState;
+    use model::{
+        ApplianceProfile, Capability, DiscoveredStorage, DiscoveredStorageId, StorageKind,
+    };
+    use registry::ApplianceProfileRepository;
+
+    #[test]
+    fn wizard_configuration_resolves_appliance_profile() {
+        let repository = ApplianceProfileRepository::from_profiles(vec![ApplianceProfile::new(
+            "desktop",
+            "Graphical desktop appliance",
+            vec![Capability::new("desktop")],
+        )])
+        .expect("profile repository should be valid");
+
+        let mut state = WizardState::new();
+        state.set_profile_name("desktop");
+        state.select_storage(DiscoveredStorageId::new("serial:usb-disk"));
+
+        let config = state
+            .into_config()
+            .expect("completed wizard state should build configuration");
+
+        let profile = config
+            .profile(&repository)
+            .expect("selected profile should resolve");
+
+        assert_eq!(profile.name(), "desktop");
+        assert_eq!(profile.capabilities(), &[Capability::new("desktop")]);
+    }
 
     #[test]
     fn completed_wizard_state_builds_configuration() {

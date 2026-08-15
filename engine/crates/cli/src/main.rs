@@ -292,6 +292,24 @@ fn confirm_wizard_state() -> Result<bool, String> {
     ))
 }
 
+fn plan_wizard_config(engine: &Engine, config: &wizard::WizardConfig) -> Result<usize, String> {
+    let repository = appliance_profile_repository::load()
+        .map_err(|error| format!("Error loading appliance profiles: {error}"))?;
+
+    let profile = config.profile(&repository).ok_or_else(|| {
+        format!(
+            "Error: selected appliance profile \"{}\" no longer exists",
+            config.profile_name()
+        )
+    })?;
+
+    let plans = engine
+        .plan_profile(profile)
+        .map_err(|error| format!("Error planning appliance profile: {error}"))?;
+
+    Ok(plans.len())
+}
+
 fn run_wizard() -> ExitCode {
     let Some(engine) = load_engine() else {
         return ExitCode::FAILURE;
@@ -378,11 +396,18 @@ fn run_wizard() -> ExitCode {
                 eprintln!("Error: wizard configuration is incomplete");
                 return ExitCode::FAILURE;
             };
-
+            let plan_count = match plan_wizard_config(&engine, &config) {
+                Ok(plan_count) => plan_count,
+                Err(error) => {
+                    eprintln!("{error}");
+                    return ExitCode::FAILURE;
+                }
+            };
             println!("Configuration confirmed.");
             println!("Profile : {}", config.profile_name());
             println!("Storage : {}", config.storage_id());
 
+            println!("Plans   : {plan_count}");
             ExitCode::SUCCESS
         }
         Ok(false) => {
