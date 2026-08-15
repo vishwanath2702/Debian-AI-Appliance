@@ -49,6 +49,18 @@ impl PreparedInstallation {
         }
     }
 
+    /// Builds the ordered installation-operation plan.
+    #[must_use]
+    pub fn installation_plan(&self) -> InstallationPlan {
+        InstallationPlan::new(vec![
+            InstallationOperation::PrepareDisk,
+            InstallationOperation::CreateFilesystems,
+            InstallationOperation::MountFilesystems,
+            InstallationOperation::BootstrapSystem,
+            InstallationOperation::ApplyPlans,
+        ])
+    }
+
     /// Returns the confirmed installation intent.
     #[must_use]
     pub const fn intent(&self) -> &InstallationIntent {
@@ -79,6 +91,45 @@ impl PreparedInstallation {
         )
     }
 }
+/// A non-executed operation required to prepare an installation target.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum InstallationOperation {
+    /// Prepare the selected physical disk for installation.
+    PrepareDisk,
+
+    /// Create the filesystems required by the installed system.
+    CreateFilesystems,
+
+    /// Mount the prepared target filesystems.
+    MountFilesystems,
+
+    /// Bootstrap the base operating system.
+    BootstrapSystem,
+
+    /// Apply the appliance execution plans.
+    ApplyPlans,
+}
+
+/// Ordered non-executed operations for installing an appliance.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct InstallationPlan {
+    operations: Vec<InstallationOperation>,
+}
+
+impl InstallationPlan {
+    /// Creates an installation plan.
+    #[must_use]
+    pub const fn new(operations: Vec<InstallationOperation>) -> Self {
+        Self { operations }
+    }
+
+    /// Returns the ordered installation operations.
+    #[must_use]
+    pub fn operations(&self) -> &[InstallationOperation] {
+        &self.operations
+    }
+}
+
 /// Executes a prepared installation.
 pub trait InstallationExecutor {
     /// Error produced by the executor.
@@ -397,7 +448,8 @@ mod tests {
 
     use super::{
         BootstrapConfig, BuildContext, BuildError, DryRunInstallationExecutor, Engine,
-        InstallationExecutor, PreparedInstallation, RootfsRunError,
+        InstallationExecutor, InstallationOperation, InstallationPlan, PreparedInstallation,
+        RootfsRunError,
     };
     struct TestStorageInspector;
 
@@ -433,6 +485,28 @@ mod tests {
             self.executed = true;
             Ok(())
         }
+    }
+
+    #[test]
+    fn installation_plan_preserves_operation_order() {
+        let plan = InstallationPlan::new(vec![
+            InstallationOperation::PrepareDisk,
+            InstallationOperation::CreateFilesystems,
+            InstallationOperation::MountFilesystems,
+            InstallationOperation::BootstrapSystem,
+            InstallationOperation::ApplyPlans,
+        ]);
+
+        assert_eq!(
+            plan.operations(),
+            &[
+                InstallationOperation::PrepareDisk,
+                InstallationOperation::CreateFilesystems,
+                InstallationOperation::MountFilesystems,
+                InstallationOperation::BootstrapSystem,
+                InstallationOperation::ApplyPlans,
+            ]
+        );
     }
 
     #[test]
