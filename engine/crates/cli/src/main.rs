@@ -322,7 +322,9 @@ fn installation_operation_name(operation: &InstallationOperation) -> String {
         InstallationOperation::PrepareDisk { storage_id } => {
             format!("Prepare disk {storage_id}")
         }
-        InstallationOperation::CreateFilesystems => "Create filesystems".to_owned(),
+        InstallationOperation::CreateFilesystems { filesystem } => {
+            format!("Create filesystems ({filesystem})")
+        }
         InstallationOperation::MountFilesystems => "Mount filesystems".to_owned(),
         InstallationOperation::BootstrapSystem => "Bootstrap system".to_owned(),
         InstallationOperation::ApplyPlans => "Apply appliance plans".to_owned(),
