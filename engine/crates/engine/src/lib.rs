@@ -59,7 +59,9 @@ impl PreparedInstallation {
             InstallationOperation::CreateFilesystems {
                 filesystem: "ext4".to_owned(),
             },
-            InstallationOperation::MountFilesystems,
+            InstallationOperation::MountFilesystems {
+                mount_point: "/target".to_owned(),
+            },
             InstallationOperation::BootstrapSystem,
             InstallationOperation::ApplyPlans,
         ])
@@ -107,8 +109,7 @@ pub enum InstallationOperation {
     /// Create the filesystems required by the installed system.
     CreateFilesystems { filesystem: String },
     /// Mount the prepared target filesystems.
-    MountFilesystems,
-
+    MountFilesystems { mount_point: String },
     /// Bootstrap the base operating system.
     BootstrapSystem,
 
@@ -528,7 +529,9 @@ mod tests {
                 InstallationOperation::CreateFilesystems {
                     filesystem: "ext4".to_owned(),
                 },
-                InstallationOperation::MountFilesystems,
+                InstallationOperation::MountFilesystems {
+                    mount_point: "/target".to_owned(),
+                },
                 InstallationOperation::BootstrapSystem,
                 InstallationOperation::ApplyPlans,
             ]
@@ -544,7 +547,9 @@ mod tests {
             InstallationOperation::CreateFilesystems {
                 filesystem: "ext4".to_owned(),
             },
-            InstallationOperation::MountFilesystems,
+            InstallationOperation::MountFilesystems {
+                mount_point: "/target".to_owned(),
+            },
             InstallationOperation::BootstrapSystem,
             InstallationOperation::ApplyPlans,
         ]);
@@ -558,7 +563,9 @@ mod tests {
                 InstallationOperation::CreateFilesystems {
                     filesystem: "ext4".to_owned(),
                 },
-                InstallationOperation::MountFilesystems,
+                InstallationOperation::MountFilesystems {
+                    mount_point: "/target".to_owned(),
+                },
                 InstallationOperation::BootstrapSystem,
                 InstallationOperation::ApplyPlans,
             ]
