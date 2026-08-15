@@ -374,7 +374,15 @@ fn run_wizard() -> ExitCode {
 
     match confirm_wizard_state() {
         Ok(true) => {
+            let Some(config) = state.into_config() else {
+                eprintln!("Error: wizard configuration is incomplete");
+                return ExitCode::FAILURE;
+            };
+
             println!("Configuration confirmed.");
+            println!("Profile : {}", config.profile_name());
+            println!("Storage : {}", config.storage_id());
+
             ExitCode::SUCCESS
         }
         Ok(false) => {

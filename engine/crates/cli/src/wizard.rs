@@ -51,6 +51,34 @@ impl WizardState {
     pub const fn selected_storage(&self) -> Option<&DiscoveredStorageId> {
         self.selected_storage.as_ref()
     }
+    /// Converts the completed wizard state into a confirmed configuration.
+    pub fn into_config(self) -> Option<WizardConfig> {
+        Some(WizardConfig {
+            profile_name: self.profile_name?,
+            storage_id: self.selected_storage?,
+        })
+    }
+}
+
+/// Confirmed wizard configuration ready for planning or execution.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct WizardConfig {
+    profile_name: String,
+    storage_id: DiscoveredStorageId,
+}
+
+impl WizardConfig {
+    /// Returns the selected appliance profile name.
+    #[must_use]
+    pub fn profile_name(&self) -> &str {
+        &self.profile_name
+    }
+
+    /// Returns the selected storage identifier.
+    #[must_use]
+    pub const fn storage_id(&self) -> &DiscoveredStorageId {
+        &self.storage_id
+    }
 }
 
 #[cfg(test)]
@@ -59,6 +87,23 @@ mod tests {
 
     use super::WizardState;
 
+    #[test]
+    fn completed_wizard_state_builds_configuration() {
+        let mut state = WizardState::new();
+
+        state.set_profile_name("desktop");
+        state.select_storage(DiscoveredStorageId::new("serial:usb-disk"));
+
+        let config = state
+            .into_config()
+            .expect("completed wizard state should build configuration");
+
+        assert_eq!(config.profile_name(), "desktop");
+        assert_eq!(
+            config.storage_id(),
+            &DiscoveredStorageId::new("serial:usb-disk")
+        );
+    }
     #[test]
     fn new_wizard_state_is_empty() {
         let state = WizardState::new();
