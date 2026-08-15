@@ -204,7 +204,20 @@ impl InstallationExecutor for DryRunInstallationExecutor {
 
     fn execute(&mut self, installation: &PreparedInstallation) -> Result<(), Self::Error> {
         self.summary = Some(installation.summary());
-        self.plan = Some(installation.installation_plan());
+
+        let plan = installation.installation_plan();
+        plan.execute(self)?;
+
+        self.plan = Some(plan);
+
+        Ok(())
+    }
+}
+
+impl InstallationOperationExecutor for DryRunInstallationExecutor {
+    type Error = std::convert::Infallible;
+
+    fn execute_operation(&mut self, _operation: &InstallationOperation) -> Result<(), Self::Error> {
         Ok(())
     }
 }
