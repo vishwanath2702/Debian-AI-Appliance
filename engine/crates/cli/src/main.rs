@@ -303,9 +303,11 @@ fn plan_wizard_config(engine: &Engine, config: &wizard::WizardConfig) -> Result<
         )
     })?;
 
+    let intent = config.installation_intent();
+
     let plans = engine
-        .plan_profile(profile)
-        .map_err(|error| format!("Error planning appliance profile: {error}"))?;
+        .plan_installation(&intent, profile)
+        .map_err(|error| format!("Error planning installation: {error}"))?;
 
     Ok(plans.len())
 }
