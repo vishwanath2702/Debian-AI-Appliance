@@ -65,7 +65,9 @@ impl PreparedInstallation {
             InstallationOperation::BootstrapSystem {
                 root: "/target".to_owned(),
             },
-            InstallationOperation::ApplyPlans,
+            InstallationOperation::ApplyPlans {
+                count: self.plans.len(),
+            },
         ])
     }
 
@@ -115,7 +117,7 @@ pub enum InstallationOperation {
     /// Bootstrap the base operating system.
     BootstrapSystem { root: String },
     /// Apply the appliance execution plans.
-    ApplyPlans,
+    ApplyPlans { count: usize },
 }
 /// Ordered non-executed operations for installing an appliance.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -536,7 +538,7 @@ mod tests {
                 InstallationOperation::BootstrapSystem {
                     root: "/target".to_owned(),
                 },
-                InstallationOperation::ApplyPlans,
+                InstallationOperation::ApplyPlans { count: 0 }
             ]
         );
     }
@@ -556,7 +558,7 @@ mod tests {
             InstallationOperation::BootstrapSystem {
                 root: "/target".to_owned(),
             },
-            InstallationOperation::ApplyPlans,
+            InstallationOperation::ApplyPlans { count: 0 },
         ]);
 
         assert_eq!(
@@ -574,7 +576,7 @@ mod tests {
                 InstallationOperation::BootstrapSystem {
                     root: "/target".to_owned(),
                 },
-                InstallationOperation::ApplyPlans,
+                InstallationOperation::ApplyPlans { count: 0 }
             ]
         );
     }
