@@ -166,8 +166,10 @@ where
 
                 self.runner.status(&mut command)
             }
-
-            InstallationOperation::PartitionDisk { device_path, .. } => {
+            InstallationOperation::PartitionDisk {
+                device_path,
+                partitions,
+            } => {
                 let mut command = Command::new("parted");
 
                 command
@@ -176,9 +178,22 @@ where
                     .arg("mklabel")
                     .arg("gpt");
 
+                if let Some(efi_partition) = partitions
+                    .iter()
+                    .find(|partition| partition.role() == InstallationPartitionRole::EfiSystem)
+                {
+                    if let Some(size_mib) = efi_partition.size_mib() {
+                        command
+                            .arg("mkpart")
+                            .arg("ESP")
+                            .arg("fat32")
+                            .arg("1MiB")
+                            .arg(format!("{}MiB", size_mib + 1));
+                    }
+                }
+
                 self.runner.status(&mut command)
             }
-
             _ => Ok(()),
         }
     }
@@ -523,6 +538,11 @@ mod tests {
                 "/dev/sdb".to_owned(),
                 "mklabel".to_owned(),
                 "gpt".to_owned(),
+                "mkpart".to_owned(),
+                "ESP".to_owned(),
+                "fat32".to_owned(),
+                "1MiB".to_owned(),
+                "513MiB".to_owned(),
             ]]
         );
     }
