@@ -189,6 +189,15 @@ where
                 device_path,
                 partitions,
             } => {
+                let efi_partition = partitions
+                    .iter()
+                    .find(|partition| partition.role() == InstallationPartitionRole::EfiSystem)
+                    .ok_or_else(|| io::Error::other("EFI partition is missing"))?;
+
+                let root_partition = partitions
+                    .iter()
+                    .find(|partition| partition.role() == InstallationPartitionRole::Root)
+                    .ok_or_else(|| io::Error::other("root partition is missing"))?;
                 let mut command = Command::new("parted");
 
                 command
@@ -215,11 +224,8 @@ where
                     .iter()
                     .find(|partition| partition.role() == InstallationPartitionRole::Root)
                 {
-                    let root_start_mib = partitions
-                        .iter()
-                        .find(|partition| partition.role() == InstallationPartitionRole::EfiSystem)
-                        .and_then(InstallationPartition::size_mib)
-                        .map_or(1, |size_mib| size_mib + 1);
+                    let root_start_mib =
+                        efi_partition.size_mib().map_or(1, |size_mib| size_mib + 1);
 
                     command
                         .arg("mkpart")
@@ -508,6 +514,48 @@ mod tests {
 
             Ok(())
         }
+    }
+
+    #[test]
+    fn system_executor_rejects_partition_layout_without_efi() {
+        let mut executor =
+            SystemInstallationOperationExecutor::with_runner(RecordingCommandRunner::default());
+
+        let operation = InstallationOperation::PartitionDisk {
+            device_path: "/dev/sdb".into(),
+            partitions: vec![InstallationPartition::new(
+                InstallationPartitionRole::Root,
+                "ext4",
+                None,
+            )],
+        };
+
+        let error = executor
+            .execute_operation(&operation)
+            .expect_err("missing EFI partition should fail");
+
+        assert!(error.to_string().contains("EFI partition is missing"));
+    }
+
+    #[test]
+    fn system_executor_rejects_partition_layout_without_root() {
+        let mut executor =
+            SystemInstallationOperationExecutor::with_runner(RecordingCommandRunner::default());
+
+        let operation = InstallationOperation::PartitionDisk {
+            device_path: "/dev/sdb".into(),
+            partitions: vec![InstallationPartition::new(
+                InstallationPartitionRole::EfiSystem,
+                "fat32",
+                Some(512),
+            )],
+        };
+
+        let error = executor
+            .execute_operation(&operation)
+            .expect_err("missing root partition should fail");
+
+        assert!(error.to_string().contains("root partition is missing"));
     }
 
     #[test]
