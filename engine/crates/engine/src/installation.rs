@@ -192,6 +192,18 @@ where
                     }
                 }
 
+                if partitions
+                    .iter()
+                    .any(|partition| partition.role() == InstallationPartitionRole::Root)
+                {
+                    command
+                        .arg("mkpart")
+                        .arg("primary")
+                        .arg("ext4")
+                        .arg("513MiB")
+                        .arg("100%");
+                }
+
                 self.runner.status(&mut command)
             }
             _ => Ok(()),
@@ -543,6 +555,11 @@ mod tests {
                 "fat32".to_owned(),
                 "1MiB".to_owned(),
                 "513MiB".to_owned(),
+                "mkpart".to_owned(),
+                "primary".to_owned(),
+                "ext4".to_owned(),
+                "513MiB".to_owned(),
+                "100%".to_owned(),
             ]]
         );
     }
