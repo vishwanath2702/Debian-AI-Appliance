@@ -65,9 +65,9 @@ where
     fn execute_operation(&mut self, operation: &InstallationOperation) -> Result<(), Self::Error> {
         match operation {
             InstallationOperation::PrepareDisk { device_path, .. } => {
-                let mut command = Command::new("test-command");
+                let mut command = Command::new("wipefs");
 
-                command.arg(device_path);
+                command.arg("--all").arg(device_path);
 
                 self.runner.status(&mut command)
             }
@@ -290,7 +290,7 @@ mod tests {
         assert!(executor.runner.commands.is_empty());
     }
     #[test]
-    fn system_executor_sends_prepare_disk_command_to_runner() {
+    fn system_executor_sends_wipefs_command_for_prepare_disk() {
         let mut executor =
             SystemInstallationOperationExecutor::with_runner(RecordingCommandRunner::default());
 
@@ -305,7 +305,11 @@ mod tests {
 
         assert_eq!(
             executor.runner.commands,
-            vec![vec!["test-command".to_owned(), "/dev/sdb".to_owned(),]]
+            vec![vec![
+                "wipefs".to_owned(),
+                "--all".to_owned(),
+                "/dev/sdb".to_owned(),
+            ]]
         );
     }
 }
