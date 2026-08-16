@@ -54,14 +54,28 @@ where
     const fn with_runner(runner: R) -> Self {
         Self { runner }
     }
-
-    fn run_test_command(&mut self) -> io::Result<()> {
-        let mut command = Command::new("test-command");
-
-        self.runner.status(&mut command)
-    }
 }
 
+impl<R> InstallationOperationExecutor for SystemInstallationOperationExecutor<R>
+where
+    R: InstallationCommandRunner,
+{
+    type Error = io::Error;
+
+    fn execute_operation(&mut self, operation: &InstallationOperation) -> Result<(), Self::Error> {
+        match operation {
+            InstallationOperation::PrepareDisk { device_path, .. } => {
+                let mut command = Command::new("test-command");
+
+                command.arg(device_path);
+
+                self.runner.status(&mut command)
+            }
+
+            _ => Ok(()),
+        }
+    }
+}
 /// Ordered non-executed operations for installing an appliance.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct InstallationPlan {
@@ -239,18 +253,30 @@ impl InstallationOperationExecutor for DryRunInstallationExecutor {
 }
 #[cfg(test)]
 mod tests {
-    use super::{InstallationCommandRunner, SystemInstallationOperationExecutor};
+    use super::{
+        InstallationCommandRunner, InstallationOperation, InstallationOperationExecutor,
+        SystemInstallationOperationExecutor,
+    };
+    use model::DiscoveredStorageId;
 
     use std::{io, process::Command};
 
     #[derive(Default)]
     struct RecordingCommandRunner {
-        commands: Vec<String>,
+        commands: Vec<Vec<String>>,
     }
+
     impl InstallationCommandRunner for RecordingCommandRunner {
         fn status(&mut self, command: &mut Command) -> io::Result<()> {
-            self.commands
-                .push(command.get_program().to_string_lossy().into_owned());
+            let mut recorded = vec![command.get_program().to_string_lossy().into_owned()];
+
+            recorded.extend(
+                command
+                    .get_args()
+                    .map(|arg| arg.to_string_lossy().into_owned()),
+            );
+
+            self.commands.push(recorded);
 
             Ok(())
         }
@@ -264,14 +290,22 @@ mod tests {
         assert!(executor.runner.commands.is_empty());
     }
     #[test]
-    fn system_executor_sends_command_to_runner() {
+    fn system_executor_sends_prepare_disk_command_to_runner() {
         let mut executor =
             SystemInstallationOperationExecutor::with_runner(RecordingCommandRunner::default());
 
+        let operation = InstallationOperation::PrepareDisk {
+            storage_id: DiscoveredStorageId::new("serial:usb-disk"),
+            device_path: "/dev/sdb".into(),
+        };
+
         executor
-            .run_test_command()
+            .execute_operation(&operation)
             .expect("recording runner should accept command");
 
-        assert_eq!(executor.runner.commands, vec!["test-command"]);
+        assert_eq!(
+            executor.runner.commands,
+            vec![vec!["test-command".to_owned(), "/dev/sdb".to_owned(),]]
+        );
     }
 }
