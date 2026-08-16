@@ -1,6 +1,6 @@
 use model::{DiscoveredStorage, DiscoveredStorageId, InstallationIntent, Plan};
 
-use std::path::PathBuf;
+use std::{io, path::PathBuf, process::Command};
 
 /// A non-executed operation required to prepare an installation target.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -39,16 +39,20 @@ pub trait InstallationOperationExecutor {
     fn execute_operation(&mut self, operation: &InstallationOperation) -> Result<(), Self::Error>;
 }
 /// Executes installation operations against the host system.
-#[derive(Clone, Copy, Debug, Default)]
-pub struct SystemInstallationOperationExecutor;
+trait InstallationCommandRunner {
+    fn status(&mut self, command: &mut Command) -> io::Result<()>;
+}
 
-impl SystemInstallationOperationExecutor {
-    /// Creates a system installation operation executor.
-    #[must_use]
-    pub const fn new() -> Self {
-        Self
+pub struct SystemInstallationOperationExecutor<R> {
+    runner: R,
+}
+
+impl<R> SystemInstallationOperationExecutor<R> {
+    const fn with_runner(runner: R) -> Self {
+        Self { runner }
     }
 }
+
 /// Ordered non-executed operations for installing an appliance.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct InstallationPlan {
@@ -222,5 +226,31 @@ impl InstallationOperationExecutor for DryRunInstallationExecutor {
     fn execute_operation(&mut self, operation: &InstallationOperation) -> Result<(), Self::Error> {
         self.executed_operations.push(operation.clone());
         Ok(())
+    }
+}
+#[cfg(test)]
+mod tests {
+    use super::{InstallationCommandRunner, SystemInstallationOperationExecutor};
+
+    use std::{io, process::Command};
+
+    #[derive(Default)]
+    struct RecordingCommandRunner {
+        calls: usize,
+    }
+
+    impl InstallationCommandRunner for RecordingCommandRunner {
+        fn status(&mut self, _command: &mut Command) -> io::Result<()> {
+            self.calls += 1;
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn creates_system_executor_with_command_runner() {
+        let executor =
+            SystemInstallationOperationExecutor::with_runner(RecordingCommandRunner::default());
+
+        assert_eq!(executor.runner.calls, 0);
     }
 }

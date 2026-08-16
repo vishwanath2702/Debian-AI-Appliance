@@ -398,11 +398,6 @@ mod tests {
     }
 
     #[test]
-    fn creates_system_installation_operation_executor() {
-        let _executor = SystemInstallationOperationExecutor::new();
-    }
-
-    #[test]
     fn installation_plan_stops_after_operation_failure() {
         let plan = InstallationPlan::new(vec![
             InstallationOperation::PrepareDisk {
