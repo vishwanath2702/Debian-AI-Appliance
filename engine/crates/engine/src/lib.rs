@@ -11,7 +11,7 @@ pub use installation::{
     DryRunInstallationExecutor, InstallationCommandRunner, InstallationExecutor,
     InstallationOperation, InstallationOperationExecutor, InstallationPlan, PreparedInstallation,
     ProcessInstallationCommandRunner, SystemInstallationOperationExecutor,
-    default_installation_partitions,
+    default_installation_mounts, default_installation_partitions,
 };
 
 use std::{
@@ -317,7 +317,8 @@ mod tests {
     use super::{
         BootstrapConfig, BuildContext, BuildError, DryRunInstallationExecutor, Engine,
         InstallationExecutor, InstallationOperation, InstallationOperationExecutor,
-        InstallationPlan, PreparedInstallation, RootfsRunError, default_installation_partitions,
+        InstallationPlan, PreparedInstallation, RootfsRunError, default_installation_mounts,
+        default_installation_partitions,
     };
     struct TestStorageInspector;
 
@@ -409,7 +410,8 @@ mod tests {
                 partitions: default_installation_partitions(),
             },
             InstallationOperation::MountFilesystems {
-                mount_point: "/target".to_owned(),
+                device_path: "/dev/sdb".into(),
+                mounts: default_installation_mounts(),
             },
             InstallationOperation::BootstrapSystem {
                 root: "/target".to_owned(),
@@ -475,7 +477,8 @@ mod tests {
                 partitions: default_installation_partitions(),
             },
             InstallationOperation::MountFilesystems {
-                mount_point: "/target".to_owned(),
+                device_path: "/dev/sdb".into(),
+                mounts: default_installation_mounts(),
             },
             InstallationOperation::BootstrapSystem {
                 root: "/target".to_owned(),
@@ -549,7 +552,8 @@ mod tests {
                     partitions: default_installation_partitions(),
                 },
                 InstallationOperation::MountFilesystems {
-                    mount_point: "/target".to_owned(),
+                    device_path: "/dev/sdb".into(),
+                    mounts: default_installation_mounts(),
                 },
                 InstallationOperation::BootstrapSystem {
                     root: "/target".to_owned(),
@@ -571,7 +575,8 @@ mod tests {
                 partitions: default_installation_partitions(),
             },
             InstallationOperation::MountFilesystems {
-                mount_point: "/target".to_owned(),
+                device_path: "/dev/sdb".into(),
+                mounts: default_installation_mounts(),
             },
             InstallationOperation::BootstrapSystem {
                 root: "/target".to_owned(),
@@ -591,7 +596,8 @@ mod tests {
                     partitions: default_installation_partitions(),
                 },
                 InstallationOperation::MountFilesystems {
-                    mount_point: "/target".to_owned(),
+                    device_path: "/dev/sdb".into(),
+                    mounts: default_installation_mounts(),
                 },
                 InstallationOperation::BootstrapSystem {
                     root: "/target".to_owned(),

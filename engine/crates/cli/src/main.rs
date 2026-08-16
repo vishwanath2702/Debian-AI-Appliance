@@ -328,8 +328,8 @@ fn installation_operation_name(operation: &InstallationOperation) -> String {
         InstallationOperation::CreateFilesystems { partitions, .. } => {
             format!("Create filesystems for {} partitions", partitions.len())
         }
-        InstallationOperation::MountFilesystems { mount_point } => {
-            format!("Mount filesystems at {mount_point}")
+        InstallationOperation::MountFilesystems { mounts, .. } => {
+            format!("Mount {} filesystems", mounts.len())
         }
         InstallationOperation::BootstrapSystem { root } => {
             format!("Bootstrap system at {root}")

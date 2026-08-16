@@ -75,6 +75,44 @@ fn partition_device_path(device_path: &std::path::Path, partition_number: usize)
         PathBuf::from(format!("{device}{partition_number}"))
     }
 }
+
+/// Describes one filesystem mount required by an installation.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct InstallationMount {
+    role: InstallationPartitionRole,
+    mount_point: PathBuf,
+}
+impl InstallationMount {
+    /// Creates an installation mount description.
+    #[must_use]
+    pub fn new(role: InstallationPartitionRole, mount_point: impl Into<PathBuf>) -> Self {
+        Self {
+            role,
+            mount_point: mount_point.into(),
+        }
+    }
+
+    /// Returns the partition role mounted at this location.
+    #[must_use]
+    pub const fn role(&self) -> InstallationPartitionRole {
+        self.role
+    }
+
+    /// Returns the mount point.
+    #[must_use]
+    pub fn mount_point(&self) -> &std::path::Path {
+        &self.mount_point
+    }
+}
+/// Returns the default DAIA installation mount layout.
+#[must_use]
+pub fn default_installation_mounts() -> Vec<InstallationMount> {
+    vec![
+        InstallationMount::new(InstallationPartitionRole::Root, "/target"),
+        InstallationMount::new(InstallationPartitionRole::EfiSystem, "/target/boot/efi"),
+    ]
+}
+
 /// A non-executed operation required to prepare an installation target.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum InstallationOperation {
@@ -104,7 +142,10 @@ pub enum InstallationOperation {
         partitions: Vec<InstallationPartition>,
     },
     /// Mount the prepared target filesystems.
-    MountFilesystems { mount_point: String },
+    MountFilesystems {
+        device_path: PathBuf,
+        mounts: Vec<InstallationMount>,
+    },
 
     /// Bootstrap the base operating system.
     BootstrapSystem { root: String },
@@ -366,7 +407,8 @@ impl PreparedInstallation {
                 partitions: default_installation_partitions(),
             },
             InstallationOperation::MountFilesystems {
-                mount_point: "/target".to_owned(),
+                device_path: self.storage.device_path().to_path_buf(),
+                mounts: default_installation_mounts(),
             },
             InstallationOperation::BootstrapSystem {
                 root: "/target".to_owned(),
@@ -476,8 +518,8 @@ mod tests {
     use super::{
         InstallationCommandRunner, InstallationOperation, InstallationOperationExecutor,
         InstallationPartition, InstallationPartitionRole, ProcessInstallationCommandRunner,
-        SystemInstallationOperationExecutor, default_installation_partitions,
-        partition_device_path,
+        SystemInstallationOperationExecutor, default_installation_mounts,
+        default_installation_partitions, partition_device_path,
     };
     use model::DiscoveredStorageId;
 
@@ -510,6 +552,22 @@ mod tests {
 
             Ok(())
         }
+    }
+
+    #[test]
+    fn default_installation_mounts_define_root_and_efi() {
+        let mounts = default_installation_mounts();
+
+        assert_eq!(mounts.len(), 2);
+
+        assert_eq!(mounts[0].role(), InstallationPartitionRole::Root);
+        assert_eq!(mounts[0].mount_point(), std::path::Path::new("/target"));
+
+        assert_eq!(mounts[1].role(), InstallationPartitionRole::EfiSystem);
+        assert_eq!(
+            mounts[1].mount_point(),
+            std::path::Path::new("/target/boot/efi")
+        );
     }
 
     #[test]
