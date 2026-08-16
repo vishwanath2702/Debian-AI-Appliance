@@ -415,7 +415,7 @@ mod tests {
                 mounts: default_installation_mounts(),
             },
             InstallationOperation::BootstrapSystem {
-                root: "/target".to_owned(),
+                root: "/target".into(),
             },
             InstallationOperation::ApplyPlans { count: 1 },
         ]);
@@ -483,7 +483,7 @@ mod tests {
                 mounts: default_installation_mounts(),
             },
             InstallationOperation::BootstrapSystem {
-                root: "/target".to_owned(),
+                root: "/target".into(),
             },
             InstallationOperation::ApplyPlans { count: 1 },
         ]);
@@ -559,7 +559,7 @@ mod tests {
                     mounts: default_installation_mounts(),
                 },
                 InstallationOperation::BootstrapSystem {
-                    root: "/target".to_owned(),
+                    root: "/target".into(),
                 },
                 InstallationOperation::ApplyPlans { count: 0 }
             ]
@@ -583,7 +583,7 @@ mod tests {
                 mounts: default_installation_mounts(),
             },
             InstallationOperation::BootstrapSystem {
-                root: "/target".to_owned(),
+                root: "/target".into(),
             },
             InstallationOperation::ApplyPlans { count: 0 },
         ]);
@@ -605,7 +605,7 @@ mod tests {
                     mounts: default_installation_mounts(),
                 },
                 InstallationOperation::BootstrapSystem {
-                    root: "/target".to_owned(),
+                    root: "/target".into(),
                 },
                 InstallationOperation::ApplyPlans { count: 0 }
             ]

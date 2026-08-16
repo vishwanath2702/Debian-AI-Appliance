@@ -332,7 +332,7 @@ fn installation_operation_name(operation: &InstallationOperation) -> String {
             format!("Mount {} filesystems", mounts.len())
         }
         InstallationOperation::BootstrapSystem { root } => {
-            format!("Bootstrap system at {root}")
+            format!("Bootstrap system at {}", root.display())
         }
         InstallationOperation::ApplyPlans { count } => {
             if *count == 1 {

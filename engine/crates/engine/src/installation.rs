@@ -148,7 +148,7 @@ pub enum InstallationOperation {
         mounts: Vec<InstallationMount>,
     },
     /// Bootstrap the base operating system.
-    BootstrapSystem { root: String },
+    BootstrapSystem { root: PathBuf },
 
     /// Apply the appliance execution plans.
     ApplyPlans { count: usize },
@@ -471,7 +471,7 @@ impl PreparedInstallation {
                 mounts: default_installation_mounts(),
             },
             InstallationOperation::BootstrapSystem {
-                root: "/target".to_owned(),
+                root: "/target".into(),
             },
             InstallationOperation::ApplyPlans {
                 count: self.plans.len(),
