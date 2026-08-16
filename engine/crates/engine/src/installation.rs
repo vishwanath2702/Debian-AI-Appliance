@@ -327,6 +327,28 @@ where
 
                 Ok(())
             }
+            InstallationOperation::MountFilesystems {
+                device_path,
+                mounts,
+            } => {
+                let root_mount = mounts
+                    .iter()
+                    .find(|mount| mount.role() == InstallationPartitionRole::Root)
+                    .ok_or_else(|| io::Error::other("root mount is missing"))?;
+
+                let root_partition_number = 2;
+                let root_partition_path = partition_device_path(device_path, root_partition_number);
+
+                let mut command = Command::new("mount");
+
+                command
+                    .arg(root_partition_path)
+                    .arg(root_mount.mount_point());
+
+                self.runner.status(&mut command)?;
+
+                Ok(())
+            }
             _ => Ok(()),
         }
     }
@@ -552,6 +574,30 @@ mod tests {
 
             Ok(())
         }
+    }
+
+    #[test]
+    fn system_executor_mounts_root_partition() {
+        let mut executor =
+            SystemInstallationOperationExecutor::with_runner(RecordingCommandRunner::default());
+
+        let operation = InstallationOperation::MountFilesystems {
+            device_path: "/dev/sdb".into(),
+            mounts: default_installation_mounts(),
+        };
+
+        executor
+            .execute_operation(&operation)
+            .expect("recording runner should accept command");
+
+        assert_eq!(
+            executor.runner.commands,
+            vec![vec![
+                "mount".to_owned(),
+                "/dev/sdb2".to_owned(),
+                "/target".to_owned(),
+            ]]
+        );
     }
 
     #[test]
