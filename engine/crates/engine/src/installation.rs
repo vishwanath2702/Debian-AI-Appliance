@@ -336,7 +336,12 @@ where
                     .find(|mount| mount.role() == InstallationPartitionRole::Root)
                     .ok_or_else(|| io::Error::other("root mount is missing"))?;
 
-                let root_partition_number = 2;
+                let root_partition_number = default_installation_partitions()
+                    .iter()
+                    .position(|partition| partition.role() == InstallationPartitionRole::Root)
+                    .map(|index| index + 1)
+                    .ok_or_else(|| io::Error::other("root partition is missing"))?;
+
                 let root_partition_path = partition_device_path(device_path, root_partition_number);
 
                 let mut command = Command::new("mount");
@@ -574,6 +579,16 @@ mod tests {
 
             Ok(())
         }
+    }
+
+    #[test]
+    fn default_layout_places_root_on_second_partition() {
+        let root_partition_number = default_installation_partitions()
+            .iter()
+            .position(|partition| partition.role() == InstallationPartitionRole::Root)
+            .map(|index| index + 1);
+
+        assert_eq!(root_partition_number, Some(2));
     }
 
     #[test]
