@@ -2,6 +2,7 @@ use model::{DiscoveredStorage, DiscoveredStorageId, InstallationIntent, Plan};
 
 use std::{io, path::PathBuf, process::Command};
 
+use crate::BootstrapConfig;
 /// Role of a partition in an installed DAIA system.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum InstallationPartitionRole {
@@ -148,7 +149,10 @@ pub enum InstallationOperation {
         mounts: Vec<InstallationMount>,
     },
     /// Bootstrap the base operating system.
-    BootstrapSystem { root: PathBuf },
+    BootstrapSystem {
+        root: PathBuf,
+        bootstrap: BootstrapConfig,
+    },
 
     /// Apply the appliance execution plans.
     ApplyPlans { count: usize },
@@ -432,6 +436,7 @@ pub struct PreparedInstallation {
     intent: InstallationIntent,
     storage: DiscoveredStorage,
     plans: Vec<Plan>,
+    bootstrap: BootstrapConfig,
 }
 
 impl PreparedInstallation {
@@ -441,11 +446,13 @@ impl PreparedInstallation {
         intent: InstallationIntent,
         storage: DiscoveredStorage,
         plans: Vec<Plan>,
+        bootstrap: BootstrapConfig,
     ) -> Self {
         Self {
             intent,
             storage,
             plans,
+            bootstrap,
         }
     }
 
@@ -472,6 +479,7 @@ impl PreparedInstallation {
             },
             InstallationOperation::BootstrapSystem {
                 root: "/target".into(),
+                bootstrap: self.bootstrap.clone(),
             },
             InstallationOperation::ApplyPlans {
                 count: self.plans.len(),
@@ -496,7 +504,11 @@ impl PreparedInstallation {
     pub fn plans(&self) -> &[Plan] {
         &self.plans
     }
-
+    /// Returns the root filesystem bootstrap configuration.
+    #[must_use]
+    pub const fn bootstrap(&self) -> &BootstrapConfig {
+        &self.bootstrap
+    }
     /// Returns a human-readable dry-run summary.
     #[must_use]
     pub fn summary(&self) -> String {

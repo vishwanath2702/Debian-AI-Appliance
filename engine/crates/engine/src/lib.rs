@@ -252,7 +252,12 @@ impl Engine {
             .plan_installation(&intent, profile)
             .map_err(|error| error.to_string())?;
 
-        Ok(PreparedInstallation::new(intent, selected, plans))
+        Ok(PreparedInstallation::new(
+            intent,
+            selected,
+            plans,
+            BootstrapConfig::default(),
+        ))
     }
 
     /// Executes a prepared installation using the supplied executor.
@@ -416,6 +421,7 @@ mod tests {
             },
             InstallationOperation::BootstrapSystem {
                 root: "/target".into(),
+                bootstrap: BootstrapConfig::default(),
             },
             InstallationOperation::ApplyPlans { count: 1 },
         ]);
@@ -453,7 +459,8 @@ mod tests {
 
         let storage = DiscoveredStorage::new("serial:usb-disk", StorageKind::Removable, "/dev/sdb");
 
-        let prepared = PreparedInstallation::new(intent, storage, Vec::new());
+        let prepared =
+            PreparedInstallation::new(intent, storage, Vec::new(), BootstrapConfig::default());
 
         let mut executor = DryRunInstallationExecutor::default();
 
@@ -484,6 +491,7 @@ mod tests {
             },
             InstallationOperation::BootstrapSystem {
                 root: "/target".into(),
+                bootstrap: BootstrapConfig::default(),
             },
             InstallationOperation::ApplyPlans { count: 1 },
         ]);
@@ -526,7 +534,8 @@ mod tests {
 
         let storage = DiscoveredStorage::new("serial:usb-disk", StorageKind::Removable, "/dev/sdb");
 
-        let prepared = PreparedInstallation::new(intent, storage, Vec::new());
+        let prepared =
+            PreparedInstallation::new(intent, storage, Vec::new(), BootstrapConfig::default());
 
         let mut executor = DryRunInstallationExecutor::default();
 
@@ -560,6 +569,7 @@ mod tests {
                 },
                 InstallationOperation::BootstrapSystem {
                     root: "/target".into(),
+                    bootstrap: BootstrapConfig::default(),
                 },
                 InstallationOperation::ApplyPlans { count: 0 }
             ]
@@ -584,6 +594,7 @@ mod tests {
             },
             InstallationOperation::BootstrapSystem {
                 root: "/target".into(),
+                bootstrap: BootstrapConfig::default(),
             },
             InstallationOperation::ApplyPlans { count: 0 },
         ]);
@@ -606,6 +617,7 @@ mod tests {
                 },
                 InstallationOperation::BootstrapSystem {
                     root: "/target".into(),
+                    bootstrap: BootstrapConfig::default(),
                 },
                 InstallationOperation::ApplyPlans { count: 0 }
             ]
@@ -621,7 +633,8 @@ mod tests {
 
         let storage = DiscoveredStorage::new("serial:usb-disk", StorageKind::Removable, "/dev/sdb");
 
-        let prepared = PreparedInstallation::new(intent, storage, Vec::new());
+        let prepared =
+            PreparedInstallation::new(intent, storage, Vec::new(), BootstrapConfig::default());
 
         let mut executor = DryRunInstallationExecutor::default();
 
@@ -646,7 +659,8 @@ mod tests {
 
         let storage = DiscoveredStorage::new("serial:usb-disk", StorageKind::Removable, "/dev/sdb");
 
-        let prepared = PreparedInstallation::new(intent, storage, Vec::new());
+        let prepared =
+            PreparedInstallation::new(intent, storage, Vec::new(), BootstrapConfig::default());
 
         let mut executor = RecordingInstallationExecutor { executed: false };
 
@@ -664,7 +678,8 @@ mod tests {
 
         let storage = DiscoveredStorage::new("serial:usb-disk", StorageKind::Removable, "/dev/sdb");
 
-        let prepared = PreparedInstallation::new(intent, storage, Vec::new());
+        let prepared =
+            PreparedInstallation::new(intent, storage, Vec::new(), BootstrapConfig::default());
 
         assert_eq!(
             prepared.summary(),
