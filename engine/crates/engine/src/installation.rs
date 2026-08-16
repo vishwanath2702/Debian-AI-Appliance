@@ -186,15 +186,15 @@ where
                         command
                             .arg("mkpart")
                             .arg("ESP")
-                            .arg("fat32")
+                            .arg(efi_partition.filesystem())
                             .arg("1MiB")
                             .arg(format!("{}MiB", size_mib + 1));
                     }
                 }
 
-                if partitions
+                if let Some(root_partition) = partitions
                     .iter()
-                    .any(|partition| partition.role() == InstallationPartitionRole::Root)
+                    .find(|partition| partition.role() == InstallationPartitionRole::Root)
                 {
                     let root_start_mib = partitions
                         .iter()
@@ -205,7 +205,7 @@ where
                     command
                         .arg("mkpart")
                         .arg("primary")
-                        .arg("ext4")
+                        .arg(root_partition.filesystem())
                         .arg(format!("{root_start_mib}MiB"))
                         .arg("100%");
                 }
