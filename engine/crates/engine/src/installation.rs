@@ -240,6 +240,15 @@ where
                     .iter()
                     .position(|partition| partition.role() == InstallationPartitionRole::EfiSystem)
                 {
+                    let partition = &partitions[efi_partition];
+
+                    if partition.filesystem() != "fat32" {
+                        return Err(io::Error::other(format!(
+                            "unsupported EFI filesystem: {}",
+                            partition.filesystem()
+                        )));
+                    }
+
                     let partition_number = efi_partition + 1;
                     let partition_path = partition_device_path(device_path, partition_number);
 
@@ -497,6 +506,26 @@ mod tests {
 
             Ok(())
         }
+    }
+
+    #[test]
+    fn system_executor_rejects_unsupported_efi_filesystem() {
+        let mut executor =
+            SystemInstallationOperationExecutor::with_runner(RecordingCommandRunner::default());
+
+        let operation = InstallationOperation::CreateFilesystems {
+            device_path: "/dev/sdb".into(),
+            partitions: vec![
+                InstallationPartition::new(InstallationPartitionRole::EfiSystem, "ext4", Some(512)),
+                InstallationPartition::new(InstallationPartitionRole::Root, "ext4", None),
+            ],
+        };
+
+        let error = executor
+            .execute_operation(&operation)
+            .expect_err("unsupported EFI filesystem should fail");
+
+        assert!(error.to_string().contains("unsupported EFI filesystem"));
     }
 
     #[test]
