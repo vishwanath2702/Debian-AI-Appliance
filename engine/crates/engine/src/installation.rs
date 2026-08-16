@@ -196,11 +196,17 @@ where
                     .iter()
                     .any(|partition| partition.role() == InstallationPartitionRole::Root)
                 {
+                    let root_start_mib = partitions
+                        .iter()
+                        .find(|partition| partition.role() == InstallationPartitionRole::EfiSystem)
+                        .and_then(InstallationPartition::size_mib)
+                        .map_or(1, |size_mib| size_mib + 1);
+
                     command
                         .arg("mkpart")
                         .arg("primary")
                         .arg("ext4")
-                        .arg("513MiB")
+                        .arg(format!("{root_start_mib}MiB"))
                         .arg("100%");
                 }
 
@@ -559,6 +565,48 @@ mod tests {
                 "primary".to_owned(),
                 "ext4".to_owned(),
                 "513MiB".to_owned(),
+                "100%".to_owned(),
+            ]]
+        );
+    }
+    #[test]
+    fn root_partition_start_follows_efi_partition_size() {
+        let mut executor =
+            SystemInstallationOperationExecutor::with_runner(RecordingCommandRunner::default());
+
+        let operation = InstallationOperation::PartitionDisk {
+            device_path: "/dev/sdb".into(),
+            partitions: vec![
+                InstallationPartition::new(
+                    InstallationPartitionRole::EfiSystem,
+                    "fat32",
+                    Some(256),
+                ),
+                InstallationPartition::new(InstallationPartitionRole::Root, "ext4", None),
+            ],
+        };
+
+        executor
+            .execute_operation(&operation)
+            .expect("recording runner should accept command");
+
+        assert_eq!(
+            executor.runner.commands,
+            vec![vec![
+                "parted".to_owned(),
+                "--script".to_owned(),
+                "/dev/sdb".to_owned(),
+                "mklabel".to_owned(),
+                "gpt".to_owned(),
+                "mkpart".to_owned(),
+                "ESP".to_owned(),
+                "fat32".to_owned(),
+                "1MiB".to_owned(),
+                "257MiB".to_owned(),
+                "mkpart".to_owned(),
+                "primary".to_owned(),
+                "ext4".to_owned(),
+                "257MiB".to_owned(),
                 "100%".to_owned(),
             ]]
         );
