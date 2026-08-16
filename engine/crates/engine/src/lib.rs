@@ -405,7 +405,7 @@ mod tests {
                 device_path: "/dev/sdb".into(),
             },
             InstallationOperation::CreateFilesystems {
-                filesystem: "ext4".to_owned(),
+                partitions: default_installation_partitions(),
             },
             InstallationOperation::MountFilesystems {
                 mount_point: "/target".to_owned(),
@@ -434,7 +434,7 @@ mod tests {
                     device_path: "/dev/sdb".into(),
                 },
                 InstallationOperation::CreateFilesystems {
-                    filesystem: "ext4".to_owned(),
+                    partitions: default_installation_partitions(),
                 },
             ]
         );
@@ -469,7 +469,7 @@ mod tests {
                 device_path: "/dev/sdb".into(),
             },
             InstallationOperation::CreateFilesystems {
-                filesystem: "ext4".to_owned(),
+                partitions: default_installation_partitions(),
             },
             InstallationOperation::MountFilesystems {
                 mount_point: "/target".to_owned(),
@@ -542,7 +542,7 @@ mod tests {
                     partitions: default_installation_partitions(),
                 },
                 InstallationOperation::CreateFilesystems {
-                    filesystem: "ext4".to_owned(),
+                    partitions: default_installation_partitions(),
                 },
                 InstallationOperation::MountFilesystems {
                     mount_point: "/target".to_owned(),
@@ -563,7 +563,7 @@ mod tests {
                 device_path: "/dev/sdb".into(),
             },
             InstallationOperation::CreateFilesystems {
-                filesystem: "ext4".to_owned(),
+                partitions: default_installation_partitions(),
             },
             InstallationOperation::MountFilesystems {
                 mount_point: "/target".to_owned(),
@@ -582,7 +582,7 @@ mod tests {
                     device_path: "/dev/sdb".into(),
                 },
                 InstallationOperation::CreateFilesystems {
-                    filesystem: "ext4".to_owned(),
+                    partitions: default_installation_partitions(),
                 },
                 InstallationOperation::MountFilesystems {
                     mount_point: "/target".to_owned(),

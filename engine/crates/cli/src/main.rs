@@ -325,8 +325,8 @@ fn installation_operation_name(operation: &InstallationOperation) -> String {
         InstallationOperation::PartitionDisk { device_path, .. } => {
             format!("Partition disk {}", device_path.display())
         }
-        InstallationOperation::CreateFilesystems { filesystem } => {
-            format!("Create filesystems ({filesystem})")
+        InstallationOperation::CreateFilesystems { partitions } => {
+            format!("Create filesystems for {} partitions", partitions.len())
         }
         InstallationOperation::MountFilesystems { mount_point } => {
             format!("Mount filesystems at {mount_point}")

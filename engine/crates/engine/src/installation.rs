@@ -82,7 +82,9 @@ pub enum InstallationOperation {
     },
 
     /// Create the filesystems required by the installed system.
-    CreateFilesystems { filesystem: String },
+    CreateFilesystems {
+        partitions: Vec<InstallationPartition>,
+    },
 
     /// Mount the prepared target filesystems.
     MountFilesystems { mount_point: String },
@@ -287,7 +289,7 @@ impl PreparedInstallation {
                 partitions: default_installation_partitions(),
             },
             InstallationOperation::CreateFilesystems {
-                filesystem: "ext4".to_owned(),
+                partitions: default_installation_partitions(),
             },
             InstallationOperation::MountFilesystems {
                 mount_point: "/target".to_owned(),
