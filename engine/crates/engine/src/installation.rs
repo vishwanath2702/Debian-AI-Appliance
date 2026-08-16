@@ -261,9 +261,22 @@ mod tests {
 
     use std::{io, process::Command};
 
+    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+    enum RecordingCommandError {
+        Failed,
+    }
+
     #[derive(Default)]
     struct RecordingCommandRunner {
         commands: Vec<Vec<String>>,
+    }
+
+    struct FailingCommandRunner;
+
+    impl InstallationCommandRunner for FailingCommandRunner {
+        fn status(&mut self, _command: &mut Command) -> io::Result<()> {
+            Err(io::Error::other("command failed"))
+        }
     }
 
     impl InstallationCommandRunner for RecordingCommandRunner {
@@ -311,5 +324,20 @@ mod tests {
                 "/dev/sdb".to_owned(),
             ]]
         );
+    }
+    #[test]
+    fn system_executor_returns_prepare_disk_command_failure() {
+        let mut executor = SystemInstallationOperationExecutor::with_runner(FailingCommandRunner);
+
+        let operation = InstallationOperation::PrepareDisk {
+            storage_id: DiscoveredStorageId::new("serial:usb-disk"),
+            device_path: "/dev/sdb".into(),
+        };
+
+        let error = executor
+            .execute_operation(&operation)
+            .expect_err("prepare disk should return command failure");
+
+        assert_eq!(error.kind(), io::ErrorKind::Other);
     }
 }
