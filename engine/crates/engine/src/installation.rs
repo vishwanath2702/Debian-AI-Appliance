@@ -192,32 +192,28 @@ impl InstallationCommandRunner for ProcessInstallationCommandRunner {
     }
 }
 
-pub struct SystemInstallationOperationExecutor<R> {
+pub struct SystemInstallationOperationExecutor<R, B> {
     runner: R,
+    bootstrapper: B,
 }
 
-impl<R> SystemInstallationOperationExecutor<R>
+impl<R, B> SystemInstallationOperationExecutor<R, B>
 where
     R: InstallationCommandRunner,
+    B: InstallationBootstrapper,
 {
-    const fn with_runner(runner: R) -> Self {
-        Self { runner }
-    }
-}
-
-impl SystemInstallationOperationExecutor<ProcessInstallationCommandRunner> {
-    /// Creates a system installation executor using real process execution.
-    #[must_use]
-    pub const fn new() -> Self {
+    const fn with_dependencies(runner: R, bootstrapper: B) -> Self {
         Self {
-            runner: ProcessInstallationCommandRunner,
+            runner,
+            bootstrapper,
         }
     }
 }
 
-impl<R> InstallationOperationExecutor for SystemInstallationOperationExecutor<R>
+impl<R, B> InstallationOperationExecutor for SystemInstallationOperationExecutor<R, B>
 where
     R: InstallationCommandRunner,
+    B: InstallationBootstrapper,
 {
     type Error = io::Error;
 
@@ -725,9 +721,10 @@ mod tests {
 
     #[test]
     fn system_executor_rejects_missing_efi_partition_before_mounting() {
-        let mut executor =
-            SystemInstallationOperationExecutor::with_runner(RecordingCommandRunner::default());
-
+        let mut executor = SystemInstallationOperationExecutor::with_dependencies(
+            RecordingCommandRunner::default(),
+            RecordingInstallationBootstrapper::default(),
+        );
         let operation = InstallationOperation::MountFilesystems {
             device_path: "/dev/sdb".into(),
             partitions: vec![InstallationPartition::new(
@@ -748,8 +745,10 @@ mod tests {
 
     #[test]
     fn system_executor_rejects_missing_root_partition_before_mounting() {
-        let mut executor =
-            SystemInstallationOperationExecutor::with_runner(RecordingCommandRunner::default());
+        let mut executor = SystemInstallationOperationExecutor::with_dependencies(
+            RecordingCommandRunner::default(),
+            RecordingInstallationBootstrapper::default(),
+        );
 
         let operation = InstallationOperation::MountFilesystems {
             device_path: "/dev/sdb".into(),
@@ -771,9 +770,10 @@ mod tests {
 
     #[test]
     fn system_executor_mounts_custom_partition_order() {
-        let mut executor =
-            SystemInstallationOperationExecutor::with_runner(RecordingCommandRunner::default());
-
+        let mut executor = SystemInstallationOperationExecutor::with_dependencies(
+            RecordingCommandRunner::default(),
+            RecordingInstallationBootstrapper::default(),
+        );
         let operation = InstallationOperation::MountFilesystems {
             device_path: "/dev/sdb".into(),
             partitions: vec![
@@ -816,9 +816,10 @@ mod tests {
 
     #[test]
     fn system_executor_rejects_missing_root_mount_before_execution() {
-        let mut executor =
-            SystemInstallationOperationExecutor::with_runner(RecordingCommandRunner::default());
-
+        let mut executor = SystemInstallationOperationExecutor::with_dependencies(
+            RecordingCommandRunner::default(),
+            RecordingInstallationBootstrapper::default(),
+        );
         let operation = InstallationOperation::MountFilesystems {
             device_path: "/dev/sdb".into(),
             partitions: default_installation_partitions(),
@@ -838,9 +839,10 @@ mod tests {
 
     #[test]
     fn system_executor_rejects_missing_efi_mount_before_execution() {
-        let mut executor =
-            SystemInstallationOperationExecutor::with_runner(RecordingCommandRunner::default());
-
+        let mut executor = SystemInstallationOperationExecutor::with_dependencies(
+            RecordingCommandRunner::default(),
+            RecordingInstallationBootstrapper::default(),
+        );
         let operation = InstallationOperation::MountFilesystems {
             device_path: "/dev/sdb".into(),
             partitions: default_installation_partitions(),
@@ -870,8 +872,10 @@ mod tests {
 
     #[test]
     fn system_executor_creates_mount_points_and_mounts_filesystems() {
-        let mut executor =
-            SystemInstallationOperationExecutor::with_runner(RecordingCommandRunner::default());
+        let mut executor = SystemInstallationOperationExecutor::with_dependencies(
+            RecordingCommandRunner::default(),
+            RecordingInstallationBootstrapper::default(),
+        );
 
         let operation = InstallationOperation::MountFilesystems {
             device_path: "/dev/sdb".into(),
@@ -924,9 +928,10 @@ mod tests {
 
     #[test]
     fn system_executor_rejects_zero_efi_partition_size() {
-        let mut executor =
-            SystemInstallationOperationExecutor::with_runner(RecordingCommandRunner::default());
-
+        let mut executor = SystemInstallationOperationExecutor::with_dependencies(
+            RecordingCommandRunner::default(),
+            RecordingInstallationBootstrapper::default(),
+        );
         let operation = InstallationOperation::PartitionDisk {
             device_path: "/dev/sdb".into(),
             partitions: vec![
@@ -948,9 +953,10 @@ mod tests {
 
     #[test]
     fn system_executor_rejects_efi_partition_without_size() {
-        let mut executor =
-            SystemInstallationOperationExecutor::with_runner(RecordingCommandRunner::default());
-
+        let mut executor = SystemInstallationOperationExecutor::with_dependencies(
+            RecordingCommandRunner::default(),
+            RecordingInstallationBootstrapper::default(),
+        );
         let operation = InstallationOperation::PartitionDisk {
             device_path: "/dev/sdb".into(),
             partitions: vec![
@@ -968,9 +974,10 @@ mod tests {
 
     #[test]
     fn system_executor_rejects_partition_layout_without_efi() {
-        let mut executor =
-            SystemInstallationOperationExecutor::with_runner(RecordingCommandRunner::default());
-
+        let mut executor = SystemInstallationOperationExecutor::with_dependencies(
+            RecordingCommandRunner::default(),
+            RecordingInstallationBootstrapper::default(),
+        );
         let operation = InstallationOperation::PartitionDisk {
             device_path: "/dev/sdb".into(),
             partitions: vec![InstallationPartition::new(
@@ -989,9 +996,10 @@ mod tests {
 
     #[test]
     fn system_executor_rejects_partition_layout_without_root() {
-        let mut executor =
-            SystemInstallationOperationExecutor::with_runner(RecordingCommandRunner::default());
-
+        let mut executor = SystemInstallationOperationExecutor::with_dependencies(
+            RecordingCommandRunner::default(),
+            RecordingInstallationBootstrapper::default(),
+        );
         let operation = InstallationOperation::PartitionDisk {
             device_path: "/dev/sdb".into(),
             partitions: vec![InstallationPartition::new(
@@ -1010,9 +1018,10 @@ mod tests {
 
     #[test]
     fn system_executor_rejects_missing_efi_partition() {
-        let mut executor =
-            SystemInstallationOperationExecutor::with_runner(RecordingCommandRunner::default());
-
+        let mut executor = SystemInstallationOperationExecutor::with_dependencies(
+            RecordingCommandRunner::default(),
+            RecordingInstallationBootstrapper::default(),
+        );
         let operation = InstallationOperation::CreateFilesystems {
             device_path: "/dev/sdb".into(),
             partitions: vec![InstallationPartition::new(
@@ -1031,9 +1040,10 @@ mod tests {
 
     #[test]
     fn system_executor_rejects_missing_root_partition() {
-        let mut executor =
-            SystemInstallationOperationExecutor::with_runner(RecordingCommandRunner::default());
-
+        let mut executor = SystemInstallationOperationExecutor::with_dependencies(
+            RecordingCommandRunner::default(),
+            RecordingInstallationBootstrapper::default(),
+        );
         let operation = InstallationOperation::CreateFilesystems {
             device_path: "/dev/sdb".into(),
             partitions: vec![InstallationPartition::new(
@@ -1051,9 +1061,10 @@ mod tests {
     }
     #[test]
     fn system_executor_rejects_unsupported_efi_filesystem() {
-        let mut executor =
-            SystemInstallationOperationExecutor::with_runner(RecordingCommandRunner::default());
-
+        let mut executor = SystemInstallationOperationExecutor::with_dependencies(
+            RecordingCommandRunner::default(),
+            RecordingInstallationBootstrapper::default(),
+        );
         let operation = InstallationOperation::CreateFilesystems {
             device_path: "/dev/sdb".into(),
             partitions: vec![
@@ -1071,9 +1082,10 @@ mod tests {
 
     #[test]
     fn system_executor_rejects_unsupported_root_filesystem() {
-        let mut executor =
-            SystemInstallationOperationExecutor::with_runner(RecordingCommandRunner::default());
-
+        let mut executor = SystemInstallationOperationExecutor::with_dependencies(
+            RecordingCommandRunner::default(),
+            RecordingInstallationBootstrapper::default(),
+        );
         let operation = InstallationOperation::CreateFilesystems {
             device_path: "/dev/sdb".into(),
             partitions: vec![
@@ -1094,9 +1106,10 @@ mod tests {
     }
     #[test]
     fn system_executor_creates_efi_and_root_filesystems() {
-        let mut executor =
-            SystemInstallationOperationExecutor::with_runner(RecordingCommandRunner::default());
-
+        let mut executor = SystemInstallationOperationExecutor::with_dependencies(
+            RecordingCommandRunner::default(),
+            RecordingInstallationBootstrapper::default(),
+        );
         let operation = InstallationOperation::CreateFilesystems {
             device_path: "/dev/sdb".into(),
             partitions: default_installation_partitions(),
@@ -1195,16 +1208,18 @@ mod tests {
 
     #[test]
     fn creates_system_executor_with_command_runner() {
-        let executor =
-            SystemInstallationOperationExecutor::with_runner(RecordingCommandRunner::default());
-
+        let executor = SystemInstallationOperationExecutor::with_dependencies(
+            RecordingCommandRunner::default(),
+            RecordingInstallationBootstrapper::default(),
+        );
         assert!(executor.runner.commands.is_empty());
     }
     #[test]
     fn system_executor_sends_wipefs_command_for_prepare_disk() {
-        let mut executor =
-            SystemInstallationOperationExecutor::with_runner(RecordingCommandRunner::default());
-
+        let mut executor = SystemInstallationOperationExecutor::with_dependencies(
+            RecordingCommandRunner::default(),
+            RecordingInstallationBootstrapper::default(),
+        );
         let operation = InstallationOperation::PrepareDisk {
             storage_id: DiscoveredStorageId::new("serial:usb-disk"),
             device_path: "/dev/sdb".into(),
@@ -1225,8 +1240,10 @@ mod tests {
     }
     #[test]
     fn system_executor_returns_prepare_disk_command_failure() {
-        let mut executor = SystemInstallationOperationExecutor::with_runner(FailingCommandRunner);
-
+        let mut executor = SystemInstallationOperationExecutor::with_dependencies(
+            FailingCommandRunner,
+            RecordingInstallationBootstrapper::default(),
+        );
         let operation = InstallationOperation::PrepareDisk {
             storage_id: DiscoveredStorageId::new("serial:usb-disk"),
             device_path: "/dev/sdb".into(),
@@ -1240,9 +1257,10 @@ mod tests {
     }
     #[test]
     fn system_executor_sends_parted_command_for_partition_disk() {
-        let mut executor =
-            SystemInstallationOperationExecutor::with_runner(RecordingCommandRunner::default());
-
+        let mut executor = SystemInstallationOperationExecutor::with_dependencies(
+            RecordingCommandRunner::default(),
+            RecordingInstallationBootstrapper::default(),
+        );
         let operation = InstallationOperation::PartitionDisk {
             device_path: "/dev/sdb".into(),
             partitions: default_installation_partitions(),
@@ -1275,9 +1293,10 @@ mod tests {
     }
     #[test]
     fn root_partition_start_follows_efi_partition_size() {
-        let mut executor =
-            SystemInstallationOperationExecutor::with_runner(RecordingCommandRunner::default());
-
+        let mut executor = SystemInstallationOperationExecutor::with_dependencies(
+            RecordingCommandRunner::default(),
+            RecordingInstallationBootstrapper::default(),
+        );
         let operation = InstallationOperation::PartitionDisk {
             device_path: "/dev/sdb".into(),
             partitions: vec![
