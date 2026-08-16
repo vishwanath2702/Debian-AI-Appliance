@@ -97,9 +97,12 @@ pub enum InstallationOperation {
 
     /// Create the filesystems required by the installed system.
     CreateFilesystems {
+        /// Validated Linux device path for the selected storage.
+        device_path: PathBuf,
+
+        /// Partitions whose filesystems should be created.
         partitions: Vec<InstallationPartition>,
     },
-
     /// Mount the prepared target filesystems.
     MountFilesystems { mount_point: String },
 
@@ -229,18 +232,20 @@ where
                 self.runner.status(&mut command)
             }
 
-            InstallationOperation::CreateFilesystems { partitions } => {
+            InstallationOperation::CreateFilesystems {
+                device_path,
+                partitions,
+            } => {
                 if let Some(efi_partition) = partitions
                     .iter()
                     .position(|partition| partition.role() == InstallationPartitionRole::EfiSystem)
                 {
                     let partition_number = efi_partition + 1;
-                    let device_path =
-                        partition_device_path(std::path::Path::new("/dev/sdb"), partition_number);
+                    let partition_path = partition_device_path(device_path, partition_number);
 
                     let mut command = Command::new("mkfs.fat");
 
-                    command.arg("-F").arg("32").arg(device_path);
+                    command.arg("-F").arg("32").arg(partition_path);
 
                     self.runner.status(&mut command)?;
                 }
@@ -323,6 +328,7 @@ impl PreparedInstallation {
                 partitions: default_installation_partitions(),
             },
             InstallationOperation::CreateFilesystems {
+                device_path: self.storage.device_path().to_path_buf(),
                 partitions: default_installation_partitions(),
             },
             InstallationOperation::MountFilesystems {
@@ -478,9 +484,9 @@ mod tests {
             SystemInstallationOperationExecutor::with_runner(RecordingCommandRunner::default());
 
         let operation = InstallationOperation::CreateFilesystems {
+            device_path: "/dev/sdb".into(),
             partitions: default_installation_partitions(),
         };
-
         executor
             .execute_operation(&operation)
             .expect("recording runner should accept command");

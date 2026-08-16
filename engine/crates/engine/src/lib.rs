@@ -405,6 +405,7 @@ mod tests {
                 device_path: "/dev/sdb".into(),
             },
             InstallationOperation::CreateFilesystems {
+                device_path: "/dev/sdb".into(),
                 partitions: default_installation_partitions(),
             },
             InstallationOperation::MountFilesystems {
@@ -434,6 +435,7 @@ mod tests {
                     device_path: "/dev/sdb".into(),
                 },
                 InstallationOperation::CreateFilesystems {
+                    device_path: "/dev/sdb".into(),
                     partitions: default_installation_partitions(),
                 },
             ]
@@ -469,6 +471,7 @@ mod tests {
                 device_path: "/dev/sdb".into(),
             },
             InstallationOperation::CreateFilesystems {
+                device_path: "/dev/sdb".into(),
                 partitions: default_installation_partitions(),
             },
             InstallationOperation::MountFilesystems {
@@ -542,6 +545,7 @@ mod tests {
                     partitions: default_installation_partitions(),
                 },
                 InstallationOperation::CreateFilesystems {
+                    device_path: "/dev/sdb".into(),
                     partitions: default_installation_partitions(),
                 },
                 InstallationOperation::MountFilesystems {
@@ -563,6 +567,7 @@ mod tests {
                 device_path: "/dev/sdb".into(),
             },
             InstallationOperation::CreateFilesystems {
+                device_path: "/dev/sdb".into(),
                 partitions: default_installation_partitions(),
             },
             InstallationOperation::MountFilesystems {
@@ -582,6 +587,7 @@ mod tests {
                     device_path: "/dev/sdb".into(),
                 },
                 InstallationOperation::CreateFilesystems {
+                    device_path: "/dev/sdb".into(),
                     partitions: default_installation_partitions(),
                 },
                 InstallationOperation::MountFilesystems {
