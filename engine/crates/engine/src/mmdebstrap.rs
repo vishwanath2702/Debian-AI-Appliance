@@ -107,6 +107,31 @@ impl MmdebstrapBootstrapper {
         command
     }
 
+    /// Bootstraps a target root using the supplied bootstrap configuration.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`MmdebstrapError`] if the command cannot be executed or exits
+    /// unsuccessfully.
+    pub fn bootstrap_root(
+        &self,
+        root: &std::path::Path,
+        config: &BootstrapConfig,
+    ) -> Result<(), MmdebstrapError> {
+        let mut command = self.command_for_root(root, config);
+
+        let status = self
+            .runner
+            .status(&mut command)
+            .map_err(MmdebstrapError::Process)?;
+
+        if status.success() {
+            Ok(())
+        } else {
+            Err(MmdebstrapError::Unsuccessful(status))
+        }
+    }
+
     /// Constructs the mmdebstrap command for a build context.
     #[must_use]
     pub fn command(&self, context: &BuildContext) -> Command {
@@ -234,6 +259,39 @@ mod tests {
         )
     }
 
+    #[test]
+    fn bootstrap_root_succeeds_when_command_succeeds() {
+        let runner = RecordingCommandRunner::returning(vec![Ok(ExitStatus::from_raw(0))]);
+
+        let bootstrapper = MmdebstrapBootstrapper::with_runner(runner);
+
+        let config = BootstrapConfig::new(
+            "trixie",
+            "amd64",
+            "https://deb.debian.org/debian",
+            vec!["main".to_owned()],
+            "minbase",
+        );
+
+        bootstrapper
+            .bootstrap_root(std::path::Path::new("/target"), &config)
+            .expect("installation root bootstrap should succeed");
+    }
+
+    #[test]
+    fn bootstrap_root_returns_error_when_command_fails() {
+        let runner = RecordingCommandRunner::returning(vec![Ok(ExitStatus::from_raw(1 << 8))]);
+
+        let bootstrapper = MmdebstrapBootstrapper::with_runner(runner);
+
+        let config = BootstrapConfig::default();
+
+        let error = bootstrapper
+            .bootstrap_root(std::path::Path::new("/target"), &config)
+            .expect_err("unsuccessful installation bootstrap should fail");
+
+        assert!(matches!(error, MmdebstrapError::Unsuccessful(_)));
+    }
     #[test]
     fn constructs_mmdebstrap_command_for_installation_root() {
         let config = BootstrapConfig::new(
