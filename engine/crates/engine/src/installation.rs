@@ -16,14 +16,20 @@ pub enum InstallationPartitionRole {
 pub struct InstallationPartition {
     role: InstallationPartitionRole,
     filesystem: String,
+    size_mib: Option<u64>,
 }
 impl InstallationPartition {
     /// Creates an installation partition description.
     #[must_use]
-    pub fn new(role: InstallationPartitionRole, filesystem: impl Into<String>) -> Self {
+    pub fn new(
+        role: InstallationPartitionRole,
+        filesystem: impl Into<String>,
+        size_mib: Option<u64>,
+    ) -> Self {
         Self {
             role,
             filesystem: filesystem.into(),
+            size_mib,
         }
     }
 
@@ -37,6 +43,13 @@ impl InstallationPartition {
     #[must_use]
     pub fn filesystem(&self) -> &str {
         &self.filesystem
+    }
+    /// Returns the requested partition size in MiB.
+    ///
+    /// `None` means the partition should consume the remaining space.
+    #[must_use]
+    pub const fn size_mib(&self) -> Option<u64> {
+        self.size_mib
     }
 }
 /// A non-executed operation required to prepare an installation target.
@@ -378,10 +391,21 @@ mod tests {
 
     #[test]
     fn installation_partition_describes_role_and_filesystem() {
-        let partition = InstallationPartition::new(InstallationPartitionRole::EfiSystem, "fat32");
+        let partition =
+            InstallationPartition::new(InstallationPartitionRole::EfiSystem, "fat32", Some(512));
 
         assert_eq!(partition.role(), InstallationPartitionRole::EfiSystem);
         assert_eq!(partition.filesystem(), "fat32");
+        assert_eq!(partition.size_mib(), Some(512));
+    }
+
+    #[test]
+    fn installation_partition_can_use_remaining_space() {
+        let partition = InstallationPartition::new(InstallationPartitionRole::Root, "ext4", None);
+
+        assert_eq!(partition.role(), InstallationPartitionRole::Root);
+        assert_eq!(partition.filesystem(), "ext4");
+        assert_eq!(partition.size_mib(), None);
     }
 
     #[test]
