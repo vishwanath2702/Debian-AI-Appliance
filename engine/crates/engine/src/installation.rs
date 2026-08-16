@@ -386,6 +386,10 @@ where
 
                 Ok(())
             }
+            InstallationOperation::BootstrapSystem { root, bootstrap } => self
+                .bootstrapper
+                .bootstrap(root, bootstrap)
+                .map_err(|_| io::Error::other("installation bootstrap failed")),
             _ => Ok(()),
         }
     }
@@ -658,6 +662,43 @@ mod tests {
         }
     }
 
+    #[test]
+    fn system_executor_routes_bootstrap_operation_to_bootstrapper() {
+        let bootstrapper = RecordingInstallationBootstrapper::default();
+
+        let config = BootstrapConfig::new(
+            "trixie",
+            "amd64",
+            "https://deb.debian.org/debian",
+            vec!["main".to_owned()],
+            "minbase",
+        );
+
+        let mut executor = SystemInstallationOperationExecutor::with_dependencies(
+            RecordingCommandRunner::default(),
+            bootstrapper,
+        );
+
+        let operation = InstallationOperation::BootstrapSystem {
+            root: "/target".into(),
+            bootstrap: config.clone(),
+        };
+
+        executor
+            .execute_operation(&operation)
+            .expect("bootstrap operation should execute");
+
+        let calls = executor
+            .bootstrapper
+            .calls
+            .lock()
+            .expect("recording bootstrap calls should not be poisoned");
+
+        assert_eq!(
+            calls.as_slice(),
+            &[(std::path::PathBuf::from("/target"), config)]
+        );
+    }
     #[test]
     fn installation_bootstrapper_records_root_and_configuration() {
         let bootstrapper = RecordingInstallationBootstrapper::default();
