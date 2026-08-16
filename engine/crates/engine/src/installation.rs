@@ -661,6 +661,38 @@ mod tests {
             Ok(())
         }
     }
+    struct FailingInstallationBootstrapper;
+
+    impl InstallationBootstrapper for FailingInstallationBootstrapper {
+        type Error = io::Error;
+
+        fn bootstrap(
+            &self,
+            _root: &std::path::Path,
+            _config: &BootstrapConfig,
+        ) -> Result<(), Self::Error> {
+            Err(io::Error::other("bootstrap failed"))
+        }
+    }
+    #[test]
+    fn system_executor_returns_bootstrap_failure() {
+        let mut executor = SystemInstallationOperationExecutor::with_dependencies(
+            RecordingCommandRunner::default(),
+            FailingInstallationBootstrapper,
+        );
+
+        let operation = InstallationOperation::BootstrapSystem {
+            root: "/target".into(),
+            bootstrap: BootstrapConfig::default(),
+        };
+
+        let error = executor
+            .execute_operation(&operation)
+            .expect_err("bootstrap failure should be returned");
+
+        assert_eq!(error.kind(), io::ErrorKind::Other);
+        assert!(error.to_string().contains("installation bootstrap failed"));
+    }
 
     #[test]
     fn system_executor_routes_bootstrap_operation_to_bootstrapper() {
