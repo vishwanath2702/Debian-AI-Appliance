@@ -39,7 +39,7 @@ pub trait InstallationOperationExecutor {
     fn execute_operation(&mut self, operation: &InstallationOperation) -> Result<(), Self::Error>;
 }
 /// Executes installation operations against the host system.
-trait InstallationCommandRunner {
+pub trait InstallationCommandRunner {
     fn status(&mut self, command: &mut Command) -> io::Result<()>;
 }
 
@@ -47,9 +47,18 @@ pub struct SystemInstallationOperationExecutor<R> {
     runner: R,
 }
 
-impl<R> SystemInstallationOperationExecutor<R> {
+impl<R> SystemInstallationOperationExecutor<R>
+where
+    R: InstallationCommandRunner,
+{
     const fn with_runner(runner: R) -> Self {
         Self { runner }
+    }
+
+    fn run_test_command(&mut self) -> io::Result<()> {
+        let mut command = Command::new("test-command");
+
+        self.runner.status(&mut command)
     }
 }
 
@@ -253,5 +262,16 @@ mod tests {
             SystemInstallationOperationExecutor::with_runner(RecordingCommandRunner::default());
 
         assert!(executor.runner.commands.is_empty());
+    }
+    #[test]
+    fn system_executor_sends_command_to_runner() {
+        let mut executor =
+            SystemInstallationOperationExecutor::with_runner(RecordingCommandRunner::default());
+
+        executor
+            .run_test_command()
+            .expect("recording runner should accept command");
+
+        assert_eq!(executor.runner.commands, vec!["test-command"]);
     }
 }

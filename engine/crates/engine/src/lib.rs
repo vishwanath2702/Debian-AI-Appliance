@@ -8,8 +8,8 @@ mod mmdebstrap;
 mod workflow;
 
 pub use installation::{
-    DryRunInstallationExecutor, InstallationExecutor, InstallationOperation,
-    InstallationOperationExecutor, InstallationPlan, PreparedInstallation,
+    DryRunInstallationExecutor, InstallationCommandRunner, InstallationExecutor,
+    InstallationOperation, InstallationOperationExecutor, InstallationPlan, PreparedInstallation,
     SystemInstallationOperationExecutor,
 };
 
@@ -317,7 +317,6 @@ mod tests {
         BootstrapConfig, BuildContext, BuildError, DryRunInstallationExecutor, Engine,
         InstallationExecutor, InstallationOperation, InstallationOperationExecutor,
         InstallationPlan, PreparedInstallation, RootfsRunError,
-        SystemInstallationOperationExecutor,
     };
     struct TestStorageInspector;
 
