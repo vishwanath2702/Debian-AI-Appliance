@@ -13,6 +13,11 @@ pub enum InstallationOperation {
         /// Validated Linux device path for the selected storage.
         device_path: PathBuf,
     },
+    /// Create the partition layout on the selected disk.
+    PartitionDisk {
+        /// Validated Linux device path for the selected storage.
+        device_path: PathBuf,
+    },
 
     /// Create the filesystems required by the installed system.
     CreateFilesystems { filesystem: String },
@@ -168,6 +173,9 @@ impl PreparedInstallation {
         InstallationPlan::new(vec![
             InstallationOperation::PrepareDisk {
                 storage_id: self.intent.storage_id().clone(),
+                device_path: self.storage.device_path().to_path_buf(),
+            },
+            InstallationOperation::PartitionDisk {
                 device_path: self.storage.device_path().to_path_buf(),
             },
             InstallationOperation::CreateFilesystems {

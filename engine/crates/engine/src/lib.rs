@@ -536,6 +536,9 @@ mod tests {
                     storage_id: DiscoveredStorageId::new("serial:usb-disk"),
                     device_path: "/dev/sdb".into(),
                 },
+                InstallationOperation::PartitionDisk {
+                    device_path: "/dev/sdb".into(),
+                },
                 InstallationOperation::CreateFilesystems {
                     filesystem: "ext4".to_owned(),
                 },

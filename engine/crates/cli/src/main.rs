@@ -322,6 +322,9 @@ fn installation_operation_name(operation: &InstallationOperation) -> String {
         InstallationOperation::PrepareDisk { storage_id, .. } => {
             format!("Prepare disk {storage_id}")
         }
+        InstallationOperation::PartitionDisk { device_path } => {
+            format!("Partition disk {}", device_path.display())
+        }
         InstallationOperation::CreateFilesystems { filesystem } => {
             format!("Create filesystems ({filesystem})")
         }
