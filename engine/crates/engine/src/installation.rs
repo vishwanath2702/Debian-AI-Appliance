@@ -209,6 +209,11 @@ where
                 let efi_size_mib = efi_partition
                     .size_mib()
                     .ok_or_else(|| io::Error::other("EFI partition size is missing"))?;
+                if efi_size_mib == 0 {
+                    return Err(io::Error::other(
+                        "EFI partition size must be greater than zero",
+                    ));
+                }
 
                 command
                     .arg("mkpart")
@@ -505,6 +510,30 @@ mod tests {
 
             Ok(())
         }
+    }
+
+    #[test]
+    fn system_executor_rejects_zero_efi_partition_size() {
+        let mut executor =
+            SystemInstallationOperationExecutor::with_runner(RecordingCommandRunner::default());
+
+        let operation = InstallationOperation::PartitionDisk {
+            device_path: "/dev/sdb".into(),
+            partitions: vec![
+                InstallationPartition::new(InstallationPartitionRole::EfiSystem, "fat32", Some(0)),
+                InstallationPartition::new(InstallationPartitionRole::Root, "ext4", None),
+            ],
+        };
+
+        let error = executor
+            .execute_operation(&operation)
+            .expect_err("zero-sized EFI partition should fail");
+
+        assert!(
+            error
+                .to_string()
+                .contains("EFI partition size must be greater than zero")
+        );
     }
 
     #[test]
