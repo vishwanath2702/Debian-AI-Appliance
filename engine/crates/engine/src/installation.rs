@@ -613,6 +613,51 @@ mod tests {
     }
 
     #[test]
+    fn system_executor_mounts_custom_partition_order() {
+        let mut executor =
+            SystemInstallationOperationExecutor::with_runner(RecordingCommandRunner::default());
+
+        let operation = InstallationOperation::MountFilesystems {
+            device_path: "/dev/sdb".into(),
+            partitions: vec![
+                InstallationPartition::new(InstallationPartitionRole::Root, "ext4", None),
+                InstallationPartition::new(
+                    InstallationPartitionRole::EfiSystem,
+                    "fat32",
+                    Some(512),
+                ),
+            ],
+            mounts: default_installation_mounts(),
+        };
+
+        executor
+            .execute_operation(&operation)
+            .expect("recording runner should accept command");
+
+        assert_eq!(
+            executor.runner.commands,
+            vec![
+                vec!["mkdir".to_owned(), "-p".to_owned(), "/target".to_owned(),],
+                vec![
+                    "mount".to_owned(),
+                    "/dev/sdb1".to_owned(),
+                    "/target".to_owned(),
+                ],
+                vec![
+                    "mkdir".to_owned(),
+                    "-p".to_owned(),
+                    "/target/boot/efi".to_owned(),
+                ],
+                vec![
+                    "mount".to_owned(),
+                    "/dev/sdb2".to_owned(),
+                    "/target/boot/efi".to_owned(),
+                ],
+            ]
+        );
+    }
+
+    #[test]
     fn system_executor_rejects_missing_root_mount_before_execution() {
         let mut executor =
             SystemInstallationOperationExecutor::with_runner(RecordingCommandRunner::default());
