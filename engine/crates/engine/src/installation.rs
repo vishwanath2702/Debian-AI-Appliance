@@ -61,6 +61,20 @@ pub fn default_installation_partitions() -> Vec<InstallationPartition> {
         InstallationPartition::new(InstallationPartitionRole::Root, "ext4", None),
     ]
 }
+
+fn partition_device_path(device_path: &std::path::Path, partition_number: usize) -> PathBuf {
+    let device = device_path.to_string_lossy();
+
+    if device
+        .chars()
+        .last()
+        .is_some_and(|character| character.is_ascii_digit())
+    {
+        PathBuf::from(format!("{device}p{partition_number}"))
+    } else {
+        PathBuf::from(format!("{device}{partition_number}"))
+    }
+}
 /// A non-executed operation required to prepare an installation target.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum InstallationOperation {
@@ -403,6 +417,7 @@ mod tests {
         InstallationCommandRunner, InstallationOperation, InstallationOperationExecutor,
         InstallationPartition, InstallationPartitionRole, ProcessInstallationCommandRunner,
         SystemInstallationOperationExecutor, default_installation_partitions,
+        partition_device_path,
     };
     use model::DiscoveredStorageId;
 
@@ -435,6 +450,22 @@ mod tests {
 
             Ok(())
         }
+    }
+
+    #[test]
+    fn builds_partition_path_for_sd_device() {
+        assert_eq!(
+            partition_device_path(std::path::Path::new("/dev/sdb"), 1),
+            std::path::PathBuf::from("/dev/sdb1")
+        );
+    }
+
+    #[test]
+    fn builds_partition_path_for_nvme_device() {
+        assert_eq!(
+            partition_device_path(std::path::Path::new("/dev/nvme0n1"), 2),
+            std::path::PathBuf::from("/dev/nvme0n1p2")
+        );
     }
 
     #[test]
