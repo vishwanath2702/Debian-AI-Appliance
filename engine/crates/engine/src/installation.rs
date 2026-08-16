@@ -228,6 +228,26 @@ where
 
                 self.runner.status(&mut command)
             }
+
+            InstallationOperation::CreateFilesystems { partitions } => {
+                if let Some(efi_partition) = partitions
+                    .iter()
+                    .position(|partition| partition.role() == InstallationPartitionRole::EfiSystem)
+                {
+                    let partition_number = efi_partition + 1;
+                    let device_path =
+                        partition_device_path(std::path::Path::new("/dev/sdb"), partition_number);
+
+                    let mut command = Command::new("mkfs.fat");
+
+                    command.arg("-F").arg("32").arg(device_path);
+
+                    self.runner.status(&mut command)?;
+                }
+
+                Ok(())
+            }
+
             _ => Ok(()),
         }
     }
@@ -450,6 +470,30 @@ mod tests {
 
             Ok(())
         }
+    }
+
+    #[test]
+    fn system_executor_sends_mkfs_fat_command_for_efi_partition() {
+        let mut executor =
+            SystemInstallationOperationExecutor::with_runner(RecordingCommandRunner::default());
+
+        let operation = InstallationOperation::CreateFilesystems {
+            partitions: default_installation_partitions(),
+        };
+
+        executor
+            .execute_operation(&operation)
+            .expect("recording runner should accept command");
+
+        assert_eq!(
+            executor.runner.commands,
+            vec![vec![
+                "mkfs.fat".to_owned(),
+                "-F".to_owned(),
+                "32".to_owned(),
+                "/dev/sdb1".to_owned(),
+            ]]
+        );
     }
 
     #[test]
