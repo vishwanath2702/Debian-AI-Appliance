@@ -588,12 +588,12 @@ impl InstallationOperationExecutor for DryRunInstallationExecutor {
 #[cfg(test)]
 mod tests {
     use super::{
-        InstallationCommandRunner, InstallationMount, InstallationOperation,
+        InstallationCommandRunner, InstallationMount, InstallationOperation, BootstrapConfig,
         InstallationOperationExecutor, InstallationPartition, InstallationPartitionRole,
-        ProcessInstallationCommandRunner, SystemInstallationOperationExecutor,
+        ProcessInstallationCommandRunner, SystemInstallationOperationExecutor, PreparedInstallation,
         default_installation_mounts, default_installation_partitions, partition_device_path,
     };
-    use model::DiscoveredStorageId;
+    use model::{DiscoveredStorage, DiscoveredStorageId, InstallationIntent, StorageKind};
 
     use std::{io, process::Command};
 
@@ -625,6 +625,42 @@ mod tests {
             Ok(())
         }
     }
+
+#[test]
+fn installation_plan_carries_bootstrap_configuration() {
+    let bootstrap = BootstrapConfig::new(
+        "trixie",
+        "amd64",
+        "https://deb.debian.org/debian",
+        vec!["main".to_owned(), "non-free-firmware".to_owned()],
+        "minbase",
+    );
+
+    let intent =
+        InstallationIntent::new("desktop", DiscoveredStorageId::new("serial:usb-disk"));
+
+    let storage =
+        DiscoveredStorage::new("serial:usb-disk", StorageKind::Removable, "/dev/sdb");
+
+    let prepared =
+        PreparedInstallation::new(intent, storage, Vec::new(), bootstrap.clone());
+
+    let plan = prepared.installation_plan();
+
+    let bootstrap_operation = plan
+        .operations()
+        .iter()
+        .find_map(|operation| match operation {
+            InstallationOperation::BootstrapSystem { root, bootstrap } => {
+                Some((root, bootstrap))
+            }
+            _ => None,
+        })
+        .expect("installation plan should contain bootstrap operation");
+
+    assert_eq!(bootstrap_operation.0, std::path::Path::new("/target"));
+    assert_eq!(bootstrap_operation.1, &bootstrap);
+}
 
     #[test]
     fn system_executor_rejects_missing_efi_partition_before_mounting() {
