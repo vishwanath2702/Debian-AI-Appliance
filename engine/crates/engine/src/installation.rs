@@ -236,57 +236,59 @@ where
                 device_path,
                 partitions,
             } => {
-                if let Some(efi_partition) = partitions
+                let efi_partition = partitions
                     .iter()
                     .position(|partition| partition.role() == InstallationPartitionRole::EfiSystem)
-                {
-                    let partition = &partitions[efi_partition];
+                    .ok_or_else(|| io::Error::other("EFI partition is missing"))?;
 
-                    if partition.filesystem() != "fat32" {
-                        return Err(io::Error::other(format!(
-                            "unsupported EFI filesystem: {}",
-                            partition.filesystem()
-                        )));
-                    }
+                let partition = &partitions[efi_partition];
 
-                    let partition_number = efi_partition + 1;
-                    let partition_path = partition_device_path(device_path, partition_number);
-
-                    let mut command = Command::new("mkfs.fat");
-
-                    command.arg("-F").arg("32").arg(partition_path);
-
-                    self.runner.status(&mut command)?;
+                if partition.filesystem() != "fat32" {
+                    return Err(io::Error::other(format!(
+                        "unsupported EFI filesystem: {}",
+                        partition.filesystem()
+                    )));
                 }
-                if let Some(root_partition) = partitions
+
+                let partition_number = efi_partition + 1;
+                let partition_path = partition_device_path(device_path, partition_number);
+
+                let mut command = Command::new("mkfs.fat");
+
+                command.arg("-F").arg("32").arg(partition_path);
+
+                self.runner.status(&mut command)?;
+
+                let root_partition = partitions
                     .iter()
                     .position(|partition| partition.role() == InstallationPartitionRole::Root)
-                {
-                    let partition_number = root_partition + 1;
-                    let partition_path = partition_device_path(device_path, partition_number);
+                    .ok_or_else(|| io::Error::other("root partition is missing"))?;
 
-                    let command_name = match partitions[root_partition].filesystem() {
-                        "ext4" => "mkfs.ext4",
-                        filesystem => {
-                            return Err(io::Error::other(format!(
-                                "unsupported root filesystem: {filesystem}"
-                            )));
-                        }
-                    };
+                let partition_number = root_partition + 1;
+                let partition_path = partition_device_path(device_path, partition_number);
 
-                    let mut command = Command::new(command_name);
+                let command_name = match partitions[root_partition].filesystem() {
+                    "ext4" => "mkfs.ext4",
+                    filesystem => {
+                        return Err(io::Error::other(format!(
+                            "unsupported root filesystem: {filesystem}"
+                        )));
+                    }
+                };
 
-                    command.arg("-F").arg(partition_path);
+                let mut command = Command::new(command_name);
 
-                    self.runner.status(&mut command)?;
-                }
+                command.arg("-F").arg(partition_path);
+
+                self.runner.status(&mut command)?;
+
                 Ok(())
             }
-
             _ => Ok(()),
         }
     }
 }
+
 /// Ordered non-executed operations for installing an appliance.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct InstallationPlan {
@@ -508,6 +510,47 @@ mod tests {
         }
     }
 
+    #[test]
+    fn system_executor_rejects_missing_efi_partition() {
+        let mut executor =
+            SystemInstallationOperationExecutor::with_runner(RecordingCommandRunner::default());
+
+        let operation = InstallationOperation::CreateFilesystems {
+            device_path: "/dev/sdb".into(),
+            partitions: vec![InstallationPartition::new(
+                InstallationPartitionRole::Root,
+                "ext4",
+                None,
+            )],
+        };
+
+        let error = executor
+            .execute_operation(&operation)
+            .expect_err("missing EFI partition should fail");
+
+        assert!(error.to_string().contains("EFI partition is missing"));
+    }
+
+    #[test]
+    fn system_executor_rejects_missing_root_partition() {
+        let mut executor =
+            SystemInstallationOperationExecutor::with_runner(RecordingCommandRunner::default());
+
+        let operation = InstallationOperation::CreateFilesystems {
+            device_path: "/dev/sdb".into(),
+            partitions: vec![InstallationPartition::new(
+                InstallationPartitionRole::EfiSystem,
+                "fat32",
+                Some(512),
+            )],
+        };
+
+        let error = executor
+            .execute_operation(&operation)
+            .expect_err("missing root partition should fail");
+
+        assert!(error.to_string().contains("root partition is missing"));
+    }
     #[test]
     fn system_executor_rejects_unsupported_efi_filesystem() {
         let mut executor =
