@@ -52,6 +52,15 @@ impl InstallationPartition {
         self.size_mib
     }
 }
+
+/// Returns the default DAIA installation partition layout.
+#[must_use]
+pub fn default_installation_partitions() -> Vec<InstallationPartition> {
+    vec![
+        InstallationPartition::new(InstallationPartitionRole::EfiSystem, "fat32", Some(512)),
+        InstallationPartition::new(InstallationPartitionRole::Root, "ext4", None),
+    ]
+}
 /// A non-executed operation required to prepare an installation target.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum InstallationOperation {
@@ -354,7 +363,7 @@ mod tests {
     use super::{
         InstallationCommandRunner, InstallationOperation, InstallationOperationExecutor,
         InstallationPartition, InstallationPartitionRole, ProcessInstallationCommandRunner,
-        SystemInstallationOperationExecutor,
+        SystemInstallationOperationExecutor, default_installation_partitions,
     };
     use model::DiscoveredStorageId;
 
@@ -406,6 +415,21 @@ mod tests {
         assert_eq!(partition.role(), InstallationPartitionRole::Root);
         assert_eq!(partition.filesystem(), "ext4");
         assert_eq!(partition.size_mib(), None);
+    }
+
+    #[test]
+    fn default_installation_partitions_define_efi_and_root() {
+        let partitions = default_installation_partitions();
+
+        assert_eq!(partitions.len(), 2);
+
+        assert_eq!(partitions[0].role(), InstallationPartitionRole::EfiSystem);
+        assert_eq!(partitions[0].filesystem(), "fat32");
+        assert_eq!(partitions[0].size_mib(), Some(512));
+
+        assert_eq!(partitions[1].role(), InstallationPartitionRole::Root);
+        assert_eq!(partitions[1].filesystem(), "ext4");
+        assert_eq!(partitions[1].size_mib(), None);
     }
 
     #[test]
