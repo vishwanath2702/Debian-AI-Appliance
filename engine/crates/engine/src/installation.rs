@@ -256,7 +256,16 @@ where
                     let partition_number = root_partition + 1;
                     let partition_path = partition_device_path(device_path, partition_number);
 
-                    let mut command = Command::new("mkfs.ext4");
+                    let command_name = match partitions[root_partition].filesystem() {
+                        "ext4" => "mkfs.ext4",
+                        filesystem => {
+                            return Err(io::Error::other(format!(
+                                "unsupported root filesystem: {filesystem}"
+                            )));
+                        }
+                    };
+
+                    let mut command = Command::new(command_name);
 
                     command.arg("-F").arg(partition_path);
 
@@ -490,6 +499,29 @@ mod tests {
         }
     }
 
+    #[test]
+    fn system_executor_rejects_unsupported_root_filesystem() {
+        let mut executor =
+            SystemInstallationOperationExecutor::with_runner(RecordingCommandRunner::default());
+
+        let operation = InstallationOperation::CreateFilesystems {
+            device_path: "/dev/sdb".into(),
+            partitions: vec![
+                InstallationPartition::new(
+                    InstallationPartitionRole::EfiSystem,
+                    "fat32",
+                    Some(512),
+                ),
+                InstallationPartition::new(InstallationPartitionRole::Root, "xfs", None),
+            ],
+        };
+
+        let error = executor
+            .execute_operation(&operation)
+            .expect_err("unsupported root filesystem should fail");
+
+        assert!(error.to_string().contains("unsupported root filesystem"));
+    }
     #[test]
     fn system_executor_creates_efi_and_root_filesystems() {
         let mut executor =
