@@ -105,6 +105,18 @@ where
                 self.runner.status(&mut command)
             }
 
+            InstallationOperation::PartitionDisk { device_path } => {
+                let mut command = Command::new("parted");
+
+                command
+                    .arg("--script")
+                    .arg(device_path)
+                    .arg("mklabel")
+                    .arg("gpt");
+
+                self.runner.status(&mut command)
+            }
+
             _ => Ok(()),
         }
     }
@@ -390,5 +402,29 @@ mod tests {
             .expect_err("prepare disk should return command failure");
 
         assert_eq!(error.kind(), io::ErrorKind::Other);
+    }
+    #[test]
+    fn system_executor_sends_parted_command_for_partition_disk() {
+        let mut executor =
+            SystemInstallationOperationExecutor::with_runner(RecordingCommandRunner::default());
+
+        let operation = InstallationOperation::PartitionDisk {
+            device_path: "/dev/sdb".into(),
+        };
+
+        executor
+            .execute_operation(&operation)
+            .expect("recording runner should accept command");
+
+        assert_eq!(
+            executor.runner.commands,
+            vec![vec![
+                "parted".to_owned(),
+                "--script".to_owned(),
+                "/dev/sdb".to_owned(),
+                "mklabel".to_owned(),
+                "gpt".to_owned(),
+            ]]
+        );
     }
 }
