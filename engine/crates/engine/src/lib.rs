@@ -10,7 +10,7 @@ mod workflow;
 pub use installation::{
     DryRunInstallationExecutor, InstallationCommandRunner, InstallationExecutor,
     InstallationOperation, InstallationOperationExecutor, InstallationPlan, PreparedInstallation,
-    SystemInstallationOperationExecutor,
+    ProcessInstallationCommandRunner, SystemInstallationOperationExecutor,
 };
 
 use std::{

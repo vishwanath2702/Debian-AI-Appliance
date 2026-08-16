@@ -43,6 +43,24 @@ pub trait InstallationCommandRunner {
     fn status(&mut self, command: &mut Command) -> io::Result<()>;
 }
 
+/// Runs installation commands as operating-system processes.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct ProcessInstallationCommandRunner;
+
+impl InstallationCommandRunner for ProcessInstallationCommandRunner {
+    fn status(&mut self, command: &mut Command) -> io::Result<()> {
+        let status = command.status()?;
+
+        if status.success() {
+            Ok(())
+        } else {
+            Err(io::Error::other(format!(
+                "installation command exited unsuccessfully: {status}"
+            )))
+        }
+    }
+}
+
 pub struct SystemInstallationOperationExecutor<R> {
     runner: R,
 }
@@ -53,6 +71,16 @@ where
 {
     const fn with_runner(runner: R) -> Self {
         Self { runner }
+    }
+}
+
+impl SystemInstallationOperationExecutor<ProcessInstallationCommandRunner> {
+    /// Creates a system installation executor using real process execution.
+    #[must_use]
+    pub const fn new() -> Self {
+        Self {
+            runner: ProcessInstallationCommandRunner,
+        }
     }
 }
 
@@ -255,16 +283,11 @@ impl InstallationOperationExecutor for DryRunInstallationExecutor {
 mod tests {
     use super::{
         InstallationCommandRunner, InstallationOperation, InstallationOperationExecutor,
-        SystemInstallationOperationExecutor,
+        ProcessInstallationCommandRunner, SystemInstallationOperationExecutor,
     };
     use model::DiscoveredStorageId;
 
     use std::{io, process::Command};
-
-    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-    enum RecordingCommandError {
-        Failed,
-    }
 
     #[derive(Default)]
     struct RecordingCommandRunner {
@@ -293,6 +316,26 @@ mod tests {
 
             Ok(())
         }
+    }
+
+    #[test]
+    fn process_command_runner_accepts_successful_command() {
+        let mut runner = ProcessInstallationCommandRunner;
+        let mut command = Command::new("true");
+
+        runner
+            .status(&mut command)
+            .expect("successful command should succeed");
+    }
+
+    #[test]
+    fn process_command_runner_rejects_unsuccessful_command() {
+        let mut runner = ProcessInstallationCommandRunner;
+        let mut command = Command::new("false");
+
+        runner
+            .status(&mut command)
+            .expect_err("unsuccessful command should fail");
     }
 
     #[test]
