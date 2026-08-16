@@ -2,6 +2,43 @@ use model::{DiscoveredStorage, DiscoveredStorageId, InstallationIntent, Plan};
 
 use std::{io, path::PathBuf, process::Command};
 
+/// Role of a partition in an installed DAIA system.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum InstallationPartitionRole {
+    /// EFI System Partition used for UEFI boot.
+    EfiSystem,
+
+    /// Root filesystem containing the installed appliance.
+    Root,
+}
+/// Describes one partition required by an installation.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct InstallationPartition {
+    role: InstallationPartitionRole,
+    filesystem: String,
+}
+impl InstallationPartition {
+    /// Creates an installation partition description.
+    #[must_use]
+    pub fn new(role: InstallationPartitionRole, filesystem: impl Into<String>) -> Self {
+        Self {
+            role,
+            filesystem: filesystem.into(),
+        }
+    }
+
+    /// Returns the partition role.
+    #[must_use]
+    pub const fn role(&self) -> InstallationPartitionRole {
+        self.role
+    }
+
+    /// Returns the filesystem type.
+    #[must_use]
+    pub fn filesystem(&self) -> &str {
+        &self.filesystem
+    }
+}
 /// A non-executed operation required to prepare an installation target.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum InstallationOperation {
@@ -303,7 +340,8 @@ impl InstallationOperationExecutor for DryRunInstallationExecutor {
 mod tests {
     use super::{
         InstallationCommandRunner, InstallationOperation, InstallationOperationExecutor,
-        ProcessInstallationCommandRunner, SystemInstallationOperationExecutor,
+        InstallationPartition, InstallationPartitionRole, ProcessInstallationCommandRunner,
+        SystemInstallationOperationExecutor,
     };
     use model::DiscoveredStorageId;
 
@@ -336,6 +374,14 @@ mod tests {
 
             Ok(())
         }
+    }
+
+    #[test]
+    fn installation_partition_describes_role_and_filesystem() {
+        let partition = InstallationPartition::new(InstallationPartitionRole::EfiSystem, "fat32");
+
+        assert_eq!(partition.role(), InstallationPartitionRole::EfiSystem);
+        assert_eq!(partition.filesystem(), "fat32");
     }
 
     #[test]
