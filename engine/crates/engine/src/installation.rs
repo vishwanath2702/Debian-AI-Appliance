@@ -336,6 +336,10 @@ where
                     .find(|mount| mount.role() == InstallationPartitionRole::Root)
                     .ok_or_else(|| io::Error::other("root mount is missing"))?;
 
+                let efi_mount = mounts
+                    .iter()
+                    .find(|mount| mount.role() == InstallationPartitionRole::EfiSystem)
+                    .ok_or_else(|| io::Error::other("EFI mount is missing"))?;
                 let root_partition_number = default_installation_partitions()
                     .iter()
                     .position(|partition| partition.role() == InstallationPartitionRole::Root)
@@ -357,11 +361,6 @@ where
                     .arg(root_mount.mount_point());
 
                 self.runner.status(&mut command)?;
-
-                let efi_mount = mounts
-                    .iter()
-                    .find(|mount| mount.role() == InstallationPartitionRole::EfiSystem)
-                    .ok_or_else(|| io::Error::other("EFI mount is missing"))?;
 
                 let efi_partition_number = default_installation_partitions()
                     .iter()
@@ -573,10 +572,10 @@ impl InstallationOperationExecutor for DryRunInstallationExecutor {
 #[cfg(test)]
 mod tests {
     use super::{
-        InstallationCommandRunner, InstallationOperation, InstallationOperationExecutor,
-        InstallationPartition, InstallationPartitionRole, ProcessInstallationCommandRunner,
-        SystemInstallationOperationExecutor, default_installation_mounts,
-        default_installation_partitions, partition_device_path,
+        InstallationCommandRunner, InstallationMount, InstallationOperation,
+        InstallationOperationExecutor, InstallationPartition, InstallationPartitionRole,
+        ProcessInstallationCommandRunner, SystemInstallationOperationExecutor,
+        default_installation_mounts, default_installation_partitions, partition_device_path,
     };
     use model::DiscoveredStorageId;
 
@@ -609,6 +608,48 @@ mod tests {
 
             Ok(())
         }
+    }
+
+    #[test]
+    fn system_executor_rejects_missing_root_mount_before_execution() {
+        let mut executor =
+            SystemInstallationOperationExecutor::with_runner(RecordingCommandRunner::default());
+
+        let operation = InstallationOperation::MountFilesystems {
+            device_path: "/dev/sdb".into(),
+            mounts: vec![InstallationMount::new(
+                InstallationPartitionRole::EfiSystem,
+                "/target/boot/efi",
+            )],
+        };
+
+        let error = executor
+            .execute_operation(&operation)
+            .expect_err("missing root mount should fail");
+
+        assert!(error.to_string().contains("root mount is missing"));
+        assert!(executor.runner.commands.is_empty());
+    }
+
+    #[test]
+    fn system_executor_rejects_missing_efi_mount_before_execution() {
+        let mut executor =
+            SystemInstallationOperationExecutor::with_runner(RecordingCommandRunner::default());
+
+        let operation = InstallationOperation::MountFilesystems {
+            device_path: "/dev/sdb".into(),
+            mounts: vec![InstallationMount::new(
+                InstallationPartitionRole::Root,
+                "/target",
+            )],
+        };
+
+        let error = executor
+            .execute_operation(&operation)
+            .expect_err("missing EFI mount should fail");
+
+        assert!(error.to_string().contains("EFI mount is missing"));
+        assert!(executor.runner.commands.is_empty());
     }
 
     #[test]
