@@ -344,6 +344,12 @@ where
 
                 let root_partition_path = partition_device_path(device_path, root_partition_number);
 
+                let mut command = Command::new("mkdir");
+
+                command.arg("-p").arg(root_mount.mount_point());
+
+                self.runner.status(&mut command)?;
+
                 let mut command = Command::new("mount");
 
                 command
@@ -365,6 +371,11 @@ where
 
                 let efi_partition_path = partition_device_path(device_path, efi_partition_number);
 
+                let mut command = Command::new("mkdir");
+
+                command.arg("-p").arg(efi_mount.mount_point());
+
+                self.runner.status(&mut command)?;
                 let mut command = Command::new("mount");
 
                 command.arg(efi_partition_path).arg(efi_mount.mount_point());
@@ -611,7 +622,7 @@ mod tests {
     }
 
     #[test]
-    fn system_executor_mounts_root_and_efi_partitions() {
+    fn system_executor_creates_mount_points_and_mounts_filesystems() {
         let mut executor =
             SystemInstallationOperationExecutor::with_runner(RecordingCommandRunner::default());
 
@@ -627,10 +638,16 @@ mod tests {
         assert_eq!(
             executor.runner.commands,
             vec![
+                vec!["mkdir".to_owned(), "-p".to_owned(), "/target".to_owned(),],
                 vec![
                     "mount".to_owned(),
                     "/dev/sdb2".to_owned(),
                     "/target".to_owned(),
+                ],
+                vec![
+                    "mkdir".to_owned(),
+                    "-p".to_owned(),
+                    "/target/boot/efi".to_owned(),
                 ],
                 vec![
                     "mount".to_owned(),
