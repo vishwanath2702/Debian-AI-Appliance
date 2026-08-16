@@ -411,6 +411,7 @@ mod tests {
             },
             InstallationOperation::MountFilesystems {
                 device_path: "/dev/sdb".into(),
+                partitions: default_installation_partitions(),
                 mounts: default_installation_mounts(),
             },
             InstallationOperation::BootstrapSystem {
@@ -478,6 +479,7 @@ mod tests {
             },
             InstallationOperation::MountFilesystems {
                 device_path: "/dev/sdb".into(),
+                partitions: default_installation_partitions(),
                 mounts: default_installation_mounts(),
             },
             InstallationOperation::BootstrapSystem {
@@ -553,6 +555,7 @@ mod tests {
                 },
                 InstallationOperation::MountFilesystems {
                     device_path: "/dev/sdb".into(),
+                    partitions: default_installation_partitions(),
                     mounts: default_installation_mounts(),
                 },
                 InstallationOperation::BootstrapSystem {
@@ -576,6 +579,7 @@ mod tests {
             },
             InstallationOperation::MountFilesystems {
                 device_path: "/dev/sdb".into(),
+                partitions: default_installation_partitions(),
                 mounts: default_installation_mounts(),
             },
             InstallationOperation::BootstrapSystem {
@@ -597,6 +601,7 @@ mod tests {
                 },
                 InstallationOperation::MountFilesystems {
                     device_path: "/dev/sdb".into(),
+                    partitions: default_installation_partitions(),
                     mounts: default_installation_mounts(),
                 },
                 InstallationOperation::BootstrapSystem {

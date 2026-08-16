@@ -144,9 +144,9 @@ pub enum InstallationOperation {
     /// Mount the prepared target filesystems.
     MountFilesystems {
         device_path: PathBuf,
+        partitions: Vec<InstallationPartition>,
         mounts: Vec<InstallationMount>,
     },
-
     /// Bootstrap the base operating system.
     BootstrapSystem { root: String },
 
@@ -329,6 +329,7 @@ where
             }
             InstallationOperation::MountFilesystems {
                 device_path,
+                partitions,
                 mounts,
             } => {
                 let root_mount = mounts
@@ -340,7 +341,7 @@ where
                     .iter()
                     .find(|mount| mount.role() == InstallationPartitionRole::EfiSystem)
                     .ok_or_else(|| io::Error::other("EFI mount is missing"))?;
-                let root_partition_number = default_installation_partitions()
+                let root_partition_number = partitions
                     .iter()
                     .position(|partition| partition.role() == InstallationPartitionRole::Root)
                     .map(|index| index + 1)
@@ -362,7 +363,7 @@ where
 
                 self.runner.status(&mut command)?;
 
-                let efi_partition_number = default_installation_partitions()
+                let efi_partition_number = partitions
                     .iter()
                     .position(|partition| partition.role() == InstallationPartitionRole::EfiSystem)
                     .map(|index| index + 1)
@@ -464,6 +465,7 @@ impl PreparedInstallation {
             },
             InstallationOperation::MountFilesystems {
                 device_path: self.storage.device_path().to_path_buf(),
+                partitions: default_installation_partitions(),
                 mounts: default_installation_mounts(),
             },
             InstallationOperation::BootstrapSystem {
@@ -617,6 +619,7 @@ mod tests {
 
         let operation = InstallationOperation::MountFilesystems {
             device_path: "/dev/sdb".into(),
+            partitions: default_installation_partitions(),
             mounts: vec![InstallationMount::new(
                 InstallationPartitionRole::EfiSystem,
                 "/target/boot/efi",
@@ -638,6 +641,7 @@ mod tests {
 
         let operation = InstallationOperation::MountFilesystems {
             device_path: "/dev/sdb".into(),
+            partitions: default_installation_partitions(),
             mounts: vec![InstallationMount::new(
                 InstallationPartitionRole::Root,
                 "/target",
@@ -669,6 +673,7 @@ mod tests {
 
         let operation = InstallationOperation::MountFilesystems {
             device_path: "/dev/sdb".into(),
+            partitions: default_installation_partitions(),
             mounts: default_installation_mounts(),
         };
 
