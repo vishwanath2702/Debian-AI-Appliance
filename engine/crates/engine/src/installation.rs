@@ -249,7 +249,19 @@ where
 
                     self.runner.status(&mut command)?;
                 }
+                if let Some(root_partition) = partitions
+                    .iter()
+                    .position(|partition| partition.role() == InstallationPartitionRole::Root)
+                {
+                    let partition_number = root_partition + 1;
+                    let partition_path = partition_device_path(device_path, partition_number);
 
+                    let mut command = Command::new("mkfs.ext4");
+
+                    command.arg("-F").arg(partition_path);
+
+                    self.runner.status(&mut command)?;
+                }
                 Ok(())
             }
 
@@ -479,7 +491,7 @@ mod tests {
     }
 
     #[test]
-    fn system_executor_sends_mkfs_fat_command_for_efi_partition() {
+    fn system_executor_creates_efi_and_root_filesystems() {
         let mut executor =
             SystemInstallationOperationExecutor::with_runner(RecordingCommandRunner::default());
 
@@ -487,21 +499,28 @@ mod tests {
             device_path: "/dev/sdb".into(),
             partitions: default_installation_partitions(),
         };
+
         executor
             .execute_operation(&operation)
             .expect("recording runner should accept command");
 
         assert_eq!(
             executor.runner.commands,
-            vec![vec![
-                "mkfs.fat".to_owned(),
-                "-F".to_owned(),
-                "32".to_owned(),
-                "/dev/sdb1".to_owned(),
-            ]]
+            vec![
+                vec![
+                    "mkfs.fat".to_owned(),
+                    "-F".to_owned(),
+                    "32".to_owned(),
+                    "/dev/sdb1".to_owned(),
+                ],
+                vec![
+                    "mkfs.ext4".to_owned(),
+                    "-F".to_owned(),
+                    "/dev/sdb2".to_owned(),
+                ],
+            ]
         );
     }
-
     #[test]
     fn builds_partition_path_for_sd_device() {
         assert_eq!(
