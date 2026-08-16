@@ -585,13 +585,28 @@ impl InstallationOperationExecutor for DryRunInstallationExecutor {
         Ok(())
     }
 }
+
+/// Executes the root filesystem bootstrap stage of an installation.
+pub trait InstallationBootstrapper {
+    /// Error produced while bootstrapping.
+    type Error;
+
+    /// Bootstraps the target root filesystem.
+    fn bootstrap(
+        &self,
+        root: &std::path::Path,
+        config: &BootstrapConfig,
+    ) -> Result<(), Self::Error>;
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        InstallationCommandRunner, InstallationMount, InstallationOperation, BootstrapConfig,
-        InstallationOperationExecutor, InstallationPartition, InstallationPartitionRole,
-        ProcessInstallationCommandRunner, SystemInstallationOperationExecutor, PreparedInstallation,
-        default_installation_mounts, default_installation_partitions, partition_device_path,
+        BootstrapConfig, InstallationBootstrapper, InstallationCommandRunner, InstallationMount,
+        InstallationOperation, InstallationOperationExecutor, InstallationPartition,
+        InstallationPartitionRole, PathBuf, PreparedInstallation, ProcessInstallationCommandRunner,
+        SystemInstallationOperationExecutor, default_installation_mounts,
+        default_installation_partitions, partition_device_path,
     };
     use model::{DiscoveredStorage, DiscoveredStorageId, InstallationIntent, StorageKind};
 
@@ -625,42 +640,88 @@ mod tests {
             Ok(())
         }
     }
+    #[derive(Default)]
+    struct RecordingInstallationBootstrapper {
+        calls: std::sync::Mutex<Vec<(PathBuf, BootstrapConfig)>>,
+    }
 
-#[test]
-fn installation_plan_carries_bootstrap_configuration() {
-    let bootstrap = BootstrapConfig::new(
-        "trixie",
-        "amd64",
-        "https://deb.debian.org/debian",
-        vec!["main".to_owned(), "non-free-firmware".to_owned()],
-        "minbase",
-    );
+    impl InstallationBootstrapper for RecordingInstallationBootstrapper {
+        type Error = std::convert::Infallible;
 
-    let intent =
-        InstallationIntent::new("desktop", DiscoveredStorageId::new("serial:usb-disk"));
+        fn bootstrap(
+            &self,
+            root: &std::path::Path,
+            config: &BootstrapConfig,
+        ) -> Result<(), Self::Error> {
+            self.calls
+                .lock()
+                .expect("recording bootstrap calls should not be poisoned")
+                .push((root.to_path_buf(), config.clone()));
 
-    let storage =
-        DiscoveredStorage::new("serial:usb-disk", StorageKind::Removable, "/dev/sdb");
+            Ok(())
+        }
+    }
 
-    let prepared =
-        PreparedInstallation::new(intent, storage, Vec::new(), bootstrap.clone());
+    #[test]
+    fn installation_bootstrapper_records_root_and_configuration() {
+        let bootstrapper = RecordingInstallationBootstrapper::default();
 
-    let plan = prepared.installation_plan();
+        let config = BootstrapConfig::new(
+            "trixie",
+            "amd64",
+            "https://deb.debian.org/debian",
+            vec!["main".to_owned()],
+            "minbase",
+        );
 
-    let bootstrap_operation = plan
-        .operations()
-        .iter()
-        .find_map(|operation| match operation {
-            InstallationOperation::BootstrapSystem { root, bootstrap } => {
-                Some((root, bootstrap))
-            }
-            _ => None,
-        })
-        .expect("installation plan should contain bootstrap operation");
+        bootstrapper
+            .bootstrap(std::path::Path::new("/target"), &config)
+            .expect("recording bootstrapper should succeed");
 
-    assert_eq!(bootstrap_operation.0, std::path::Path::new("/target"));
-    assert_eq!(bootstrap_operation.1, &bootstrap);
-}
+        let calls = bootstrapper
+            .calls
+            .lock()
+            .expect("recording bootstrap calls should not be poisoned");
+
+        assert_eq!(
+            calls.as_slice(),
+            &[(std::path::PathBuf::from("/target"), config)]
+        );
+    }
+
+    #[test]
+    fn installation_plan_carries_bootstrap_configuration() {
+        let bootstrap = BootstrapConfig::new(
+            "trixie",
+            "amd64",
+            "https://deb.debian.org/debian",
+            vec!["main".to_owned(), "non-free-firmware".to_owned()],
+            "minbase",
+        );
+
+        let intent =
+            InstallationIntent::new("desktop", DiscoveredStorageId::new("serial:usb-disk"));
+
+        let storage = DiscoveredStorage::new("serial:usb-disk", StorageKind::Removable, "/dev/sdb");
+
+        let prepared = PreparedInstallation::new(intent, storage, Vec::new(), bootstrap.clone());
+
+        let plan = prepared.installation_plan();
+
+        let bootstrap_operation = plan
+            .operations()
+            .iter()
+            .find_map(|operation| match operation {
+                InstallationOperation::BootstrapSystem { root, bootstrap } => {
+                    Some((root, bootstrap))
+                }
+                _ => None,
+            })
+            .expect("installation plan should contain bootstrap operation");
+
+        assert_eq!(bootstrap_operation.0, std::path::Path::new("/target"));
+        assert_eq!(bootstrap_operation.1, &bootstrap);
+    }
 
     #[test]
     fn system_executor_rejects_missing_efi_partition_before_mounting() {
