@@ -76,6 +76,9 @@ pub enum InstallationOperation {
     PartitionDisk {
         /// Validated Linux device path for the selected storage.
         device_path: PathBuf,
+
+        /// Partition layout to create on the selected disk.
+        partitions: Vec<InstallationPartition>,
     },
 
     /// Create the filesystems required by the installed system.
@@ -164,7 +167,7 @@ where
                 self.runner.status(&mut command)
             }
 
-            InstallationOperation::PartitionDisk { device_path } => {
+            InstallationOperation::PartitionDisk { device_path, .. } => {
                 let mut command = Command::new("parted");
 
                 command
@@ -248,6 +251,7 @@ impl PreparedInstallation {
             },
             InstallationOperation::PartitionDisk {
                 device_path: self.storage.device_path().to_path_buf(),
+                partitions: default_installation_partitions(),
             },
             InstallationOperation::CreateFilesystems {
                 filesystem: "ext4".to_owned(),
@@ -504,6 +508,7 @@ mod tests {
 
         let operation = InstallationOperation::PartitionDisk {
             device_path: "/dev/sdb".into(),
+            partitions: default_installation_partitions(),
         };
 
         executor

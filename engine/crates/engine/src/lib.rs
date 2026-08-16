@@ -11,6 +11,7 @@ pub use installation::{
     DryRunInstallationExecutor, InstallationCommandRunner, InstallationExecutor,
     InstallationOperation, InstallationOperationExecutor, InstallationPlan, PreparedInstallation,
     ProcessInstallationCommandRunner, SystemInstallationOperationExecutor,
+    default_installation_partitions,
 };
 
 use std::{
@@ -316,7 +317,7 @@ mod tests {
     use super::{
         BootstrapConfig, BuildContext, BuildError, DryRunInstallationExecutor, Engine,
         InstallationExecutor, InstallationOperation, InstallationOperationExecutor,
-        InstallationPlan, PreparedInstallation, RootfsRunError,
+        InstallationPlan, PreparedInstallation, RootfsRunError, default_installation_partitions,
     };
     struct TestStorageInspector;
 
@@ -538,6 +539,7 @@ mod tests {
                 },
                 InstallationOperation::PartitionDisk {
                     device_path: "/dev/sdb".into(),
+                    partitions: default_installation_partitions(),
                 },
                 InstallationOperation::CreateFilesystems {
                     filesystem: "ext4".to_owned(),
