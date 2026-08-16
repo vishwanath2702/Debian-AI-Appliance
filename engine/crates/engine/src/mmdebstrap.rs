@@ -8,7 +8,7 @@ use std::{
     sync::Arc,
 };
 
-use crate::{Bootstrapper, BuildContext};
+use crate::{BootstrapConfig, Bootstrapper, BuildContext};
 
 trait CommandRunner: Send + Sync {
     fn status(&self, command: &mut Command) -> io::Result<ExitStatus>;
@@ -89,12 +89,11 @@ impl MmdebstrapBootstrapper {
         }
     }
 
-    /// Constructs the mmdebstrap command for a build context.
+    /// Constructs the mmdebstrap command for a target root and bootstrap configuration.
     #[must_use]
-    pub fn command(&self, context: &BuildContext) -> Command {
-        let config = context.bootstrap();
-
+    pub fn command_for_root(&self, root: &std::path::Path, config: &BootstrapConfig) -> Command {
         let mut command = Command::new("mmdebstrap");
+
         command
             .arg("--mode=root")
             .arg("--include=ca-certificates,gnupg")
@@ -102,11 +101,18 @@ impl MmdebstrapBootstrapper {
             .arg(format!("--architectures={}", config.architecture()))
             .arg(format!("--components={}", config.components().join(",")))
             .arg(config.release())
-            .arg(context.rootfs())
+            .arg(root)
             .arg(config.mirror());
 
         command
     }
+
+    /// Constructs the mmdebstrap command for a build context.
+    #[must_use]
+    pub fn command(&self, context: &BuildContext) -> Command {
+        self.command_for_root(context.rootfs(), context.bootstrap())
+    }
+
     #[must_use]
     pub fn sudo_command(&self, context: &BuildContext) -> Command {
         let mut command = Command::new("sudo");
@@ -226,6 +232,37 @@ mod tests {
             "registry/assets",
             config,
         )
+    }
+
+    #[test]
+    fn constructs_mmdebstrap_command_for_installation_root() {
+        let config = BootstrapConfig::new(
+            "trixie",
+            "amd64",
+            "https://deb.debian.org/debian",
+            vec!["main".to_owned(), "non-free-firmware".to_owned()],
+            "minbase",
+        );
+
+        let command = MmdebstrapBootstrapper::new()
+            .command_for_root(std::path::Path::new("/target"), &config);
+
+        let arguments = command.get_args().collect::<Vec<_>>();
+
+        assert_eq!(command.get_program(), OsStr::new("mmdebstrap"));
+        assert_eq!(
+            arguments,
+            vec![
+                OsStr::new("--mode=root"),
+                OsStr::new("--include=ca-certificates,gnupg"),
+                OsStr::new("--variant=minbase"),
+                OsStr::new("--architectures=amd64"),
+                OsStr::new("--components=main,non-free-firmware"),
+                OsStr::new("trixie"),
+                OsStr::new("/target"),
+                OsStr::new("https://deb.debian.org/debian"),
+            ]
+        );
     }
 
     #[test]
