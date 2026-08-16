@@ -236,12 +236,13 @@ mod tests {
 
     #[derive(Default)]
     struct RecordingCommandRunner {
-        calls: usize,
+        commands: Vec<String>,
     }
-
     impl InstallationCommandRunner for RecordingCommandRunner {
-        fn status(&mut self, _command: &mut Command) -> io::Result<()> {
-            self.calls += 1;
+        fn status(&mut self, command: &mut Command) -> io::Result<()> {
+            self.commands
+                .push(command.get_program().to_string_lossy().into_owned());
+
             Ok(())
         }
     }
@@ -251,6 +252,6 @@ mod tests {
         let executor =
             SystemInstallationOperationExecutor::with_runner(RecordingCommandRunner::default());
 
-        assert_eq!(executor.runner.calls, 0);
+        assert!(executor.runner.commands.is_empty());
     }
 }
