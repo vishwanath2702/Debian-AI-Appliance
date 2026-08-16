@@ -206,34 +206,25 @@ where
                     .arg("mklabel")
                     .arg("gpt");
 
-                if let Some(efi_partition) = partitions
-                    .iter()
-                    .find(|partition| partition.role() == InstallationPartitionRole::EfiSystem)
-                {
-                    if let Some(size_mib) = efi_partition.size_mib() {
-                        command
-                            .arg("mkpart")
-                            .arg("ESP")
-                            .arg(efi_partition.filesystem())
-                            .arg("1MiB")
-                            .arg(format!("{}MiB", size_mib + 1));
-                    }
-                }
+                let efi_size_mib = efi_partition
+                    .size_mib()
+                    .ok_or_else(|| io::Error::other("EFI partition size is missing"))?;
 
-                if let Some(root_partition) = partitions
-                    .iter()
-                    .find(|partition| partition.role() == InstallationPartitionRole::Root)
-                {
-                    let root_start_mib =
-                        efi_partition.size_mib().map_or(1, |size_mib| size_mib + 1);
+                command
+                    .arg("mkpart")
+                    .arg("ESP")
+                    .arg(efi_partition.filesystem())
+                    .arg("1MiB")
+                    .arg(format!("{}MiB", efi_size_mib + 1));
 
-                    command
-                        .arg("mkpart")
-                        .arg("primary")
-                        .arg(root_partition.filesystem())
-                        .arg(format!("{root_start_mib}MiB"))
-                        .arg("100%");
-                }
+                let root_start_mib = efi_size_mib + 1;
+
+                command
+                    .arg("mkpart")
+                    .arg("primary")
+                    .arg(root_partition.filesystem())
+                    .arg(format!("{root_start_mib}MiB"))
+                    .arg("100%");
 
                 self.runner.status(&mut command)
             }
@@ -514,6 +505,26 @@ mod tests {
 
             Ok(())
         }
+    }
+
+    #[test]
+    fn system_executor_rejects_efi_partition_without_size() {
+        let mut executor =
+            SystemInstallationOperationExecutor::with_runner(RecordingCommandRunner::default());
+
+        let operation = InstallationOperation::PartitionDisk {
+            device_path: "/dev/sdb".into(),
+            partitions: vec![
+                InstallationPartition::new(InstallationPartitionRole::EfiSystem, "fat32", None),
+                InstallationPartition::new(InstallationPartitionRole::Root, "ext4", None),
+            ],
+        };
+
+        let error = executor
+            .execute_operation(&operation)
+            .expect_err("EFI partition without size should fail");
+
+        assert!(error.to_string().contains("EFI partition size is missing"));
     }
 
     #[test]
