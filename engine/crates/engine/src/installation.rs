@@ -2,7 +2,8 @@ use model::{DiscoveredStorage, DiscoveredStorageId, InstallationIntent, Plan};
 
 use std::{io, path::PathBuf, process::Command};
 
-use crate::BootstrapConfig;
+use crate::{BootstrapConfig, MmdebstrapBootstrapper, MmdebstrapError};
+
 /// Role of a partition in an installed DAIA system.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum InstallationPartitionRole {
@@ -202,10 +203,23 @@ where
     R: InstallationCommandRunner,
     B: InstallationBootstrapper,
 {
+    #[cfg(test)]
     const fn with_dependencies(runner: R, bootstrapper: B) -> Self {
         Self {
             runner,
             bootstrapper,
+        }
+    }
+}
+
+impl SystemInstallationOperationExecutor<ProcessInstallationCommandRunner, MmdebstrapBootstrapper> {
+    /// Creates a system installation executor using real process execution
+    /// and mmdebstrap for root filesystem bootstrap.
+    #[must_use]
+    pub fn new() -> Self {
+        Self {
+            runner: ProcessInstallationCommandRunner,
+            bootstrapper: MmdebstrapBootstrapper::new(),
         }
     }
 }
@@ -599,6 +613,18 @@ pub trait InstallationBootstrapper {
     ) -> Result<(), Self::Error>;
 }
 
+impl InstallationBootstrapper for MmdebstrapBootstrapper {
+    type Error = MmdebstrapError;
+
+    fn bootstrap(
+        &self,
+        root: &std::path::Path,
+        config: &BootstrapConfig,
+    ) -> Result<(), Self::Error> {
+        self.bootstrap_root(root, config)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
@@ -674,6 +700,12 @@ mod tests {
             Err(io::Error::other("bootstrap failed"))
         }
     }
+
+    #[test]
+    fn creates_system_executor_with_production_dependencies() {
+        let _executor = SystemInstallationOperationExecutor::new();
+    }
+
     #[test]
     fn system_executor_returns_bootstrap_failure() {
         let mut executor = SystemInstallationOperationExecutor::with_dependencies(
