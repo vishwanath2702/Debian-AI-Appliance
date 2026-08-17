@@ -185,6 +185,8 @@ pub trait InstallationOperationExecutor {
 /// Executes installation operations against the host system.
 pub trait InstallationCommandRunner {
     fn status(&mut self, command: &mut Command) -> io::Result<()>;
+
+    fn output(&mut self, command: &mut Command) -> io::Result<Vec<u8>>;
 }
 
 /// Runs installation commands as operating-system processes.
@@ -200,6 +202,19 @@ impl InstallationCommandRunner for ProcessInstallationCommandRunner {
         } else {
             Err(io::Error::other(format!(
                 "installation command exited unsuccessfully: {status}"
+            )))
+        }
+    }
+
+    fn output(&mut self, command: &mut Command) -> io::Result<Vec<u8>> {
+        let output = command.output()?;
+
+        if output.status.success() {
+            Ok(output.stdout)
+        } else {
+            Err(io::Error::other(format!(
+                "installation command exited unsuccessfully: {}",
+                output.status
             )))
         }
     }
@@ -719,12 +734,16 @@ mod tests {
     #[derive(Default)]
     struct RecordingCommandRunner {
         commands: Vec<Vec<String>>,
+        outputs: Vec<Vec<u8>>,
     }
-
     struct FailingCommandRunner;
 
     impl InstallationCommandRunner for FailingCommandRunner {
         fn status(&mut self, _command: &mut Command) -> io::Result<()> {
+            Err(io::Error::other("command failed"))
+        }
+
+        fn output(&mut self, _command: &mut Command) -> io::Result<Vec<u8>> {
             Err(io::Error::other("command failed"))
         }
     }
@@ -743,7 +762,25 @@ mod tests {
 
             Ok(())
         }
+        fn output(&mut self, command: &mut Command) -> io::Result<Vec<u8>> {
+            let mut recorded = vec![command.get_program().to_string_lossy().into_owned()];
+
+            recorded.extend(
+                command
+                    .get_args()
+                    .map(|arg| arg.to_string_lossy().into_owned()),
+            );
+
+            self.commands.push(recorded);
+
+            if self.outputs.is_empty() {
+                return Err(io::Error::other("no recorded command output"));
+            }
+
+            Ok(self.outputs.remove(0))
+        }
     }
+
     #[derive(Default)]
     struct RecordingInstallationBootstrapper {
         calls: std::sync::Mutex<Vec<(PathBuf, BootstrapConfig)>>,
@@ -791,6 +828,46 @@ mod tests {
             self.plans.extend_from_slice(plans);
             Ok(())
         }
+    }
+
+    impl RecordingCommandRunner {
+        fn with_outputs(outputs: Vec<Vec<u8>>) -> Self {
+            Self {
+                commands: Vec::new(),
+                outputs,
+            }
+        }
+    }
+
+    #[test]
+    fn recording_command_runner_returns_command_output() {
+        let mut runner = RecordingCommandRunner::with_outputs(vec![b"root-uuid\n".to_vec()]);
+
+        let mut command = Command::new("blkid");
+        command
+            .arg("-s")
+            .arg("UUID")
+            .arg("-o")
+            .arg("value")
+            .arg("/dev/sdb2");
+
+        let output = runner
+            .output(&mut command)
+            .expect("recording runner should return command output");
+
+        assert_eq!(output, b"root-uuid\n");
+
+        assert_eq!(
+            runner.commands,
+            vec![vec![
+                "blkid".to_owned(),
+                "-s".to_owned(),
+                "UUID".to_owned(),
+                "-o".to_owned(),
+                "value".to_owned(),
+                "/dev/sdb2".to_owned(),
+            ]]
+        );
     }
 
     #[test]
