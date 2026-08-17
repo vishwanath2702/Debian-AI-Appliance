@@ -9,8 +9,9 @@ mod workflow;
 
 pub use installation::{
     DryRunInstallationExecutor, InstallationCommandRunner, InstallationExecutor,
-    InstallationOperation, InstallationOperationExecutor, InstallationPlan, PreparedInstallation,
-    ProcessInstallationCommandRunner, SystemInstallationOperationExecutor,
+    InstallationOperation, InstallationOperationExecutor, InstallationPlan,
+    InstallationPlanExecutor, PreparedInstallation, ProcessInstallationCommandRunner,
+    RootfsInstallationPlanExecutor, SystemInstallationOperationExecutor,
     default_installation_mounts, default_installation_partitions,
 };
 
@@ -322,7 +323,8 @@ mod tests {
     use super::{
         BootstrapConfig, BuildContext, BuildError, DryRunInstallationExecutor, Engine,
         InstallationExecutor, InstallationOperation, InstallationOperationExecutor,
-        InstallationPlan, PreparedInstallation, RootfsRunError, default_installation_mounts,
+        InstallationPlan, PreparedInstallation, RootfsInstallationPlanExecutor, RootfsRunError,
+        SystemInstallationOperationExecutor, default_installation_mounts,
         default_installation_partitions,
     };
     struct TestStorageInspector;
@@ -404,6 +406,22 @@ mod tests {
     }
 
     #[test]
+    fn creates_system_executor_with_production_dependencies() {
+        let _executor = SystemInstallationOperationExecutor::new(
+            "/tmp/daia-assets".into(),
+            PackageRepository::new(),
+        );
+    }
+
+    #[test]
+    fn creates_rootfs_installation_plan_executor() {
+        let _executor = RootfsInstallationPlanExecutor::new(
+            "/target".into(),
+            "/tmp/daia-assets".into(),
+            PackageRepository::new(),
+        );
+    }
+    #[test]
     fn installation_plan_stops_after_operation_failure() {
         let plan = InstallationPlan::new(vec![
             InstallationOperation::PrepareDisk {
@@ -423,9 +441,7 @@ mod tests {
                 root: "/target".into(),
                 bootstrap: BootstrapConfig::default(),
             },
-InstallationOperation::ApplyPlans {
-    plans: Vec::new(),
-},
+            InstallationOperation::ApplyPlans { plans: Vec::new() },
         ]);
 
         let mut executor = FailingOperationExecutor {
@@ -495,10 +511,7 @@ InstallationOperation::ApplyPlans {
                 root: "/target".into(),
                 bootstrap: BootstrapConfig::default(),
             },
-
-InstallationOperation::ApplyPlans {
-    plans: Vec::new(),
-},
+            InstallationOperation::ApplyPlans { plans: Vec::new() },
         ]);
 
         let expected = plan.operations().to_vec();

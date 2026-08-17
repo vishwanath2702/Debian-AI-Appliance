@@ -2,7 +2,11 @@ use model::{DiscoveredStorage, DiscoveredStorageId, InstallationIntent, Plan};
 
 use std::{io, path::PathBuf, process::Command};
 
-use crate::{BootstrapConfig, MmdebstrapBootstrapper, MmdebstrapError};
+use crate::{
+    BootstrapConfig, BuildBackend, MmdebstrapBootstrapper, MmdebstrapError, RootfsBackend,
+};
+use executor::{ExecuteError, RootfsRunError};
+use registry::PackageRepository;
 
 /// Role of a partition in an installed DAIA system.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -211,6 +215,28 @@ where
             runner,
             bootstrapper,
             plan_executor,
+        }
+    }
+}
+
+impl
+    SystemInstallationOperationExecutor<
+        ProcessInstallationCommandRunner,
+        MmdebstrapBootstrapper,
+        RootfsInstallationPlanExecutor,
+    >
+{
+    /// Creates a production installation executor.
+    #[must_use]
+    pub fn new(asset_directory: PathBuf, package_repository: PackageRepository) -> Self {
+        Self {
+            runner: ProcessInstallationCommandRunner,
+            bootstrapper: MmdebstrapBootstrapper::new(),
+            plan_executor: RootfsInstallationPlanExecutor::new(
+                PathBuf::from("/target"),
+                asset_directory,
+                package_repository,
+            ),
         }
     }
 }
@@ -627,6 +653,37 @@ pub trait InstallationPlanExecutor {
 
     /// Applies the supplied appliance plans.
     fn apply_plans(&mut self, plans: &[Plan]) -> Result<(), Self::Error>;
+}
+
+/// Applies installation plans to the mounted target root filesystem.
+pub struct RootfsInstallationPlanExecutor {
+    backend: RootfsBackend,
+}
+
+impl RootfsInstallationPlanExecutor {
+    /// Creates a plan executor for an installed root filesystem.
+    #[must_use]
+    pub const fn new(
+        rootfs: PathBuf,
+        asset_directory: PathBuf,
+        package_repository: PackageRepository,
+    ) -> Self {
+        Self {
+            backend: RootfsBackend::new(rootfs, asset_directory, package_repository),
+        }
+    }
+}
+
+impl InstallationPlanExecutor for RootfsInstallationPlanExecutor {
+    type Error = ExecuteError<RootfsRunError>;
+
+    fn apply_plans(&mut self, plans: &[Plan]) -> Result<(), Self::Error> {
+        for plan in plans {
+            self.backend.build(plan)?;
+        }
+
+        Ok(())
+    }
 }
 
 #[cfg(test)]
