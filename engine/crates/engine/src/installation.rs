@@ -110,6 +110,47 @@ where
     Ok(uuid.to_owned())
 }
 
+fn installed_mount_point(mount: &InstallationMount) -> io::Result<PathBuf> {
+    let relative = mount.mount_point().strip_prefix("/target").map_err(|_| {
+        io::Error::other(format!(
+            "installation mount is outside target root: {}",
+            mount.mount_point().display()
+        ))
+    })?;
+
+    if relative.as_os_str().is_empty() {
+        Ok(PathBuf::from("/"))
+    } else {
+        Ok(PathBuf::from("/").join(relative))
+    }
+}
+
+fn installation_fstab(
+    root_uuid: &str,
+    efi_uuid: &str,
+    mounts: &[InstallationMount],
+) -> io::Result<String> {
+    let root_mount = mounts
+        .iter()
+        .find(|mount| mount.role() == InstallationPartitionRole::Root)
+        .ok_or_else(|| io::Error::other("root mount is missing"))?;
+
+    let efi_mount = mounts
+        .iter()
+        .find(|mount| mount.role() == InstallationPartitionRole::EfiSystem)
+        .ok_or_else(|| io::Error::other("EFI mount is missing"))?;
+
+    let root_mount_point = installed_mount_point(root_mount)?;
+    let efi_mount_point = installed_mount_point(efi_mount)?;
+
+    Ok(format!(
+        "UUID={root_uuid}\t{}\text4\tdefaults\t0\t1\n\
+         UUID={efi_uuid}\t{}\tvfat\tumask=0077\t0\t2\n",
+        root_mount_point.display(),
+        efi_mount_point.display(),
+    ))
+}
+
 /// Describes one filesystem mount required by an installation.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct InstallationMount {
@@ -751,7 +792,7 @@ mod tests {
         InstallationPartitionRole, InstallationPlanExecutor, PathBuf, PreparedInstallation,
         ProcessInstallationCommandRunner, SystemInstallationOperationExecutor,
         default_installation_mounts, default_installation_partitions, filesystem_uuid,
-        partition_device_path,
+        installation_fstab, installed_mount_point, partition_device_path,
     };
     use model::{
         Capability, DiscoveredStorage, DiscoveredStorageId, InstallationIntent, Plan, ProviderId,
@@ -866,6 +907,54 @@ mod tests {
                 outputs,
             }
         }
+    }
+
+    #[test]
+    fn installation_fstab_rejects_missing_efi_mount() {
+        let mounts = vec![InstallationMount::new(
+            InstallationPartitionRole::Root,
+            "/target",
+        )];
+
+        let error = installation_fstab("root-uuid", "efi-uuid", &mounts)
+            .expect_err("missing EFI mount should fail");
+
+        assert!(error.to_string().contains("EFI mount is missing"));
+    }
+
+    #[test]
+    fn installed_mount_point_converts_target_root_to_root() {
+        let mount = InstallationMount::new(InstallationPartitionRole::Root, "/target");
+
+        assert_eq!(
+            installed_mount_point(&mount).expect("root mount should convert"),
+            PathBuf::from("/")
+        );
+    }
+
+    #[test]
+    fn installed_mount_point_strips_target_prefix() {
+        let mount =
+            InstallationMount::new(InstallationPartitionRole::EfiSystem, "/target/boot/efi");
+
+        assert_eq!(
+            installed_mount_point(&mount).expect("EFI mount should convert"),
+            PathBuf::from("/boot/efi")
+        );
+    }
+
+    #[test]
+    fn installation_fstab_uses_filesystem_uuids() {
+        let fstab = installation_fstab("root-uuid", "efi-uuid", &default_installation_mounts())
+            .expect("fstab should be generated");
+
+        assert_eq!(
+            fstab,
+            concat!(
+                "UUID=root-uuid\t/\text4\tdefaults\t0\t1\n",
+                "UUID=efi-uuid\t/boot/efi\tvfat\tumask=0077\t0\t2\n",
+            )
+        );
     }
 
     #[test]
