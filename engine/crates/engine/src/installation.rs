@@ -695,7 +695,10 @@ mod tests {
         ProcessInstallationCommandRunner, SystemInstallationOperationExecutor,
         default_installation_mounts, default_installation_partitions, partition_device_path,
     };
-    use model::{DiscoveredStorage, DiscoveredStorageId, InstallationIntent, Plan, StorageKind};
+    use model::{
+        Capability, DiscoveredStorage, DiscoveredStorageId, InstallationIntent, Plan, ProviderId,
+        StorageKind,
+    };
 
     use std::{io, process::Command};
 
@@ -784,15 +787,22 @@ mod tests {
             RecordingInstallationPlanExecutor::default(),
         );
 
-        let operation = InstallationOperation::ApplyPlans { plans: Vec::new() };
+        let plan = Plan {
+            capability: Capability::new("desktop"),
+            provider: ProviderId::new("gnome"),
+            steps: Vec::new(),
+        };
+
+        let operation = InstallationOperation::ApplyPlans {
+            plans: vec![plan.clone()],
+        };
 
         executor
             .execute_operation(&operation)
             .expect("apply plans operation should execute");
 
-        assert!(executor.plan_executor.plans.is_empty());
+        assert_eq!(executor.plan_executor.plans, vec![plan]);
     }
-
     #[test]
     fn installation_plan_executor_records_plans() {
         let mut executor = RecordingInstallationPlanExecutor::default();
