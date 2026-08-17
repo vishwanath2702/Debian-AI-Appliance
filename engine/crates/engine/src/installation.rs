@@ -81,6 +81,34 @@ fn partition_device_path(device_path: &std::path::Path, partition_number: usize)
         PathBuf::from(format!("{device}{partition_number}"))
     }
 }
+fn filesystem_uuid<R>(runner: &mut R, partition_path: &std::path::Path) -> io::Result<String>
+where
+    R: InstallationCommandRunner,
+{
+    let mut command = Command::new("blkid");
+
+    command
+        .arg("-s")
+        .arg("UUID")
+        .arg("-o")
+        .arg("value")
+        .arg(partition_path);
+
+    let output = runner.output(&mut command)?;
+
+    let uuid = std::str::from_utf8(&output)
+        .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?
+        .trim();
+
+    if uuid.is_empty() {
+        return Err(io::Error::other(format!(
+            "filesystem UUID is missing for {}",
+            partition_path.display()
+        )));
+    }
+
+    Ok(uuid.to_owned())
+}
 
 /// Describes one filesystem mount required by an installation.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -722,7 +750,8 @@ mod tests {
         InstallationOperation, InstallationOperationExecutor, InstallationPartition,
         InstallationPartitionRole, InstallationPlanExecutor, PathBuf, PreparedInstallation,
         ProcessInstallationCommandRunner, SystemInstallationOperationExecutor,
-        default_installation_mounts, default_installation_partitions, partition_device_path,
+        default_installation_mounts, default_installation_partitions, filesystem_uuid,
+        partition_device_path,
     };
     use model::{
         Capability, DiscoveredStorage, DiscoveredStorageId, InstallationIntent, Plan, ProviderId,
@@ -837,6 +866,48 @@ mod tests {
                 outputs,
             }
         }
+    }
+
+    #[test]
+    fn filesystem_uuid_reads_uuid_with_blkid() {
+        let mut runner = RecordingCommandRunner::with_outputs(vec![b"root-uuid\n".to_vec()]);
+
+        let uuid = filesystem_uuid(&mut runner, std::path::Path::new("/dev/sdb2"))
+            .expect("filesystem UUID should be discovered");
+
+        assert_eq!(uuid, "root-uuid");
+
+        assert_eq!(
+            runner.commands,
+            vec![vec![
+                "blkid".to_owned(),
+                "-s".to_owned(),
+                "UUID".to_owned(),
+                "-o".to_owned(),
+                "value".to_owned(),
+                "/dev/sdb2".to_owned(),
+            ]]
+        );
+    }
+
+    #[test]
+    fn filesystem_uuid_returns_command_failure() {
+        let mut runner = FailingCommandRunner;
+
+        let error = filesystem_uuid(&mut runner, std::path::Path::new("/dev/sdb2"))
+            .expect_err("blkid failure should be returned");
+
+        assert!(error.to_string().contains("command failed"));
+    }
+
+    #[test]
+    fn filesystem_uuid_rejects_empty_output() {
+        let mut runner = RecordingCommandRunner::with_outputs(vec![b"\n".to_vec()]);
+
+        let error = filesystem_uuid(&mut runner, std::path::Path::new("/dev/sdb2"))
+            .expect_err("empty UUID should fail");
+
+        assert!(error.to_string().contains("filesystem UUID is missing"));
     }
 
     #[test]
