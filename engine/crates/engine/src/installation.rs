@@ -193,41 +193,33 @@ impl InstallationCommandRunner for ProcessInstallationCommandRunner {
     }
 }
 
-pub struct SystemInstallationOperationExecutor<R, B> {
+pub struct SystemInstallationOperationExecutor<R, B, P> {
     runner: R,
     bootstrapper: B,
+    plan_executor: P,
 }
 
-impl<R, B> SystemInstallationOperationExecutor<R, B>
+impl<R, B, P> SystemInstallationOperationExecutor<R, B, P>
 where
     R: InstallationCommandRunner,
     B: InstallationBootstrapper,
+    P: InstallationPlanExecutor,
 {
     #[cfg(test)]
-    const fn with_dependencies(runner: R, bootstrapper: B) -> Self {
+    const fn with_dependencies(runner: R, bootstrapper: B, plan_executor: P) -> Self {
         Self {
             runner,
             bootstrapper,
+            plan_executor,
         }
     }
 }
 
-impl SystemInstallationOperationExecutor<ProcessInstallationCommandRunner, MmdebstrapBootstrapper> {
-    /// Creates a system installation executor using real process execution
-    /// and mmdebstrap for root filesystem bootstrap.
-    #[must_use]
-    pub fn new() -> Self {
-        Self {
-            runner: ProcessInstallationCommandRunner,
-            bootstrapper: MmdebstrapBootstrapper::new(),
-        }
-    }
-}
-
-impl<R, B> InstallationOperationExecutor for SystemInstallationOperationExecutor<R, B>
+impl<R, B, P> InstallationOperationExecutor for SystemInstallationOperationExecutor<R, B, P>
 where
     R: InstallationCommandRunner,
     B: InstallationBootstrapper,
+    P: InstallationPlanExecutor,
 {
     type Error = io::Error;
 
@@ -404,7 +396,10 @@ where
                 .bootstrapper
                 .bootstrap(root, bootstrap)
                 .map_err(|_| io::Error::other("installation bootstrap failed")),
-            _ => Ok(()),
+            InstallationOperation::ApplyPlans { plans } => self
+                .plan_executor
+                .apply_plans(plans)
+                .map_err(|_| io::Error::other("installation plan execution failed")),
         }
     }
 }
@@ -725,6 +720,23 @@ mod tests {
     }
 
     #[test]
+    fn system_executor_routes_apply_plans_to_plan_executor() {
+        let mut executor = SystemInstallationOperationExecutor::with_dependencies(
+            RecordingCommandRunner::default(),
+            RecordingInstallationBootstrapper::default(),
+            RecordingInstallationPlanExecutor::default(),
+        );
+
+        let operation = InstallationOperation::ApplyPlans { plans: Vec::new() };
+
+        executor
+            .execute_operation(&operation)
+            .expect("apply plans operation should execute");
+
+        assert!(executor.plan_executor.plans.is_empty());
+    }
+
+    #[test]
     fn installation_plan_executor_records_plans() {
         let mut executor = RecordingInstallationPlanExecutor::default();
 
@@ -738,15 +750,11 @@ mod tests {
     }
 
     #[test]
-    fn creates_system_executor_with_production_dependencies() {
-        let _executor = SystemInstallationOperationExecutor::new();
-    }
-
-    #[test]
     fn system_executor_returns_bootstrap_failure() {
         let mut executor = SystemInstallationOperationExecutor::with_dependencies(
             RecordingCommandRunner::default(),
             FailingInstallationBootstrapper,
+            RecordingInstallationPlanExecutor::default(),
         );
 
         let operation = InstallationOperation::BootstrapSystem {
@@ -777,6 +785,7 @@ mod tests {
         let mut executor = SystemInstallationOperationExecutor::with_dependencies(
             RecordingCommandRunner::default(),
             bootstrapper,
+            RecordingInstallationPlanExecutor::default(),
         );
 
         let operation = InstallationOperation::BootstrapSystem {
@@ -865,6 +874,7 @@ mod tests {
         let mut executor = SystemInstallationOperationExecutor::with_dependencies(
             RecordingCommandRunner::default(),
             RecordingInstallationBootstrapper::default(),
+            RecordingInstallationPlanExecutor::default(),
         );
         let operation = InstallationOperation::MountFilesystems {
             device_path: "/dev/sdb".into(),
@@ -889,6 +899,7 @@ mod tests {
         let mut executor = SystemInstallationOperationExecutor::with_dependencies(
             RecordingCommandRunner::default(),
             RecordingInstallationBootstrapper::default(),
+            RecordingInstallationPlanExecutor::default(),
         );
 
         let operation = InstallationOperation::MountFilesystems {
@@ -914,6 +925,7 @@ mod tests {
         let mut executor = SystemInstallationOperationExecutor::with_dependencies(
             RecordingCommandRunner::default(),
             RecordingInstallationBootstrapper::default(),
+            RecordingInstallationPlanExecutor::default(),
         );
         let operation = InstallationOperation::MountFilesystems {
             device_path: "/dev/sdb".into(),
@@ -960,6 +972,7 @@ mod tests {
         let mut executor = SystemInstallationOperationExecutor::with_dependencies(
             RecordingCommandRunner::default(),
             RecordingInstallationBootstrapper::default(),
+            RecordingInstallationPlanExecutor::default(),
         );
         let operation = InstallationOperation::MountFilesystems {
             device_path: "/dev/sdb".into(),
@@ -983,6 +996,7 @@ mod tests {
         let mut executor = SystemInstallationOperationExecutor::with_dependencies(
             RecordingCommandRunner::default(),
             RecordingInstallationBootstrapper::default(),
+            RecordingInstallationPlanExecutor::default(),
         );
         let operation = InstallationOperation::MountFilesystems {
             device_path: "/dev/sdb".into(),
@@ -1016,6 +1030,7 @@ mod tests {
         let mut executor = SystemInstallationOperationExecutor::with_dependencies(
             RecordingCommandRunner::default(),
             RecordingInstallationBootstrapper::default(),
+            RecordingInstallationPlanExecutor::default(),
         );
 
         let operation = InstallationOperation::MountFilesystems {
@@ -1072,6 +1087,7 @@ mod tests {
         let mut executor = SystemInstallationOperationExecutor::with_dependencies(
             RecordingCommandRunner::default(),
             RecordingInstallationBootstrapper::default(),
+            RecordingInstallationPlanExecutor::default(),
         );
         let operation = InstallationOperation::PartitionDisk {
             device_path: "/dev/sdb".into(),
@@ -1097,6 +1113,7 @@ mod tests {
         let mut executor = SystemInstallationOperationExecutor::with_dependencies(
             RecordingCommandRunner::default(),
             RecordingInstallationBootstrapper::default(),
+            RecordingInstallationPlanExecutor::default(),
         );
         let operation = InstallationOperation::PartitionDisk {
             device_path: "/dev/sdb".into(),
@@ -1118,6 +1135,7 @@ mod tests {
         let mut executor = SystemInstallationOperationExecutor::with_dependencies(
             RecordingCommandRunner::default(),
             RecordingInstallationBootstrapper::default(),
+            RecordingInstallationPlanExecutor::default(),
         );
         let operation = InstallationOperation::PartitionDisk {
             device_path: "/dev/sdb".into(),
@@ -1140,6 +1158,7 @@ mod tests {
         let mut executor = SystemInstallationOperationExecutor::with_dependencies(
             RecordingCommandRunner::default(),
             RecordingInstallationBootstrapper::default(),
+            RecordingInstallationPlanExecutor::default(),
         );
         let operation = InstallationOperation::PartitionDisk {
             device_path: "/dev/sdb".into(),
@@ -1162,6 +1181,7 @@ mod tests {
         let mut executor = SystemInstallationOperationExecutor::with_dependencies(
             RecordingCommandRunner::default(),
             RecordingInstallationBootstrapper::default(),
+            RecordingInstallationPlanExecutor::default(),
         );
         let operation = InstallationOperation::CreateFilesystems {
             device_path: "/dev/sdb".into(),
@@ -1184,6 +1204,7 @@ mod tests {
         let mut executor = SystemInstallationOperationExecutor::with_dependencies(
             RecordingCommandRunner::default(),
             RecordingInstallationBootstrapper::default(),
+            RecordingInstallationPlanExecutor::default(),
         );
         let operation = InstallationOperation::CreateFilesystems {
             device_path: "/dev/sdb".into(),
@@ -1205,6 +1226,7 @@ mod tests {
         let mut executor = SystemInstallationOperationExecutor::with_dependencies(
             RecordingCommandRunner::default(),
             RecordingInstallationBootstrapper::default(),
+            RecordingInstallationPlanExecutor::default(),
         );
         let operation = InstallationOperation::CreateFilesystems {
             device_path: "/dev/sdb".into(),
@@ -1226,6 +1248,7 @@ mod tests {
         let mut executor = SystemInstallationOperationExecutor::with_dependencies(
             RecordingCommandRunner::default(),
             RecordingInstallationBootstrapper::default(),
+            RecordingInstallationPlanExecutor::default(),
         );
         let operation = InstallationOperation::CreateFilesystems {
             device_path: "/dev/sdb".into(),
@@ -1250,6 +1273,7 @@ mod tests {
         let mut executor = SystemInstallationOperationExecutor::with_dependencies(
             RecordingCommandRunner::default(),
             RecordingInstallationBootstrapper::default(),
+            RecordingInstallationPlanExecutor::default(),
         );
         let operation = InstallationOperation::CreateFilesystems {
             device_path: "/dev/sdb".into(),
@@ -1352,6 +1376,7 @@ mod tests {
         let executor = SystemInstallationOperationExecutor::with_dependencies(
             RecordingCommandRunner::default(),
             RecordingInstallationBootstrapper::default(),
+            RecordingInstallationPlanExecutor::default(),
         );
         assert!(executor.runner.commands.is_empty());
     }
@@ -1360,6 +1385,7 @@ mod tests {
         let mut executor = SystemInstallationOperationExecutor::with_dependencies(
             RecordingCommandRunner::default(),
             RecordingInstallationBootstrapper::default(),
+            RecordingInstallationPlanExecutor::default(),
         );
         let operation = InstallationOperation::PrepareDisk {
             storage_id: DiscoveredStorageId::new("serial:usb-disk"),
@@ -1384,6 +1410,7 @@ mod tests {
         let mut executor = SystemInstallationOperationExecutor::with_dependencies(
             FailingCommandRunner,
             RecordingInstallationBootstrapper::default(),
+            RecordingInstallationPlanExecutor::default(),
         );
         let operation = InstallationOperation::PrepareDisk {
             storage_id: DiscoveredStorageId::new("serial:usb-disk"),
@@ -1401,6 +1428,7 @@ mod tests {
         let mut executor = SystemInstallationOperationExecutor::with_dependencies(
             RecordingCommandRunner::default(),
             RecordingInstallationBootstrapper::default(),
+            RecordingInstallationPlanExecutor::default(),
         );
         let operation = InstallationOperation::PartitionDisk {
             device_path: "/dev/sdb".into(),
@@ -1437,6 +1465,7 @@ mod tests {
         let mut executor = SystemInstallationOperationExecutor::with_dependencies(
             RecordingCommandRunner::default(),
             RecordingInstallationBootstrapper::default(),
+            RecordingInstallationPlanExecutor::default(),
         );
         let operation = InstallationOperation::PartitionDisk {
             device_path: "/dev/sdb".into(),
