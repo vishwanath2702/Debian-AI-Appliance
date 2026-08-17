@@ -625,16 +625,25 @@ impl InstallationBootstrapper for MmdebstrapBootstrapper {
     }
 }
 
+/// Executes appliance plans against an installation root.
+pub trait InstallationPlanExecutor {
+    /// Error produced while applying plans.
+    type Error;
+
+    /// Applies the supplied appliance plans.
+    fn apply_plans(&mut self, plans: &[Plan]) -> Result<(), Self::Error>;
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
         BootstrapConfig, InstallationBootstrapper, InstallationCommandRunner, InstallationMount,
         InstallationOperation, InstallationOperationExecutor, InstallationPartition,
-        InstallationPartitionRole, PathBuf, PreparedInstallation, ProcessInstallationCommandRunner,
-        SystemInstallationOperationExecutor, default_installation_mounts,
-        default_installation_partitions, partition_device_path,
+        InstallationPartitionRole, InstallationPlanExecutor, PathBuf, PreparedInstallation,
+        ProcessInstallationCommandRunner, SystemInstallationOperationExecutor,
+        default_installation_mounts, default_installation_partitions, partition_device_path,
     };
-    use model::{DiscoveredStorage, DiscoveredStorageId, InstallationIntent, StorageKind};
+    use model::{DiscoveredStorage, DiscoveredStorageId, InstallationIntent, Plan, StorageKind};
 
     use std::{io, process::Command};
 
@@ -699,6 +708,33 @@ mod tests {
         ) -> Result<(), Self::Error> {
             Err(io::Error::other("bootstrap failed"))
         }
+    }
+
+    #[derive(Default)]
+    struct RecordingInstallationPlanExecutor {
+        plans: Vec<Plan>,
+    }
+
+    impl InstallationPlanExecutor for RecordingInstallationPlanExecutor {
+        type Error = std::convert::Infallible;
+
+        fn apply_plans(&mut self, plans: &[Plan]) -> Result<(), Self::Error> {
+            self.plans.extend_from_slice(plans);
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn installation_plan_executor_records_plans() {
+        let mut executor = RecordingInstallationPlanExecutor::default();
+
+        let plans = Vec::<Plan>::new();
+
+        executor
+            .apply_plans(&plans)
+            .expect("recording plan executor should succeed");
+
+        assert!(executor.plans.is_empty());
     }
 
     #[test]
