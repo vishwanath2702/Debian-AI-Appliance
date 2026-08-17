@@ -161,7 +161,15 @@ pub enum InstallationOperation {
 
     /// Apply the appliance execution plans.
     ApplyPlans { plans: Vec<Plan> },
+
+    /// Configure persistent filesystem mounts for the installed system.
+    ConfigureFstab {
+        device_path: PathBuf,
+        partitions: Vec<InstallationPartition>,
+        mounts: Vec<InstallationMount>,
+    },
 }
+
 /// Executes one planned installation operation.
 pub trait InstallationOperationExecutor {
     /// Error produced while executing an operation.
@@ -426,6 +434,7 @@ where
                 .plan_executor
                 .apply_plans(plans)
                 .map_err(|_| io::Error::other("installation plan execution failed")),
+            InstallationOperation::ConfigureFstab { .. } => Ok(()),
         }
     }
 }
@@ -518,6 +527,11 @@ impl PreparedInstallation {
             },
             InstallationOperation::ApplyPlans {
                 plans: self.plans.clone(),
+            },
+            InstallationOperation::ConfigureFstab {
+                device_path: self.storage.device_path().to_path_buf(),
+                partitions: default_installation_partitions(),
+                mounts: default_installation_mounts(),
             },
         ])
     }

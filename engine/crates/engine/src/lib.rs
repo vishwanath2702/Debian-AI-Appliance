@@ -589,7 +589,12 @@ mod tests {
                     root: "/target".into(),
                     bootstrap: BootstrapConfig::default(),
                 },
-                InstallationOperation::ApplyPlans { plans: Vec::new() }
+                InstallationOperation::ApplyPlans { plans: Vec::new() },
+                InstallationOperation::ConfigureFstab {
+                    device_path: "/dev/sdb".into(),
+                    partitions: default_installation_partitions(),
+                    mounts: default_installation_mounts(),
+                },
             ]
         );
     }
