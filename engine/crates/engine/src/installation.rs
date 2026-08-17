@@ -156,7 +156,7 @@ pub enum InstallationOperation {
     },
 
     /// Apply the appliance execution plans.
-    ApplyPlans { count: usize },
+    ApplyPlans { plans: Vec<Plan> },
 }
 /// Executes one planned installation operation.
 pub trait InstallationOperationExecutor {
@@ -496,7 +496,7 @@ impl PreparedInstallation {
                 bootstrap: self.bootstrap.clone(),
             },
             InstallationOperation::ApplyPlans {
-                count: self.plans.len(),
+                plans: self.plans.clone(),
             },
         ])
     }

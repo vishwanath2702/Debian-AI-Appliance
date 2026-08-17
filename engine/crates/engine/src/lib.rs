@@ -423,7 +423,9 @@ mod tests {
                 root: "/target".into(),
                 bootstrap: BootstrapConfig::default(),
             },
-            InstallationOperation::ApplyPlans { count: 1 },
+InstallationOperation::ApplyPlans {
+    plans: Vec::new(),
+},
         ]);
 
         let mut executor = FailingOperationExecutor {
@@ -493,7 +495,10 @@ mod tests {
                 root: "/target".into(),
                 bootstrap: BootstrapConfig::default(),
             },
-            InstallationOperation::ApplyPlans { count: 1 },
+
+InstallationOperation::ApplyPlans {
+    plans: Vec::new(),
+},
         ]);
 
         let expected = plan.operations().to_vec();
@@ -571,7 +576,7 @@ mod tests {
                     root: "/target".into(),
                     bootstrap: BootstrapConfig::default(),
                 },
-                InstallationOperation::ApplyPlans { count: 0 }
+                InstallationOperation::ApplyPlans { plans: Vec::new() }
             ]
         );
     }
@@ -596,7 +601,7 @@ mod tests {
                 root: "/target".into(),
                 bootstrap: BootstrapConfig::default(),
             },
-            InstallationOperation::ApplyPlans { count: 0 },
+            InstallationOperation::ApplyPlans { plans: Vec::new() },
         ]);
 
         assert_eq!(
@@ -619,7 +624,7 @@ mod tests {
                     root: "/target".into(),
                     bootstrap: BootstrapConfig::default(),
                 },
-                InstallationOperation::ApplyPlans { count: 0 }
+                InstallationOperation::ApplyPlans { plans: Vec::new() }
             ]
         );
     }
