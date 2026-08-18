@@ -243,12 +243,16 @@ pub enum InstallationOperation {
     ApplyPlans { plans: Vec<Plan> },
 
     /// Configure persistent filesystem mounts for the installed system.
+
     /// Configure persistent filesystem mounts for the installed system.
     ConfigureFstab {
         device_path: PathBuf,
         partitions: Vec<InstallationPartition>,
         mounts: Vec<InstallationMount>,
     },
+
+    /// Prepares runtime filesystems required by commands executed inside the target root.
+    PrepareTargetRuntime { root: PathBuf },
 
     /// Install the bootloader into the installed system.
     InstallBootloader { root: PathBuf, device_path: PathBuf },
@@ -603,6 +607,7 @@ where
                 self.file_writer
                     .write(std::path::Path::new("/target/etc/fstab"), fstab.as_bytes())
             }
+            InstallationOperation::PrepareTargetRuntime { .. } => Ok(()),
             InstallationOperation::InstallBootloader { root, .. } => {
                 let mut grub_install = command_in_root(
                     root,
@@ -717,6 +722,9 @@ impl PreparedInstallation {
                 device_path: self.storage.device_path().to_path_buf(),
                 partitions: default_installation_partitions(),
                 mounts: default_installation_mounts(),
+            },
+            InstallationOperation::PrepareTargetRuntime {
+                root: "/target".into(),
             },
             InstallationOperation::InstallBootloader {
                 root: "/target".into(),
