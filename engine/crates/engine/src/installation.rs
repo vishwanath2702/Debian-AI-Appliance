@@ -641,6 +641,17 @@ where
                 let mut mount = Command::new("mount");
                 mount.arg("--rbind").arg("/sys").arg(&target_sys);
 
+                self.runner.status(&mut mount)?;
+                let target_run = root.join("run");
+
+                let mut mkdir = Command::new("mkdir");
+                mkdir.arg("-p").arg(&target_run);
+
+                self.runner.status(&mut mkdir)?;
+
+                let mut mount = Command::new("mount");
+                mount.arg("--rbind").arg("/run").arg(&target_run);
+
                 self.runner.status(&mut mount)
             }
             InstallationOperation::InstallBootloader { root, .. } => {
@@ -1150,6 +1161,17 @@ mod tests {
                     "--rbind".to_owned(),
                     "/sys".to_owned(),
                     "/target/sys".to_owned(),
+                ],
+                vec![
+                    "mkdir".to_owned(),
+                    "-p".to_owned(),
+                    "/target/run".to_owned(),
+                ],
+                vec![
+                    "mount".to_owned(),
+                    "--rbind".to_owned(),
+                    "/run".to_owned(),
+                    "/target/run".to_owned(),
                 ],
             ]
         );
