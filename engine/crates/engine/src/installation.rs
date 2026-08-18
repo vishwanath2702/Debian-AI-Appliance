@@ -618,6 +618,18 @@ where
                 let mut mount = Command::new("mount");
                 mount.arg("--rbind").arg("/dev").arg(&target_dev);
 
+                self.runner.status(&mut mount)?;
+
+                let target_proc = root.join("proc");
+
+                let mut mkdir = Command::new("mkdir");
+                mkdir.arg("-p").arg(&target_proc);
+
+                self.runner.status(&mut mkdir)?;
+
+                let mut mount = Command::new("mount");
+                mount.arg("-t").arg("proc").arg("proc").arg(&target_proc);
+
                 self.runner.status(&mut mount)
             }
             InstallationOperation::InstallBootloader { root, .. } => {
@@ -1076,7 +1088,7 @@ mod tests {
     }
 
     #[test]
-    fn system_executor_prepares_target_dev_runtime_mount() {
+    fn system_executor_prepares_target_runtime_mounts() {
         let mut executor = SystemInstallationOperationExecutor::with_dependencies(
             RecordingCommandRunner::default(),
             RecordingInstallationBootstrapper::default(),
@@ -1104,6 +1116,18 @@ mod tests {
                     "--rbind".to_owned(),
                     "/dev".to_owned(),
                     "/target/dev".to_owned(),
+                ],
+                vec![
+                    "mkdir".to_owned(),
+                    "-p".to_owned(),
+                    "/target/proc".to_owned(),
+                ],
+                vec![
+                    "mount".to_owned(),
+                    "-t".to_owned(),
+                    "proc".to_owned(),
+                    "proc".to_owned(),
+                    "/target/proc".to_owned(),
                 ],
             ]
         );
