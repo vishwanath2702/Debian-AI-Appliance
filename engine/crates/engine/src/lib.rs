@@ -595,6 +595,10 @@ mod tests {
                     partitions: default_installation_partitions(),
                     mounts: default_installation_mounts(),
                 },
+                InstallationOperation::InstallBootloader {
+                    root: "/target".into(),
+                    device_path: "/dev/sdb".into(),
+                },
             ]
         );
     }

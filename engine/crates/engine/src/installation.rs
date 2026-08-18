@@ -232,13 +232,16 @@ pub enum InstallationOperation {
     ApplyPlans { plans: Vec<Plan> },
 
     /// Configure persistent filesystem mounts for the installed system.
+    /// Configure persistent filesystem mounts for the installed system.
     ConfigureFstab {
         device_path: PathBuf,
         partitions: Vec<InstallationPartition>,
         mounts: Vec<InstallationMount>,
     },
-}
 
+    /// Install the bootloader into the installed system.
+    InstallBootloader { root: PathBuf, device_path: PathBuf },
+}
 /// Executes one planned installation operation.
 pub trait InstallationOperationExecutor {
     /// Error produced while executing an operation.
@@ -589,6 +592,7 @@ where
                 self.file_writer
                     .write(std::path::Path::new("/target/etc/fstab"), fstab.as_bytes())
             }
+            InstallationOperation::InstallBootloader { .. } => Ok(()),
         }
     }
 }
@@ -686,6 +690,10 @@ impl PreparedInstallation {
                 device_path: self.storage.device_path().to_path_buf(),
                 partitions: default_installation_partitions(),
                 mounts: default_installation_mounts(),
+            },
+            InstallationOperation::InstallBootloader {
+                root: "/target".into(),
+                device_path: self.storage.device_path().to_path_buf(),
             },
         ])
     }
