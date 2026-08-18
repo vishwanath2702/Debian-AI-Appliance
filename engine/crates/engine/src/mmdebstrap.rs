@@ -10,7 +10,7 @@ use std::{
 
 use crate::{BootstrapConfig, Bootstrapper, BuildContext};
 
-const BOOTSTRAP_PACKAGES: &[&str] = &["ca-certificates", "gnupg"];
+const BOOTSTRAP_PACKAGES: &[&str] = &["ca-certificates", "gnupg", "grub-efi-amd64", "efibootmgr"];
 
 trait CommandRunner: Send + Sync {
     fn status(&self, command: &mut Command) -> io::Result<ExitStatus>;
@@ -314,7 +314,7 @@ mod tests {
             arguments,
             vec![
                 OsStr::new("--mode=root"),
-                OsStr::new("--include=ca-certificates,gnupg"),
+                OsStr::new("--include=ca-certificates,gnupg,grub-efi-amd64,efibootmgr"),
                 OsStr::new("--variant=minbase"),
                 OsStr::new("--architectures=amd64"),
                 OsStr::new("--components=main,non-free-firmware"),
@@ -337,7 +337,7 @@ mod tests {
             arguments,
             vec![
                 OsStr::new("--mode=root"),
-                OsStr::new("--include=ca-certificates,gnupg"),
+                OsStr::new("--include=ca-certificates,gnupg,grub-efi-amd64,efibootmgr"),
                 OsStr::new("--variant=minbase"),
                 OsStr::new("--architectures=amd64"),
                 OsStr::new("--components=main,non-free-firmware"),
