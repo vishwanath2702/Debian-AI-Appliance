@@ -257,7 +257,20 @@ pub trait InstallationCommandRunner {
 
     fn output(&mut self, command: &mut Command) -> io::Result<Vec<u8>>;
 }
+/// Writes files into the installed system.
+pub trait InstallationFileWriter {
+    fn write(&mut self, path: &std::path::Path, contents: &[u8]) -> io::Result<()>;
+}
 
+/// Writes installed-system files through the host filesystem.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct SystemInstallationFileWriter;
+
+impl InstallationFileWriter for SystemInstallationFileWriter {
+    fn write(&mut self, path: &std::path::Path, contents: &[u8]) -> io::Result<()> {
+        std::fs::write(path, contents)
+    }
+}
 /// Runs installation commands as operating-system processes.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct ProcessInstallationCommandRunner;
@@ -289,24 +302,49 @@ impl InstallationCommandRunner for ProcessInstallationCommandRunner {
     }
 }
 
-pub struct SystemInstallationOperationExecutor<R, B, P> {
+pub struct SystemInstallationOperationExecutor<R, B, P, W = SystemInstallationFileWriter> {
     runner: R,
     bootstrapper: B,
     plan_executor: P,
+    file_writer: W,
 }
 
-impl<R, B, P> SystemInstallationOperationExecutor<R, B, P>
+#[cfg(test)]
+impl<R, B, P> SystemInstallationOperationExecutor<R, B, P, SystemInstallationFileWriter>
 where
     R: InstallationCommandRunner,
     B: InstallationBootstrapper,
     P: InstallationPlanExecutor,
 {
-    #[cfg(test)]
     const fn with_dependencies(runner: R, bootstrapper: B, plan_executor: P) -> Self {
         Self {
             runner,
             bootstrapper,
             plan_executor,
+            file_writer: SystemInstallationFileWriter,
+        }
+    }
+}
+
+#[cfg(test)]
+impl<R, B, P, W> SystemInstallationOperationExecutor<R, B, P, W>
+where
+    R: InstallationCommandRunner,
+    B: InstallationBootstrapper,
+    P: InstallationPlanExecutor,
+    W: InstallationFileWriter,
+{
+    const fn with_all_dependencies(
+        runner: R,
+        bootstrapper: B,
+        plan_executor: P,
+        file_writer: W,
+    ) -> Self {
+        Self {
+            runner,
+            bootstrapper,
+            plan_executor,
+            file_writer,
         }
     }
 }
@@ -316,6 +354,7 @@ impl
         ProcessInstallationCommandRunner,
         MmdebstrapBootstrapper,
         RootfsInstallationPlanExecutor,
+        SystemInstallationFileWriter,
     >
 {
     /// Creates a production installation executor.
@@ -329,15 +368,17 @@ impl
                 asset_directory,
                 package_repository,
             ),
+            file_writer: SystemInstallationFileWriter,
         }
     }
 }
 
-impl<R, B, P> InstallationOperationExecutor for SystemInstallationOperationExecutor<R, B, P>
+impl<R, B, P, W> InstallationOperationExecutor for SystemInstallationOperationExecutor<R, B, P, W>
 where
     R: InstallationCommandRunner,
     B: InstallationBootstrapper,
     P: InstallationPlanExecutor,
+    W: InstallationFileWriter,
 {
     type Error = io::Error;
 
@@ -518,7 +559,36 @@ where
                 .plan_executor
                 .apply_plans(plans)
                 .map_err(|_| io::Error::other("installation plan execution failed")),
-            InstallationOperation::ConfigureFstab { .. } => Ok(()),
+            InstallationOperation::ConfigureFstab {
+                device_path,
+                partitions,
+                mounts,
+            } => {
+                let root_partition_number = partitions
+                    .iter()
+                    .position(|partition| partition.role() == InstallationPartitionRole::Root)
+                    .map(|index| index + 1)
+                    .ok_or_else(|| io::Error::other("root partition is missing"))?;
+
+                let efi_partition_number = partitions
+                    .iter()
+                    .position(|partition| partition.role() == InstallationPartitionRole::EfiSystem)
+                    .map(|index| index + 1)
+                    .ok_or_else(|| io::Error::other("EFI partition is missing"))?;
+
+                let root_partition_path = partition_device_path(device_path, root_partition_number);
+
+                let efi_partition_path = partition_device_path(device_path, efi_partition_number);
+
+                let root_uuid = filesystem_uuid(&mut self.runner, &root_partition_path)?;
+
+                let efi_uuid = filesystem_uuid(&mut self.runner, &efi_partition_path)?;
+
+                let fstab = installation_fstab(&root_uuid, &efi_uuid, mounts)?;
+
+                self.file_writer
+                    .write(std::path::Path::new("/target/etc/fstab"), fstab.as_bytes())
+            }
         }
     }
 }
@@ -787,12 +857,13 @@ impl InstallationPlanExecutor for RootfsInstallationPlanExecutor {
 #[cfg(test)]
 mod tests {
     use super::{
-        BootstrapConfig, InstallationBootstrapper, InstallationCommandRunner, InstallationMount,
-        InstallationOperation, InstallationOperationExecutor, InstallationPartition,
-        InstallationPartitionRole, InstallationPlanExecutor, PathBuf, PreparedInstallation,
-        ProcessInstallationCommandRunner, SystemInstallationOperationExecutor,
-        default_installation_mounts, default_installation_partitions, filesystem_uuid,
-        installation_fstab, installed_mount_point, partition_device_path,
+        BootstrapConfig, InstallationBootstrapper, InstallationCommandRunner,
+        InstallationFileWriter, InstallationMount, InstallationOperation,
+        InstallationOperationExecutor, InstallationPartition, InstallationPartitionRole,
+        InstallationPlanExecutor, PathBuf, PreparedInstallation, ProcessInstallationCommandRunner,
+        SystemInstallationOperationExecutor, default_installation_mounts,
+        default_installation_partitions, filesystem_uuid, installation_fstab,
+        installed_mount_point, partition_device_path,
     };
     use model::{
         Capability, DiscoveredStorage, DiscoveredStorageId, InstallationIntent, Plan, ProviderId,
@@ -801,6 +872,17 @@ mod tests {
 
     use std::{io, process::Command};
 
+    #[derive(Default)]
+    struct RecordingInstallationFileWriter {
+        writes: Vec<(PathBuf, Vec<u8>)>,
+    }
+
+    impl InstallationFileWriter for RecordingInstallationFileWriter {
+        fn write(&mut self, path: &std::path::Path, contents: &[u8]) -> io::Result<()> {
+            self.writes.push((path.to_path_buf(), contents.to_vec()));
+            Ok(())
+        }
+    }
     #[derive(Default)]
     struct RecordingCommandRunner {
         commands: Vec<Vec<String>>,
@@ -907,6 +989,75 @@ mod tests {
                 outputs,
             }
         }
+    }
+
+    #[test]
+    fn system_executor_configures_fstab_with_filesystem_uuids() {
+        let mut executor = SystemInstallationOperationExecutor::with_all_dependencies(
+            RecordingCommandRunner::with_outputs(vec![
+                b"root-uuid\n".to_vec(),
+                b"efi-uuid\n".to_vec(),
+            ]),
+            RecordingInstallationBootstrapper::default(),
+            RecordingInstallationPlanExecutor::default(),
+            RecordingInstallationFileWriter::default(),
+        );
+
+        let operation = InstallationOperation::ConfigureFstab {
+            device_path: "/dev/sdb".into(),
+            partitions: default_installation_partitions(),
+            mounts: default_installation_mounts(),
+        };
+
+        executor
+            .execute_operation(&operation)
+            .expect("fstab configuration should succeed");
+
+        assert_eq!(
+            executor.runner.commands,
+            vec![
+                vec![
+                    "blkid".to_owned(),
+                    "-s".to_owned(),
+                    "UUID".to_owned(),
+                    "-o".to_owned(),
+                    "value".to_owned(),
+                    "/dev/sdb2".to_owned(),
+                ],
+                vec![
+                    "blkid".to_owned(),
+                    "-s".to_owned(),
+                    "UUID".to_owned(),
+                    "-o".to_owned(),
+                    "value".to_owned(),
+                    "/dev/sdb1".to_owned(),
+                ],
+            ]
+        );
+
+        assert_eq!(
+            executor.file_writer.writes,
+            vec![(
+                PathBuf::from("/target/etc/fstab"),
+                concat!(
+                    "UUID=root-uuid\t/\text4\tdefaults\t0\t1\n",
+                    "UUID=efi-uuid\t/boot/efi\tvfat\tumask=0077\t0\t2\n",
+                )
+                .as_bytes()
+                .to_vec(),
+            )]
+        );
+    }
+    #[test]
+    fn system_executor_accepts_recording_file_writer_dependency() {
+        let executor = SystemInstallationOperationExecutor::with_all_dependencies(
+            RecordingCommandRunner::default(),
+            RecordingInstallationBootstrapper::default(),
+            RecordingInstallationPlanExecutor::default(),
+            RecordingInstallationFileWriter::default(),
+        );
+
+        assert!(executor.file_writer.writes.is_empty());
     }
 
     #[test]
