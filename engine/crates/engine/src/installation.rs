@@ -630,6 +630,17 @@ where
                 let mut mount = Command::new("mount");
                 mount.arg("-t").arg("proc").arg("proc").arg(&target_proc);
 
+                self.runner.status(&mut mount)?;
+                let target_sys = root.join("sys");
+
+                let mut mkdir = Command::new("mkdir");
+                mkdir.arg("-p").arg(&target_sys);
+
+                self.runner.status(&mut mkdir)?;
+
+                let mut mount = Command::new("mount");
+                mount.arg("--rbind").arg("/sys").arg(&target_sys);
+
                 self.runner.status(&mut mount)
             }
             InstallationOperation::InstallBootloader { root, .. } => {
@@ -1128,6 +1139,17 @@ mod tests {
                     "proc".to_owned(),
                     "proc".to_owned(),
                     "/target/proc".to_owned(),
+                ],
+                vec![
+                    "mkdir".to_owned(),
+                    "-p".to_owned(),
+                    "/target/sys".to_owned(),
+                ],
+                vec![
+                    "mount".to_owned(),
+                    "--rbind".to_owned(),
+                    "/sys".to_owned(),
+                    "/target/sys".to_owned(),
                 ],
             ]
         );
