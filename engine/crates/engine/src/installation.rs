@@ -992,6 +992,56 @@ mod tests {
     }
 
     #[test]
+    fn system_executor_does_not_write_fstab_for_missing_root_partition() {
+        let mut executor = SystemInstallationOperationExecutor::with_all_dependencies(
+            RecordingCommandRunner::default(),
+            RecordingInstallationBootstrapper::default(),
+            RecordingInstallationPlanExecutor::default(),
+            RecordingInstallationFileWriter::default(),
+        );
+
+        let operation = InstallationOperation::ConfigureFstab {
+            device_path: "/dev/sdb".into(),
+            partitions: vec![InstallationPartition::new(
+                InstallationPartitionRole::EfiSystem,
+                "fat32",
+                Some(512),
+            )],
+            mounts: default_installation_mounts(),
+        };
+
+        let error = executor
+            .execute_operation(&operation)
+            .expect_err("missing root partition should fail fstab configuration");
+
+        assert!(error.to_string().contains("root partition is missing"));
+        assert!(executor.runner.commands.is_empty());
+        assert!(executor.file_writer.writes.is_empty());
+    }
+
+    #[test]
+    fn system_executor_does_not_write_fstab_when_uuid_lookup_fails() {
+        let mut executor = SystemInstallationOperationExecutor::with_all_dependencies(
+            FailingCommandRunner,
+            RecordingInstallationBootstrapper::default(),
+            RecordingInstallationPlanExecutor::default(),
+            RecordingInstallationFileWriter::default(),
+        );
+
+        let operation = InstallationOperation::ConfigureFstab {
+            device_path: "/dev/sdb".into(),
+            partitions: default_installation_partitions(),
+            mounts: default_installation_mounts(),
+        };
+
+        executor
+            .execute_operation(&operation)
+            .expect_err("UUID lookup failure should fail fstab configuration");
+
+        assert!(executor.file_writer.writes.is_empty());
+    }
+
+    #[test]
     fn system_executor_configures_fstab_with_filesystem_uuids() {
         let mut executor = SystemInstallationOperationExecutor::with_all_dependencies(
             RecordingCommandRunner::with_outputs(vec![
