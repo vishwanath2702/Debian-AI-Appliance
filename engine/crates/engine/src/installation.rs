@@ -607,7 +607,19 @@ where
                 self.file_writer
                     .write(std::path::Path::new("/target/etc/fstab"), fstab.as_bytes())
             }
-            InstallationOperation::PrepareTargetRuntime { .. } => Ok(()),
+            InstallationOperation::PrepareTargetRuntime { root } => {
+                let target_dev = root.join("dev");
+
+                let mut mkdir = Command::new("mkdir");
+                mkdir.arg("-p").arg(&target_dev);
+
+                self.runner.status(&mut mkdir)?;
+
+                let mut mount = Command::new("mount");
+                mount.arg("--rbind").arg("/dev").arg(&target_dev);
+
+                self.runner.status(&mut mount)
+            }
             InstallationOperation::InstallBootloader { root, .. } => {
                 let mut grub_install = command_in_root(
                     root,
@@ -1061,6 +1073,40 @@ mod tests {
         fn output(&mut self, _command: &mut Command) -> io::Result<Vec<u8>> {
             Err(io::Error::other("unexpected command output request"))
         }
+    }
+
+    #[test]
+    fn system_executor_prepares_target_dev_runtime_mount() {
+        let mut executor = SystemInstallationOperationExecutor::with_dependencies(
+            RecordingCommandRunner::default(),
+            RecordingInstallationBootstrapper::default(),
+            RecordingInstallationPlanExecutor::default(),
+        );
+
+        let operation = InstallationOperation::PrepareTargetRuntime {
+            root: "/target".into(),
+        };
+
+        executor
+            .execute_operation(&operation)
+            .expect("target runtime preparation should succeed");
+
+        assert_eq!(
+            executor.runner.commands,
+            vec![
+                vec![
+                    "mkdir".to_owned(),
+                    "-p".to_owned(),
+                    "/target/dev".to_owned(),
+                ],
+                vec![
+                    "mount".to_owned(),
+                    "--rbind".to_owned(),
+                    "/dev".to_owned(),
+                    "/target/dev".to_owned(),
+                ],
+            ]
+        );
     }
 
     #[test]
