@@ -603,7 +603,19 @@ where
                 self.file_writer
                     .write(std::path::Path::new("/target/etc/fstab"), fstab.as_bytes())
             }
-            InstallationOperation::InstallBootloader { .. } => Ok(()),
+            InstallationOperation::InstallBootloader { root, .. } => {
+                let mut command = command_in_root(
+                    root,
+                    "grub-install",
+                    &[
+                        "--target=x86_64-efi",
+                        "--efi-directory=/boot/efi",
+                        "--bootloader-id=DAIA",
+                    ],
+                );
+
+                self.runner.status(&mut command)
+            }
         }
     }
 }
@@ -1008,6 +1020,37 @@ mod tests {
                 outputs,
             }
         }
+    }
+
+    #[test]
+    fn system_executor_runs_grub_install_in_target_root() {
+        let mut executor = SystemInstallationOperationExecutor::with_dependencies(
+            RecordingCommandRunner::default(),
+            RecordingInstallationBootstrapper::default(),
+            RecordingInstallationPlanExecutor::default(),
+        );
+
+        let operation = InstallationOperation::InstallBootloader {
+            root: "/target".into(),
+            device_path: "/dev/sdb".into(),
+        };
+
+        executor
+            .execute_operation(&operation)
+            .expect("bootloader installation should succeed");
+
+        assert_eq!(
+            executor.runner.commands,
+            vec![vec![
+                "sudo".to_owned(),
+                "/usr/sbin/chroot".to_owned(),
+                "/target".to_owned(),
+                "grub-install".to_owned(),
+                "--target=x86_64-efi".to_owned(),
+                "--efi-directory=/boot/efi".to_owned(),
+                "--bootloader-id=DAIA".to_owned(),
+            ]]
+        );
     }
 
     #[test]
