@@ -109,6 +109,17 @@ where
 
     Ok(uuid.to_owned())
 }
+fn command_in_root(root: &std::path::Path, program: &str, args: &[&str]) -> Command {
+    let mut command = Command::new("sudo");
+
+    command
+        .arg("/usr/sbin/chroot")
+        .arg(root)
+        .arg(program)
+        .args(args);
+
+    command
+}
 
 fn installed_mount_point(mount: &InstallationMount) -> io::Result<PathBuf> {
     let relative = mount.mount_point().strip_prefix("/target").map_err(|_| {
@@ -869,7 +880,7 @@ mod tests {
         InstallationFileWriter, InstallationMount, InstallationOperation,
         InstallationOperationExecutor, InstallationPartition, InstallationPartitionRole,
         InstallationPlanExecutor, PathBuf, PreparedInstallation, ProcessInstallationCommandRunner,
-        SystemInstallationOperationExecutor, default_installation_mounts,
+        SystemInstallationOperationExecutor, command_in_root, default_installation_mounts,
         default_installation_partitions, filesystem_uuid, installation_fstab,
         installed_mount_point, partition_device_path,
     };
@@ -997,6 +1008,32 @@ mod tests {
                 outputs,
             }
         }
+    }
+
+    #[test]
+    fn command_in_root_constructs_chroot_command() {
+        let command = command_in_root(
+            std::path::Path::new("/target"),
+            "example-command",
+            &["--first", "value"],
+        );
+
+        let recorded = std::iter::once(command.get_program())
+            .chain(command.get_args())
+            .map(|value| value.to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            recorded,
+            vec![
+                "sudo".to_owned(),
+                "/usr/sbin/chroot".to_owned(),
+                "/target".to_owned(),
+                "example-command".to_owned(),
+                "--first".to_owned(),
+                "value".to_owned(),
+            ]
+        );
     }
 
     #[test]
