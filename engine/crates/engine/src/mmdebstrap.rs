@@ -10,6 +10,8 @@ use std::{
 
 use crate::{BootstrapConfig, Bootstrapper, BuildContext};
 
+const BOOTSTRAP_PACKAGES: &[&str] = &["ca-certificates", "gnupg"];
+
 trait CommandRunner: Send + Sync {
     fn status(&self, command: &mut Command) -> io::Result<ExitStatus>;
 }
@@ -96,7 +98,7 @@ impl MmdebstrapBootstrapper {
 
         command
             .arg("--mode=root")
-            .arg("--include=ca-certificates,gnupg")
+            .arg(format!("--include={}", BOOTSTRAP_PACKAGES.join(",")))
             .arg(format!("--variant={}", config.variant()))
             .arg(format!("--architectures={}", config.architecture()))
             .arg(format!("--components={}", config.components().join(",")))
@@ -145,7 +147,7 @@ impl MmdebstrapBootstrapper {
         command
             .arg("mmdebstrap")
             .arg("--mode=root")
-            .arg("--include=ca-certificates,gnupg")
+            .arg(format!("--include={}", BOOTSTRAP_PACKAGES.join(",")))
             .arg(format!("--variant={}", context.bootstrap().variant()))
             .arg(format!(
                 "--architectures={}",
