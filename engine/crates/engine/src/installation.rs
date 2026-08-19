@@ -261,6 +261,17 @@ pub enum InstallationOperation {
     /// Unmounts the installed filesystems after installation is complete.
     UnmountFilesystems { mounts: Vec<InstallationMount> },
 }
+impl InstallationOperation {
+    /// Returns whether this operation cleans up installation resources.
+    #[must_use]
+    pub const fn is_cleanup(&self) -> bool {
+        matches!(
+            self,
+            Self::CleanupTargetRuntime { .. } | Self::UnmountFilesystems { .. }
+        )
+    }
+}
+
 /// Executes one planned installation operation.
 pub trait InstallationOperationExecutor {
     /// Error produced while executing an operation.
@@ -1168,6 +1179,31 @@ mod tests {
         fn output(&mut self, _command: &mut Command) -> io::Result<Vec<u8>> {
             Err(io::Error::other("unexpected command output request"))
         }
+    }
+
+    #[test]
+    fn identifies_installation_cleanup_operations() {
+        assert!(
+            InstallationOperation::CleanupTargetRuntime {
+                root: "/target".into(),
+            }
+            .is_cleanup()
+        );
+
+        assert!(
+            InstallationOperation::UnmountFilesystems {
+                mounts: default_installation_mounts(),
+            }
+            .is_cleanup()
+        );
+
+        assert!(
+            !InstallationOperation::InstallBootloader {
+                root: "/target".into(),
+                device_path: "/dev/sdb".into(),
+            }
+            .is_cleanup()
+        );
     }
 
     #[test]
