@@ -31,6 +31,7 @@ fn main() -> ExitCode {
 fn run(arguments: &[String]) -> ExitCode {
     match arguments {
         [command] if command == "wizard" => run_wizard(),
+        [command] if command == "install" => run_install(),
         [capability_name] => run_plan(capability_name),
         [command, capability_name] if command == "plan" => run_plan(capability_name),
         [command, profile_name] if command == "plan-profile" => run_profile_plan(profile_name),
@@ -56,7 +57,6 @@ fn run(arguments: &[String]) -> ExitCode {
         }
     }
 }
-
 fn run_profile_plan(profile_name: &str) -> ExitCode {
     let Some(engine) = load_engine() else {
         return ExitCode::FAILURE;
@@ -183,6 +183,7 @@ fn print_plan(plan: &Plan) {
 
 fn print_usage() {
     eprintln!("Usage:");
+    eprintln!("    daia install");
     eprintln!("    daia <capability>");
     eprintln!("    daia plan <capability>");
     eprintln!(
@@ -383,6 +384,11 @@ fn print_installation_operations(executor: &DryRunInstallationExecutor) {
     }
 }
 
+fn run_install() -> ExitCode {
+    println!("DAIA Installer");
+    ExitCode::SUCCESS
+}
+
 fn run_wizard() -> ExitCode {
     let Some(engine) = load_engine() else {
         return ExitCode::FAILURE;
@@ -510,6 +516,14 @@ mod tests {
     use std::path::PathBuf;
     use std::process::ExitCode;
 
+    #[test]
+    fn accepts_install_command() {
+        let arguments = vec!["install".to_owned()];
+
+        let result = run(&arguments);
+
+        assert_eq!(result, ExitCode::SUCCESS);
+    }
     #[test]
     fn plans_repository_appliance_profile() {
         let arguments = vec!["plan-profile".to_owned(), "desktop".to_owned()];
