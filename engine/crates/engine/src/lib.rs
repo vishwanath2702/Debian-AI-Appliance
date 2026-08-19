@@ -605,6 +605,9 @@ mod tests {
                 InstallationOperation::CleanupTargetRuntime {
                     root: "/target".into(),
                 },
+                InstallationOperation::UnmountFilesystems {
+                    mounts: default_installation_mounts(),
+                },
             ]
         );
     }

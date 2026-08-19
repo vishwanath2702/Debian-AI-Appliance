@@ -258,6 +258,8 @@ pub enum InstallationOperation {
     InstallBootloader { root: PathBuf, device_path: PathBuf },
     /// Cleans up temporary runtime filesystems mounted inside the target root.
     CleanupTargetRuntime { root: PathBuf },
+    /// Unmounts the installed filesystems after installation is complete.
+    UnmountFilesystems { mounts: Vec<InstallationMount> },
 }
 /// Executes one planned installation operation.
 pub trait InstallationOperationExecutor {
@@ -699,6 +701,7 @@ where
 
                 self.runner.status(&mut unmount)
             }
+            InstallationOperation::UnmountFilesystems { .. } => Ok(()),
         }
     }
 }
@@ -806,6 +809,9 @@ impl PreparedInstallation {
             },
             InstallationOperation::CleanupTargetRuntime {
                 root: "/target".into(),
+            },
+            InstallationOperation::UnmountFilesystems {
+                mounts: default_installation_mounts(),
             },
         ])
     }
