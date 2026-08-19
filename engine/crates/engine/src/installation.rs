@@ -775,6 +775,34 @@ impl InstallationPlan {
 
         Ok(())
     }
+    /// Executes planned operations while allowing cleanup operations to run after failure.
+    ///
+    /// # Errors
+    ///
+    /// Returns the first operation error after attempting all remaining cleanup operations.
+    pub fn execute_with_cleanup<E>(&self, executor: &mut E) -> Result<(), E::Error>
+    where
+        E: InstallationOperationExecutor,
+    {
+        let mut first_error = None;
+
+        for operation in &self.operations {
+            if first_error.is_some() && !operation.is_cleanup() {
+                continue;
+            }
+
+            if let Err(error) = executor.execute_operation(operation) {
+                if first_error.is_none() {
+                    first_error = Some(error);
+                }
+            }
+        }
+
+        match first_error {
+            Some(error) => Err(error),
+            None => Ok(()),
+        }
+    }
 }
 /// A validated installation ready for later execution.
 #[derive(Clone, Debug, Eq, PartialEq)]

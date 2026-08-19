@@ -387,8 +387,8 @@ mod tests {
     struct FailingOperationExecutor {
         operations: Vec<InstallationOperation>,
         fail_at: usize,
+        failed: bool,
     }
-
     impl InstallationOperationExecutor for FailingOperationExecutor {
         type Error = RecordingOperationError;
 
@@ -396,13 +396,67 @@ mod tests {
             &mut self,
             operation: &InstallationOperation,
         ) -> Result<(), Self::Error> {
-            if self.operations.len() == self.fail_at {
+            if !self.failed && self.operations.len() == self.fail_at {
+                self.failed = true;
                 return Err(RecordingOperationError::Failed);
             }
 
             self.operations.push(operation.clone());
             Ok(())
         }
+    }
+
+    #[test]
+    fn installation_plan_runs_cleanup_operations_after_failure() {
+        let plan = InstallationPlan::new(vec![
+            InstallationOperation::PrepareDisk {
+                storage_id: DiscoveredStorageId::new("serial:usb-disk"),
+                device_path: "/dev/sdb".into(),
+            },
+            InstallationOperation::InstallBootloader {
+                root: "/target".into(),
+                device_path: "/dev/sdb".into(),
+            },
+            InstallationOperation::ApplyPlans { plans: Vec::new() },
+            InstallationOperation::CleanupTargetRuntime {
+                root: "/target".into(),
+            },
+            InstallationOperation::UnmountFilesystems {
+                mounts: default_installation_mounts(),
+            },
+        ]);
+
+        let mut executor = FailingOperationExecutor {
+            operations: Vec::new(),
+            fail_at: 2,
+            failed: false,
+        };
+
+        let error = plan
+            .execute_with_cleanup(&mut executor)
+            .expect_err("installation failure should still return an error");
+
+        assert_eq!(error, RecordingOperationError::Failed);
+
+        assert_eq!(
+            executor.operations,
+            vec![
+                InstallationOperation::PrepareDisk {
+                    storage_id: DiscoveredStorageId::new("serial:usb-disk"),
+                    device_path: "/dev/sdb".into(),
+                },
+                InstallationOperation::InstallBootloader {
+                    root: "/target".into(),
+                    device_path: "/dev/sdb".into(),
+                },
+                InstallationOperation::CleanupTargetRuntime {
+                    root: "/target".into(),
+                },
+                InstallationOperation::UnmountFilesystems {
+                    mounts: default_installation_mounts(),
+                },
+            ]
+        );
     }
 
     #[test]
@@ -447,6 +501,7 @@ mod tests {
         let mut executor = FailingOperationExecutor {
             operations: Vec::new(),
             fail_at: 2,
+            failed: false,
         };
 
         let error = plan
