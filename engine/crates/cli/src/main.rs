@@ -462,24 +462,10 @@ fn run_install() -> ExitCode {
 
     state.set_discovered_storage(storage);
 
-    let selectable = state.selectable_storage().collect::<Vec<_>>();
-
-    println!("Storage devices:");
-
-    if selectable.is_empty() {
-        println!("  No selectable storage devices found.");
-        return ExitCode::SUCCESS;
+    if let Err(error) = select_storage(&mut state) {
+        eprintln!("{error}");
+        return ExitCode::FAILURE;
     }
-    for (index, storage) in selectable.iter().enumerate() {
-        println!(
-            "  {}. {}  {}  {}",
-            index + 1,
-            storage.kind(),
-            storage.id(),
-            storage.device_path().display()
-        );
-    }
-
     println!();
     println!("Installer preparation complete.");
     println!("No disk changes have been made.");
