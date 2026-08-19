@@ -322,24 +322,47 @@ fn installation_operation_name(operation: &InstallationOperation) -> String {
         InstallationOperation::PrepareDisk { storage_id, .. } => {
             format!("Prepare disk {storage_id}")
         }
+
         InstallationOperation::PartitionDisk { device_path, .. } => {
             format!("Partition disk {}", device_path.display())
         }
+
         InstallationOperation::CreateFilesystems { partitions, .. } => {
             format!("Create filesystems for {} partitions", partitions.len())
         }
+
         InstallationOperation::MountFilesystems { mounts, .. } => {
             format!("Mount {} filesystems", mounts.len())
         }
-        InstallationOperation::BootstrapSystem { root } => {
+
+        InstallationOperation::BootstrapSystem { root, .. } => {
             format!("Bootstrap system at {}", root.display())
         }
-        InstallationOperation::ApplyPlans { count } => {
-            if *count == 1 {
+
+        InstallationOperation::ApplyPlans { plans } => {
+            if plans.len() == 1 {
                 "Apply 1 appliance plan".to_owned()
             } else {
-                format!("Apply {count} appliance plans")
+                format!("Apply {} appliance plans", plans.len())
             }
+        }
+
+        InstallationOperation::ConfigureFstab { .. } => "Configure filesystem table".to_owned(),
+
+        InstallationOperation::PrepareTargetRuntime { root } => {
+            format!("Prepare target runtime at {}", root.display())
+        }
+
+        InstallationOperation::InstallBootloader { root, .. } => {
+            format!("Install bootloader in {}", root.display())
+        }
+
+        InstallationOperation::CleanupTargetRuntime { root } => {
+            format!("Clean up target runtime at {}", root.display())
+        }
+
+        InstallationOperation::UnmountFilesystems { mounts } => {
+            format!("Unmount {} installation filesystems", mounts.len())
         }
     }
 }
