@@ -741,6 +741,21 @@ where
     }
 }
 
+impl<R, B, P, W> InstallationExecutor for SystemInstallationOperationExecutor<R, B, P, W>
+where
+    R: InstallationCommandRunner,
+    B: InstallationBootstrapper,
+    P: InstallationPlanExecutor,
+    W: InstallationFileWriter,
+{
+    type Error = io::Error;
+
+    fn execute(&mut self, installation: &PreparedInstallation) -> Result<(), Self::Error> {
+        let plan = installation.installation_plan();
+
+        plan.execute_with_cleanup(self)
+    }
+}
 /// Ordered non-executed operations for installing an appliance.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct InstallationPlan {
@@ -961,7 +976,8 @@ impl InstallationExecutor for DryRunInstallationExecutor {
         self.summary = Some(installation.summary());
 
         let plan = installation.installation_plan();
-        plan.execute(self)?;
+
+        plan.execute_with_cleanup(self)?;
 
         self.plan = Some(plan);
 
@@ -1046,7 +1062,7 @@ impl InstallationPlanExecutor for RootfsInstallationPlanExecutor {
 #[cfg(test)]
 mod tests {
     use super::{
-        BootstrapConfig, InstallationBootstrapper, InstallationCommandRunner,
+        BootstrapConfig, InstallationBootstrapper, InstallationCommandRunner, InstallationExecutor,
         InstallationFileWriter, InstallationMount, InstallationOperation,
         InstallationOperationExecutor, InstallationPartition, InstallationPartitionRole,
         InstallationPlanExecutor, PathBuf, PreparedInstallation, ProcessInstallationCommandRunner,
@@ -1207,6 +1223,28 @@ mod tests {
         fn output(&mut self, _command: &mut Command) -> io::Result<Vec<u8>> {
             Err(io::Error::other("unexpected command output request"))
         }
+    }
+
+    #[test]
+    fn system_executor_implements_installation_executor() {
+        let intent =
+            InstallationIntent::new("desktop", DiscoveredStorageId::new("serial:usb-disk"));
+
+        let storage = DiscoveredStorage::new("serial:usb-disk", StorageKind::Removable, "/dev/sdb");
+
+        let prepared =
+            PreparedInstallation::new(intent, storage, Vec::new(), BootstrapConfig::default());
+
+        let mut executor = SystemInstallationOperationExecutor::with_dependencies(
+            FailingCommandRunner,
+            RecordingInstallationBootstrapper::default(),
+            RecordingInstallationPlanExecutor::default(),
+        );
+
+        let error = InstallationExecutor::execute(&mut executor, &prepared)
+            .expect_err("system installation should report command failure");
+
+        assert_eq!(error.to_string(), "command failed");
     }
 
     #[test]
