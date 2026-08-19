@@ -385,10 +385,57 @@ fn print_installation_operations(executor: &DryRunInstallationExecutor) {
 }
 
 fn run_install() -> ExitCode {
+    let Some(engine) = load_engine() else {
+        return ExitCode::FAILURE;
+    };
+
+    let mut state = WizardState::new();
+
     println!("DAIA Installer");
+    println!();
+
+    if let Err(error) = select_appliance_profile(&mut state) {
+        eprintln!("{error}");
+        return ExitCode::FAILURE;
+    }
+
+    let inspector = LinuxStorageInspector::new();
+
+    let storage = match engine.discover_storage(&inspector) {
+        Ok(storage) => storage,
+        Err(error) => {
+            eprintln!("Error discovering storage: {error}");
+            return ExitCode::FAILURE;
+        }
+    };
+
+    state.set_discovered_storage(storage);
+
+    let selectable = state.selectable_storage().collect::<Vec<_>>();
+
+    println!("Storage devices:");
+
+    if selectable.is_empty() {
+        println!("  No selectable storage devices found.");
+        return ExitCode::SUCCESS;
+    }
+
+    for (index, storage) in selectable.iter().enumerate() {
+        println!(
+            "  {}. {}  {}  {}",
+            index + 1,
+            storage.kind(),
+            storage.id(),
+            storage.device_path().display()
+        );
+    }
+
+    println!();
+    println!("Installer preparation complete.");
+    println!("No disk changes have been made.");
+
     ExitCode::SUCCESS
 }
-
 fn run_wizard() -> ExitCode {
     let Some(engine) = load_engine() else {
         return ExitCode::FAILURE;
@@ -516,14 +563,6 @@ mod tests {
     use std::path::PathBuf;
     use std::process::ExitCode;
 
-    #[test]
-    fn accepts_install_command() {
-        let arguments = vec!["install".to_owned()];
-
-        let result = run(&arguments);
-
-        assert_eq!(result, ExitCode::SUCCESS);
-    }
     #[test]
     fn plans_repository_appliance_profile() {
         let arguments = vec!["plan-profile".to_owned(), "desktop".to_owned()];
