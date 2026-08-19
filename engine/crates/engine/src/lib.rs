@@ -602,6 +602,9 @@ mod tests {
                     root: "/target".into(),
                     device_path: "/dev/sdb".into(),
                 },
+                InstallationOperation::CleanupTargetRuntime {
+                    root: "/target".into(),
+                },
             ]
         );
     }

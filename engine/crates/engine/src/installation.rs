@@ -256,6 +256,8 @@ pub enum InstallationOperation {
 
     /// Install the bootloader into the installed system.
     InstallBootloader { root: PathBuf, device_path: PathBuf },
+    /// Cleans up temporary runtime filesystems mounted inside the target root.
+    CleanupTargetRuntime { root: PathBuf },
 }
 /// Executes one planned installation operation.
 pub trait InstallationOperationExecutor {
@@ -671,6 +673,7 @@ where
 
                 self.runner.status(&mut update_grub)
             }
+            InstallationOperation::CleanupTargetRuntime { .. } => Ok(()),
         }
     }
 }
@@ -775,6 +778,9 @@ impl PreparedInstallation {
             InstallationOperation::InstallBootloader {
                 root: "/target".into(),
                 device_path: self.storage.device_path().to_path_buf(),
+            },
+            InstallationOperation::CleanupTargetRuntime {
+                root: "/target".into(),
             },
         ])
     }
