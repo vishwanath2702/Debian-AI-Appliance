@@ -701,7 +701,17 @@ where
 
                 self.runner.status(&mut unmount)
             }
-            InstallationOperation::UnmountFilesystems { .. } => Ok(()),
+            InstallationOperation::UnmountFilesystems { mounts } => {
+                let efi_mount = mounts
+                    .iter()
+                    .find(|mount| mount.role() == InstallationPartitionRole::EfiSystem)
+                    .ok_or_else(|| io::Error::other("EFI mount is missing"))?;
+
+                let mut unmount = Command::new("umount");
+                unmount.arg(efi_mount.mount_point());
+
+                self.runner.status(&mut unmount)
+            }
         }
     }
 }
@@ -1146,6 +1156,27 @@ mod tests {
         }
     }
 
+    #[test]
+    fn system_executor_unmounts_efi_filesystem() {
+        let mut executor = SystemInstallationOperationExecutor::with_dependencies(
+            RecordingCommandRunner::default(),
+            RecordingInstallationBootstrapper::default(),
+            RecordingInstallationPlanExecutor::default(),
+        );
+
+        let operation = InstallationOperation::UnmountFilesystems {
+            mounts: default_installation_mounts(),
+        };
+
+        executor
+            .execute_operation(&operation)
+            .expect("filesystem unmount should succeed");
+
+        assert_eq!(
+            executor.runner.commands,
+            vec![vec!["umount".to_owned(), "/target/boot/efi".to_owned(),]]
+        );
+    }
     #[test]
     fn system_executor_cleans_up_target_run_runtime_mount() {
         let mut executor = SystemInstallationOperationExecutor::with_dependencies(
