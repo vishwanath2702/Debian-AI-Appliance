@@ -673,7 +673,14 @@ where
 
                 self.runner.status(&mut update_grub)
             }
-            InstallationOperation::CleanupTargetRuntime { .. } => Ok(()),
+            InstallationOperation::CleanupTargetRuntime { root } => {
+                let target_run = root.join("run");
+
+                let mut unmount = Command::new("umount");
+                unmount.arg("-R").arg(&target_run);
+
+                self.runner.status(&mut unmount)
+            }
         }
     }
 }
@@ -1115,6 +1122,31 @@ mod tests {
         }
     }
 
+    #[test]
+    fn system_executor_cleans_up_target_run_runtime_mount() {
+        let mut executor = SystemInstallationOperationExecutor::with_dependencies(
+            RecordingCommandRunner::default(),
+            RecordingInstallationBootstrapper::default(),
+            RecordingInstallationPlanExecutor::default(),
+        );
+
+        let operation = InstallationOperation::CleanupTargetRuntime {
+            root: "/target".into(),
+        };
+
+        executor
+            .execute_operation(&operation)
+            .expect("target runtime cleanup should succeed");
+
+        assert_eq!(
+            executor.runner.commands,
+            vec![vec![
+                "umount".to_owned(),
+                "-R".to_owned(),
+                "/target/run".to_owned(),
+            ]]
+        );
+    }
     #[test]
     fn system_executor_prepares_target_runtime_mounts() {
         let mut executor = SystemInstallationOperationExecutor::with_dependencies(
