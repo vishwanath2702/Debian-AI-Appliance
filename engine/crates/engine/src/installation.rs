@@ -682,18 +682,21 @@ where
                 unmount.arg("-R").arg(&target_run);
 
                 self.runner.status(&mut unmount)?;
+
                 let target_sys = root.join("sys");
 
                 let mut unmount = Command::new("umount");
                 unmount.arg("-R").arg(&target_sys);
 
                 self.runner.status(&mut unmount)?;
+
                 let target_proc = root.join("proc");
 
                 let mut unmount = Command::new("umount");
                 unmount.arg("-R").arg(&target_proc);
 
                 self.runner.status(&mut unmount)?;
+
                 let target_dev = root.join("dev");
 
                 let mut unmount = Command::new("umount");
@@ -701,6 +704,7 @@ where
 
                 self.runner.status(&mut unmount)
             }
+
             InstallationOperation::UnmountFilesystems { mounts } => {
                 let efi_mount = mounts
                     .iter()
@@ -709,6 +713,16 @@ where
 
                 let mut unmount = Command::new("umount");
                 unmount.arg(efi_mount.mount_point());
+
+                self.runner.status(&mut unmount)?;
+
+                let root_mount = mounts
+                    .iter()
+                    .find(|mount| mount.role() == InstallationPartitionRole::Root)
+                    .ok_or_else(|| io::Error::other("root mount is missing"))?;
+
+                let mut unmount = Command::new("umount");
+                unmount.arg(root_mount.mount_point());
 
                 self.runner.status(&mut unmount)
             }
@@ -1157,7 +1171,7 @@ mod tests {
     }
 
     #[test]
-    fn system_executor_unmounts_efi_filesystem() {
+    fn system_executor_unmounts_installation_filesystems() {
         let mut executor = SystemInstallationOperationExecutor::with_dependencies(
             RecordingCommandRunner::default(),
             RecordingInstallationBootstrapper::default(),
@@ -1174,7 +1188,10 @@ mod tests {
 
         assert_eq!(
             executor.runner.commands,
-            vec![vec!["umount".to_owned(), "/target/boot/efi".to_owned(),]]
+            vec![
+                vec!["umount".to_owned(), "/target/boot/efi".to_owned(),],
+                vec!["umount".to_owned(), "/target".to_owned(),],
+            ]
         );
     }
     #[test]
