@@ -679,6 +679,12 @@ where
                 let mut unmount = Command::new("umount");
                 unmount.arg("-R").arg(&target_run);
 
+                self.runner.status(&mut unmount)?;
+                let target_sys = root.join("sys");
+
+                let mut unmount = Command::new("umount");
+                unmount.arg("-R").arg(&target_sys);
+
                 self.runner.status(&mut unmount)
             }
         }
@@ -1140,11 +1146,18 @@ mod tests {
 
         assert_eq!(
             executor.runner.commands,
-            vec![vec![
-                "umount".to_owned(),
-                "-R".to_owned(),
-                "/target/run".to_owned(),
-            ]]
+            vec![
+                vec![
+                    "umount".to_owned(),
+                    "-R".to_owned(),
+                    "/target/run".to_owned(),
+                ],
+                vec![
+                    "umount".to_owned(),
+                    "-R".to_owned(),
+                    "/target/sys".to_owned(),
+                ],
+            ]
         );
     }
     #[test]
