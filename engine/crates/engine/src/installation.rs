@@ -685,6 +685,12 @@ where
                 let mut unmount = Command::new("umount");
                 unmount.arg("-R").arg(&target_sys);
 
+                self.runner.status(&mut unmount)?;
+                let target_proc = root.join("proc");
+
+                let mut unmount = Command::new("umount");
+                unmount.arg("-R").arg(&target_proc);
+
                 self.runner.status(&mut unmount)
             }
         }
@@ -1156,6 +1162,11 @@ mod tests {
                     "umount".to_owned(),
                     "-R".to_owned(),
                     "/target/sys".to_owned(),
+                ],
+                vec![
+                    "umount".to_owned(),
+                    "-R".to_owned(),
+                    "/target/proc".to_owned(),
                 ],
             ]
         );
