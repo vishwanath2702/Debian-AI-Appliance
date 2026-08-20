@@ -62,11 +62,6 @@ build_iso() {
 
     output_iso="${DAIA_OUTPUT_ISO:-${OUTPUT_DIRECTORY}/daia-${version}.iso}"
 
-    if [[ ! -d "${rootfs}" ]]; then
-        printf 'Error: root filesystem not found: %s\n' "${rootfs}" >&2
-        printf 'Set DAIA_ROOTFS to the prepared root filesystem directory.\n' >&2
-        return 1
-    fi
 
     mkdir -p "${iso_work_directory}" "${OUTPUT_DIRECTORY}"
 
