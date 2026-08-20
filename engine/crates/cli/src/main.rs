@@ -176,6 +176,15 @@ fn create_build_context(
 
     let bootstrap = BootstrapConfig::from_iso_metadata(&metadata);
 
+    let daia_binary = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/release/daia");
+    if !daia_binary.is_file() {
+        return Err(format!(
+        "DAIA release binary not found at {}. Build it first with: cargo build --release --manifest-path crates/cli/Cargo.toml",
+        daia_binary.display()
+    )
+    .into());
+    }
+
     Ok(BuildContext::new(
         options.rootfs.clone(),
         options.source_iso.clone(),
@@ -183,7 +192,8 @@ fn create_build_context(
         options.output_iso.clone(),
         asset_directory(),
         bootstrap,
-    ))
+    )
+    .with_daia_binary(daia_binary))
 }
 
 fn print_plan(plan: &Plan) {
