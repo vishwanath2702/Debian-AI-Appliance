@@ -13,6 +13,7 @@ pub struct BuildContext {
     output_iso: PathBuf,
     asset_directory: PathBuf,
     bootstrap: BootstrapConfig,
+    daia_binary: Option<PathBuf>,
 }
 
 impl BuildContext {
@@ -33,6 +34,7 @@ impl BuildContext {
             output_iso: output_iso.into(),
             asset_directory: asset_directory.into(),
             bootstrap,
+            daia_binary: None,
         }
     }
 
@@ -71,6 +73,18 @@ impl BuildContext {
     pub const fn bootstrap(&self) -> &BootstrapConfig {
         &self.bootstrap
     }
+    /// Sets the DAIA executable to include in the live root filesystem.
+    #[must_use]
+    pub fn with_daia_binary(mut self, daia_binary: impl Into<PathBuf>) -> Self {
+        self.daia_binary = Some(daia_binary.into());
+        self
+    }
+
+    /// Returns the DAIA executable to include in the live root filesystem.
+    #[must_use]
+    pub fn daia_binary(&self) -> Option<&Path> {
+        self.daia_binary.as_deref()
+    }
 }
 
 #[cfg(test)]
@@ -79,6 +93,24 @@ mod tests {
 
     use super::BuildContext;
     use crate::BootstrapConfig;
+
+    #[test]
+    fn stores_daia_binary_path() {
+        let context = BuildContext::new(
+            "build/rootfs",
+            "images/source.iso",
+            "build/work",
+            "build/output.iso",
+            "registry/assets",
+            BootstrapConfig::default(),
+        )
+        .with_daia_binary("target/release/daia");
+
+        assert_eq!(
+            context.daia_binary(),
+            Some(Path::new("target/release/daia"))
+        );
+    }
 
     #[test]
     fn exposes_build_inputs() {
