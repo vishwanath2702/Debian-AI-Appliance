@@ -22,6 +22,24 @@ struct BuildOptions {
     output_iso: PathBuf,
 }
 
+fn daia_data_directory() -> PathBuf {
+    let installed = PathBuf::from("/usr/share/daia");
+
+    if installed.is_dir() {
+        installed
+    } else {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../registry")
+    }
+}
+
+fn package_manifest_directory() -> PathBuf {
+    daia_data_directory().join("package-manifests")
+}
+
+fn asset_directory() -> PathBuf {
+    daia_data_directory().join("assets")
+}
+
 fn main() -> ExitCode {
     let arguments = env::args().skip(1).collect::<Vec<_>>();
 
@@ -116,10 +134,7 @@ fn run_iso_build(capability_name: &str, options: &BuildOptions) -> ExitCode {
         return ExitCode::FAILURE;
     };
 
-    let package_manifest_directory =
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../registry/package-manifests");
-
-    let package_repository = match PackageRepository::from_directory(package_manifest_directory) {
+    let package_repository = match PackageRepository::from_directory(package_manifest_directory()) {
         Ok(repository) => repository,
         Err(error) => {
             eprintln!("Error loading package repository: {error}");
@@ -165,7 +180,7 @@ fn create_build_context(
         options.source_iso.clone(),
         options.work_directory.clone(),
         options.output_iso.clone(),
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../registry/assets"),
+        asset_directory(),
         bootstrap,
     ))
 }
