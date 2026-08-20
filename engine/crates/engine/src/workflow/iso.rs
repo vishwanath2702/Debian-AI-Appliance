@@ -71,6 +71,13 @@ where
 
         copy_directory_contents(build_context.asset_directory(), &asset_directory)?;
 
+        if let Some(daia_binary) = build_context.daia_binary() {
+            let usr_bin = build_context.rootfs().join("usr/bin");
+
+            fs::create_dir_all(&usr_bin).map_err(BuildError::Workspace)?;
+
+            fs::copy(daia_binary, usr_bin.join("daia")).map_err(BuildError::Workspace)?;
+        }
         Ok(())
     }
     fn build_iso(&mut self, plan: &Plan) -> Result<(), BuildError> {
@@ -303,6 +310,55 @@ mod tests {
             },
         );
         (result, log)
+    }
+
+    #[test]
+    fn prepares_live_rootfs_daia_binary() {
+        let temp = tempfile::tempdir().expect("temporary directory should be created");
+        let rootfs = temp.path().join("rootfs");
+        let asset_directory = temp.path().join("registry/assets");
+        let package_manifest_directory = temp.path().join("registry/package-manifests");
+        let daia_binary = temp.path().join("daia");
+
+        fs::create_dir_all(&rootfs).expect("rootfs should be created");
+        fs::create_dir_all(&asset_directory).expect("asset directory should be created");
+        fs::create_dir_all(&package_manifest_directory)
+            .expect("package manifest directory should be created");
+        fs::write(&daia_binary, b"daia").expect("DAIA binary fixture should be written");
+
+        let build_context = BuildContext::new(
+            rootfs.clone(),
+            temp.path().join("source.iso"),
+            temp.path().join("work"),
+            temp.path().join("output.iso"),
+            asset_directory,
+            BootstrapConfig::default(),
+        )
+        .with_daia_binary(&daia_binary);
+
+        let pipeline = IsoPipeline {
+            bootstrapper: RecordingBootstrapper {
+                log: Arc::new(Mutex::new(Vec::new())),
+                error: false,
+            },
+            rootfs_backend: RecordingRootfsBackend {
+                log: Arc::new(Mutex::new(Vec::new())),
+                error: false,
+            },
+            iso_backend: RecordingIsoBackend {
+                log: Arc::new(Mutex::new(Vec::new())),
+                error: false,
+            },
+        };
+
+        pipeline
+            .prepare_live_rootfs(&build_context)
+            .expect("live rootfs preparation should succeed");
+
+        assert_eq!(
+            fs::read(rootfs.join("usr/bin/daia")).expect("DAIA binary should be copied"),
+            b"daia"
+        );
     }
 
     #[test]
