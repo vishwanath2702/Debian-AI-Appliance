@@ -2,6 +2,7 @@
 
 use engine::{
     BootstrapConfig, BuildContext, DryRunInstallationExecutor, Engine, InstallationOperation,
+    SystemInstallationOperationExecutor,
 };
 use inspector::{DebianIsoInspector, IsoInspector, LinuxStorageInspector};
 use model::{Capability, Plan};
@@ -507,13 +508,30 @@ fn run_install() -> ExitCode {
             return ExitCode::FAILURE;
         }
     }
+    let package_repository = match PackageRepository::from_directory(package_manifest_directory()) {
+        Ok(repository) => repository,
+        Err(error) => {
+            eprintln!("Error loading package repository: {error}");
+            return ExitCode::FAILURE;
+        }
+    };
+
+    let mut executor =
+        SystemInstallationOperationExecutor::new(asset_directory(), package_repository);
 
     println!();
-    println!("Installer preparation complete.");
-    println!("Prepared {} appliance plan(s).", prepared.plans().len());
-    println!("No disk changes have been made.");
+    println!("Starting installation...");
 
-    ExitCode::SUCCESS
+    match engine.execute_installation(&prepared, &mut executor) {
+        Ok(()) => {
+            println!("Installation complete.");
+            ExitCode::SUCCESS
+        }
+        Err(error) => {
+            eprintln!("Installation failed: {error}");
+            ExitCode::FAILURE
+        }
+    }
 }
 fn run_wizard() -> ExitCode {
     let Some(engine) = load_engine() else {
