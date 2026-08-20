@@ -56,11 +56,20 @@ where
     }
     fn prepare_live_rootfs(&self, build_context: &BuildContext) -> Result<(), BuildError> {
         let daia_directory = build_context.rootfs().join("usr/share/daia");
+        let package_manifest_directory = daia_directory.join("package-manifests");
+        let asset_directory = daia_directory.join("assets");
 
-        fs::create_dir_all(daia_directory.join("package-manifests"))
-            .map_err(BuildError::Workspace)?;
+        let package_manifest_source = build_context
+            .asset_directory()
+            .parent()
+            .ok_or_else(|| {
+                BuildError::Workspace(std::io::Error::other("asset directory has no parent"))
+            })?
+            .join("package-manifests");
 
-        fs::create_dir_all(daia_directory.join("assets")).map_err(BuildError::Workspace)?;
+        copy_directory_contents(&package_manifest_source, &package_manifest_directory)?;
+
+        copy_directory_contents(build_context.asset_directory(), &asset_directory)?;
 
         Ok(())
     }
@@ -74,6 +83,26 @@ fn clean_directory(path: &std::path::Path) -> Result<(), BuildError> {
     }
 
     fs::create_dir_all(path).map_err(BuildError::Workspace)?;
+
+    Ok(())
+}
+fn copy_directory_contents(
+    source: &std::path::Path,
+    destination: &std::path::Path,
+) -> Result<(), BuildError> {
+    fs::create_dir_all(destination).map_err(BuildError::Workspace)?;
+
+    for entry in fs::read_dir(source).map_err(BuildError::Workspace)? {
+        let entry = entry.map_err(BuildError::Workspace)?;
+        let source_path = entry.path();
+        let destination_path = destination.join(entry.file_name());
+
+        if source_path.is_dir() {
+            copy_directory_contents(&source_path, &destination_path)?;
+        } else {
+            fs::copy(&source_path, &destination_path).map_err(BuildError::Workspace)?;
+        }
+    }
 
     Ok(())
 }
@@ -238,7 +267,7 @@ mod tests {
                 "images/source.iso",
                 "build/work",
                 "build/output.iso",
-                "registry/assets",
+                std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../registry/assets"),
                 bootstrap,
             ),
             PackageRepository::new(),
@@ -282,13 +311,19 @@ mod tests {
         let rootfs = temp.path().join("rootfs");
 
         fs::create_dir_all(&rootfs).expect("rootfs should be created");
+        let asset_directory = temp.path().join("registry/assets");
+        let package_manifest_directory = temp.path().join("registry/package-manifests");
 
+        fs::create_dir_all(&asset_directory).expect("asset directory should be created");
+
+        fs::create_dir_all(&package_manifest_directory)
+            .expect("package manifest directory should be created");
         let build_context = BuildContext::new(
             rootfs.clone(),
             temp.path().join("source.iso"),
             temp.path().join("work"),
             temp.path().join("output.iso"),
-            temp.path().join("assets"),
+            asset_directory,
             BootstrapConfig::default(),
         );
 
