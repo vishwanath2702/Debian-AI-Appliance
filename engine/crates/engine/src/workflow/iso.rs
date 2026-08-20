@@ -54,22 +54,34 @@ where
     fn build_rootfs(&mut self, plan: &Plan) -> Result<(), BuildError> {
         self.rootfs_backend.build(plan).map_err(BuildError::Rootfs)
     }
+
     fn prepare_live_rootfs(&self, build_context: &BuildContext) -> Result<(), BuildError> {
         let daia_directory = build_context.rootfs().join("usr/share/daia");
-        let package_manifest_directory = daia_directory.join("package-manifests");
-        let asset_directory = daia_directory.join("assets");
 
-        let package_manifest_source = build_context
-            .asset_directory()
-            .parent()
-            .ok_or_else(|| {
-                BuildError::Workspace(std::io::Error::other("asset directory has no parent"))
-            })?
-            .join("package-manifests");
+        let registry_directory = build_context.asset_directory().parent().ok_or_else(|| {
+            BuildError::Workspace(std::io::Error::other("asset directory has no parent"))
+        })?;
 
-        copy_directory_contents(&package_manifest_source, &package_manifest_directory)?;
+        let package_manifest_source = registry_directory.join("package-manifests");
+        let provider_source = registry_directory.join("providers");
+        let appliance_profile_source = registry_directory.join("appliance-profiles");
 
-        copy_directory_contents(build_context.asset_directory(), &asset_directory)?;
+        copy_directory_contents(
+            &package_manifest_source,
+            &daia_directory.join("package-manifests"),
+        )?;
+
+        copy_directory_contents(&provider_source, &daia_directory.join("providers"))?;
+
+        copy_directory_contents(
+            &appliance_profile_source,
+            &daia_directory.join("appliance-profiles"),
+        )?;
+
+        copy_directory_contents(
+            build_context.asset_directory(),
+            &daia_directory.join("assets"),
+        )?;
 
         if let Some(daia_binary) = build_context.daia_binary() {
             let usr_bin = build_context.rootfs().join("usr/bin");
@@ -78,8 +90,10 @@ where
 
             fs::copy(daia_binary, usr_bin.join("daia")).map_err(BuildError::Workspace)?;
         }
+
         Ok(())
     }
+
     fn build_iso(&mut self, plan: &Plan) -> Result<(), BuildError> {
         self.iso_backend.build(plan).map_err(BuildError::Iso)
     }
@@ -286,11 +300,41 @@ mod tests {
         rootfs_error: bool,
         iso_error: bool,
     ) -> (Result<Plan, BuildError>, ExecutionLog) {
-        let (engine, capability, build_context, _) = workflow_inputs();
+        let (engine, capability, _, _) = workflow_inputs();
+
+        let temp = tempfile::tempdir().expect("temporary workflow directory should be created");
+
+        let registry_directory = temp.path().join("registry");
+        let asset_directory = registry_directory.join("assets");
+        let package_manifest_directory = registry_directory.join("package-manifests");
+        let provider_directory = registry_directory.join("providers");
+        let appliance_profile_directory = registry_directory.join("appliance-profiles");
+
+        std::fs::create_dir_all(&asset_directory).expect("asset directory should be created");
+
+        std::fs::create_dir_all(&package_manifest_directory)
+            .expect("package manifest directory should be created");
+
+        std::fs::create_dir_all(&provider_directory).expect("provider directory should be created");
+
+        std::fs::create_dir_all(&appliance_profile_directory)
+            .expect("appliance profile directory should be created");
+
+        let build_context = BuildContext::new(
+            temp.path().join("rootfs"),
+            temp.path().join("source.iso"),
+            temp.path().join("work"),
+            temp.path().join("output.iso"),
+            asset_directory,
+            BootstrapConfig::default(),
+        );
+
         let plan = engine
             .plan(&capability)
             .expect("test workflow plan should build");
+
         let log = Arc::new(Mutex::new(Vec::new()));
+
         let result = IsoWorkflow::run_with(
             &build_context,
             plan,
@@ -309,6 +353,7 @@ mod tests {
                 },
             },
         );
+
         (result, log)
     }
 
@@ -316,14 +361,27 @@ mod tests {
     fn prepares_live_rootfs_daia_binary() {
         let temp = tempfile::tempdir().expect("temporary directory should be created");
         let rootfs = temp.path().join("rootfs");
-        let asset_directory = temp.path().join("registry/assets");
-        let package_manifest_directory = temp.path().join("registry/package-manifests");
+
+        let registry_directory = temp.path().join("registry");
+        let asset_directory = registry_directory.join("assets");
+        let package_manifest_directory = registry_directory.join("package-manifests");
+        let provider_directory = registry_directory.join("providers");
+        let appliance_profile_directory = registry_directory.join("appliance-profiles");
+
         let daia_binary = temp.path().join("daia");
 
         fs::create_dir_all(&rootfs).expect("rootfs should be created");
+
         fs::create_dir_all(&asset_directory).expect("asset directory should be created");
+
         fs::create_dir_all(&package_manifest_directory)
             .expect("package manifest directory should be created");
+
+        fs::create_dir_all(&provider_directory).expect("provider directory should be created");
+
+        fs::create_dir_all(&appliance_profile_directory)
+            .expect("appliance profile directory should be created");
+
         fs::write(&daia_binary, b"daia").expect("DAIA binary fixture should be written");
 
         let build_context = BuildContext::new(
@@ -366,14 +424,24 @@ mod tests {
         let temp = tempfile::tempdir().expect("temporary directory should be created");
         let rootfs = temp.path().join("rootfs");
 
+        let registry_directory = temp.path().join("registry");
+        let asset_directory = registry_directory.join("assets");
+        let package_manifest_directory = registry_directory.join("package-manifests");
+        let provider_directory = registry_directory.join("providers");
+        let appliance_profile_directory = registry_directory.join("appliance-profiles");
+
         fs::create_dir_all(&rootfs).expect("rootfs should be created");
-        let asset_directory = temp.path().join("registry/assets");
-        let package_manifest_directory = temp.path().join("registry/package-manifests");
 
         fs::create_dir_all(&asset_directory).expect("asset directory should be created");
 
         fs::create_dir_all(&package_manifest_directory)
             .expect("package manifest directory should be created");
+
+        fs::create_dir_all(&provider_directory).expect("provider directory should be created");
+
+        fs::create_dir_all(&appliance_profile_directory)
+            .expect("appliance profile directory should be created");
+
         let build_context = BuildContext::new(
             rootfs.clone(),
             temp.path().join("source.iso"),
@@ -403,8 +471,14 @@ mod tests {
             .expect("live rootfs preparation should succeed");
 
         assert!(rootfs.join("usr/share/daia/package-manifests").is_dir());
+
+        assert!(rootfs.join("usr/share/daia/providers").is_dir());
+
+        assert!(rootfs.join("usr/share/daia/appliance-profiles").is_dir());
+
         assert!(rootfs.join("usr/share/daia/assets").is_dir());
     }
+
     #[test]
     fn executes_workflow_stages_in_order() {
         let (result, log) = run_workflow(false, false, false);
