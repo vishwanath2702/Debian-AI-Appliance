@@ -4,6 +4,10 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 
+[[bin]]
+name = "daia"
+path = "src/main.rs"
+
 [dependencies]
 engine = { path = "../engine" }
 model = { path = "../model" }
