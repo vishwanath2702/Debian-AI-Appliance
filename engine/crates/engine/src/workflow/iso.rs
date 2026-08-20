@@ -40,6 +40,7 @@ where
 
         self.bootstrap(build_context)?;
         self.build_rootfs(plan)?;
+        self.prepare_live_rootfs(build_context)?;
         self.build_iso(plan)?;
 
         Ok(())
@@ -53,7 +54,9 @@ where
     fn build_rootfs(&mut self, plan: &Plan) -> Result<(), BuildError> {
         self.rootfs_backend.build(plan).map_err(BuildError::Rootfs)
     }
-
+    fn prepare_live_rootfs(&self, _build_context: &BuildContext) -> Result<(), BuildError> {
+        Ok(())
+    }
     fn build_iso(&mut self, plan: &Plan) -> Result<(), BuildError> {
         self.iso_backend.build(plan).map_err(BuildError::Iso)
     }
