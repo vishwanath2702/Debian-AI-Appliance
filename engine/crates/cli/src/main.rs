@@ -478,6 +478,20 @@ fn run_install() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
+    println!();
+    println!("WARNING: The selected target disk will be erased.");
+
+    match confirm_wizard_state() {
+        Ok(true) => {}
+        Ok(false) => {
+            println!("Installation cancelled.");
+            return ExitCode::SUCCESS;
+        }
+        Err(error) => {
+            eprintln!("{error}");
+            return ExitCode::FAILURE;
+        }
+    }
 
     println!();
     println!("Installer preparation complete.");
