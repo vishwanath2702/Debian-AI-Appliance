@@ -466,8 +466,22 @@ fn run_install() -> ExitCode {
         eprintln!("{error}");
         return ExitCode::FAILURE;
     }
+    let Some(config) = state.into_config() else {
+        eprintln!("Error: installer configuration is incomplete");
+        return ExitCode::FAILURE;
+    };
+
+    let prepared = match prepare_wizard_installation(&engine, &config) {
+        Ok(prepared) => prepared,
+        Err(error) => {
+            eprintln!("{error}");
+            return ExitCode::FAILURE;
+        }
+    };
+
     println!();
     println!("Installer preparation complete.");
+    println!("Prepared {} appliance plan(s).", prepared.plans().len());
     println!("No disk changes have been made.");
 
     ExitCode::SUCCESS
