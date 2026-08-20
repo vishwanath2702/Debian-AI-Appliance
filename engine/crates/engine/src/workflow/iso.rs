@@ -54,7 +54,14 @@ where
     fn build_rootfs(&mut self, plan: &Plan) -> Result<(), BuildError> {
         self.rootfs_backend.build(plan).map_err(BuildError::Rootfs)
     }
-    fn prepare_live_rootfs(&self, _build_context: &BuildContext) -> Result<(), BuildError> {
+    fn prepare_live_rootfs(&self, build_context: &BuildContext) -> Result<(), BuildError> {
+        let daia_directory = build_context.rootfs().join("usr/share/daia");
+
+        fs::create_dir_all(daia_directory.join("package-manifests"))
+            .map_err(BuildError::Workspace)?;
+
+        fs::create_dir_all(daia_directory.join("assets")).map_err(BuildError::Workspace)?;
+
         Ok(())
     }
     fn build_iso(&mut self, plan: &Plan) -> Result<(), BuildError> {
@@ -120,7 +127,7 @@ impl IsoWorkflow {
 #[cfg(test)]
 mod tests {
     use std::{
-        io,
+        fs, io,
         sync::{Arc, Mutex},
     };
 
@@ -267,6 +274,45 @@ mod tests {
             },
         );
         (result, log)
+    }
+
+    #[test]
+    fn prepares_live_rootfs_runtime_directories() {
+        let temp = tempfile::tempdir().expect("temporary directory should be created");
+        let rootfs = temp.path().join("rootfs");
+
+        fs::create_dir_all(&rootfs).expect("rootfs should be created");
+
+        let build_context = BuildContext::new(
+            rootfs.clone(),
+            temp.path().join("source.iso"),
+            temp.path().join("work"),
+            temp.path().join("output.iso"),
+            temp.path().join("assets"),
+            BootstrapConfig::default(),
+        );
+
+        let pipeline = IsoPipeline {
+            bootstrapper: RecordingBootstrapper {
+                log: Arc::new(Mutex::new(Vec::new())),
+                error: false,
+            },
+            rootfs_backend: RecordingRootfsBackend {
+                log: Arc::new(Mutex::new(Vec::new())),
+                error: false,
+            },
+            iso_backend: RecordingIsoBackend {
+                log: Arc::new(Mutex::new(Vec::new())),
+                error: false,
+            },
+        };
+
+        pipeline
+            .prepare_live_rootfs(&build_context)
+            .expect("live rootfs preparation should succeed");
+
+        assert!(rootfs.join("usr/share/daia/package-manifests").is_dir());
+        assert!(rootfs.join("usr/share/daia/assets").is_dir());
     }
     #[test]
     fn executes_workflow_stages_in_order() {
