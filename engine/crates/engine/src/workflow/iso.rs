@@ -91,6 +91,7 @@ where
             fs::copy(daia_binary, usr_bin.join("daia")).map_err(BuildError::Workspace)?;
         }
 
+        clean_live_rootfs(build_context.rootfs())?;
         Ok(())
     }
 
@@ -107,6 +108,23 @@ fn clean_directory(path: &std::path::Path) -> Result<(), BuildError> {
 
     Ok(())
 }
+fn clean_live_rootfs(rootfs: &std::path::Path) -> Result<(), BuildError> {
+    let paths = [
+        rootfs.join("var/cache/apt/archives"),
+        rootfs.join("var/lib/apt/lists"),
+    ];
+
+    for path in paths {
+        if path.exists() {
+            fs::remove_dir_all(&path).map_err(BuildError::Workspace)?;
+        }
+
+        fs::create_dir_all(&path).map_err(BuildError::Workspace)?;
+    }
+
+    Ok(())
+}
+
 fn copy_directory_contents(
     source: &std::path::Path,
     destination: &std::path::Path,
