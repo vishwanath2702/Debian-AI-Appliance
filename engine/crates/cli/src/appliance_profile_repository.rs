@@ -13,7 +13,13 @@ pub fn load() -> Result<ApplianceProfileRepository, RegistryError> {
 }
 
 fn appliance_profile_directory() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../registry/appliance-profiles")
+    let installed = PathBuf::from("/usr/share/daia/appliance-profiles");
+
+    if installed.is_dir() {
+        installed
+    } else {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../registry/appliance-profiles")
+    }
 }
 
 #[cfg(test)]

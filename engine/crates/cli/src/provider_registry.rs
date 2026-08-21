@@ -13,7 +13,13 @@ pub fn load() -> Result<Registry, RegistryError> {
 }
 
 fn provider_directory() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../registry/providers")
+    let installed = PathBuf::from("/usr/share/daia/providers");
+
+    if installed.is_dir() {
+        installed
+    } else {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../registry/providers")
+    }
 }
 
 #[cfg(test)]
