@@ -177,7 +177,7 @@ impl Bootstrapper for MmdebstrapBootstrapper {
             .map_err(MmdebstrapError::Process)?;
 
         if status.success() {
-            return Ok(());
+            return restore_rootfs_ownership(self.runner.as_ref(), context);
         }
 
         let mut sudo_command = self.sudo_command(context);
@@ -187,23 +187,30 @@ impl Bootstrapper for MmdebstrapBootstrapper {
             .status(&mut sudo_command)
             .map_err(MmdebstrapError::Process)?;
 
-        if sudo_status.success() {
-            restore_rootfs_ownership(context)?;
-            Ok(())
-        } else {
-            Err(MmdebstrapError::Unsuccessful(sudo_status))
+        if !sudo_status.success() {
+            return Err(MmdebstrapError::Unsuccessful(sudo_status));
         }
+
+        restore_rootfs_ownership(self.runner.as_ref(), context)
     }
 }
-fn restore_rootfs_ownership(context: &BuildContext) -> Result<(), MmdebstrapError> {
+
+fn restore_rootfs_ownership(
+    runner: &dyn CommandRunner,
+    context: &BuildContext,
+) -> Result<(), MmdebstrapError> {
     let user = std::env::var("USER").unwrap_or_else(|_| "root".to_owned());
 
-    let status = Command::new("sudo")
+    let mut command = Command::new("sudo");
+
+    command
         .arg("chown")
         .arg("-R")
         .arg(format!("{user}:{user}"))
-        .arg(context.rootfs())
-        .status()
+        .arg(context.rootfs());
+
+    let status = runner
+        .status(&mut command)
         .map_err(MmdebstrapError::Process)?;
 
     if status.success() {
@@ -350,7 +357,10 @@ mod tests {
 
     #[test]
     fn bootstrap_succeeds_when_command_succeeds() {
-        let runner = RecordingCommandRunner::returning(vec![Ok(ExitStatus::from_raw(0))]);
+        let runner = RecordingCommandRunner::returning(vec![
+            Ok(ExitStatus::from_raw(0)),
+            Ok(ExitStatus::from_raw(0)),
+        ]);
         let bootstrapper = MmdebstrapBootstrapper::with_runner(runner);
 
         bootstrapper.bootstrap(&test_context()).unwrap();
