@@ -3,8 +3,13 @@ name: desktop
 packages:
   - live-boot
   - live-config
+  - user-setup
+  - sudo
   - systemd-sysv
   - linux-image-amd64
   - initramfs-tools
-  - task-gnome-desktop
+  - xserver-xorg
   - gdm3
+  - gnome-session
+  - gnome-terminal
+  - network-manager

@@ -149,7 +149,7 @@ exit 1
                 grub: GrubConfig {
                     menu_title: "Debian AI Appliance".to_owned(),
                     timeout: 5,
-                    kernel_command_line: "boot=live components quiet".to_owned(),
+                    kernel_command_line: "boot=live components username=daia user-fullname=\"DAIA Live User\" hostname=daia quiet".to_owned(),
                 },
                 squashfs: SquashFsConfig {
                     compression: "xz".to_owned(),

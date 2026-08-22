@@ -54,7 +54,9 @@ impl IsoBackend {
             grub: GrubConfig {
                 menu_title: "Debian AI Appliance".to_owned(),
                 timeout: 5,
-                kernel_command_line: "boot=live components quiet".to_owned(),
+kernel_command_line:
+    "boot=live components username=daia user-fullname=\"DAIA Live User\" hostname=daia quiet"
+        .to_owned(),
             },
             squashfs: SquashFsConfig {
                 compression: "xz".to_owned(),
@@ -328,7 +330,9 @@ mod tests {
         assert!(grub_contents.contains("set default=0"));
         assert!(grub_contents.contains("set timeout=5"));
         assert!(grub_contents.contains("menuentry \"Debian AI Appliance\""));
-        assert!(grub_contents.contains("linux /live/vmlinuz boot=live components quiet"));
+        assert!(grub_contents.contains(
+    "linux /live/vmlinuz boot=live components username=daia user-fullname=\"DAIA Live User\" hostname=daia quiet"
+));
         assert!(grub_contents.contains("initrd /live/initrd.img"));
     }
     #[test]

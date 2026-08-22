@@ -58,14 +58,14 @@ impl AptInstaller {
         }
     }
 
-fn update_initramfs_command_args() -> Vec<String> {
-    vec![
-        String::from("update-initramfs"),
-        String::from("-u"),
-        String::from("-k"),
-        String::from("all"),
-    ]
-}
+    fn update_initramfs_command_args() -> Vec<String> {
+        vec![
+            String::from("update-initramfs"),
+            String::from("-u"),
+            String::from("-k"),
+            String::from("all"),
+        ]
+    }
     fn update_command_args() -> Vec<String> {
         vec![String::from("apt-get"), String::from("update")]
     }
@@ -75,8 +75,8 @@ fn update_initramfs_command_args() -> Vec<String> {
             String::from("apt-get"),
             String::from("install"),
             String::from("--yes"),
+            String::from("--no-install-recommends"),
         ];
-
         args.extend(packages.iter().cloned());
 
         args
@@ -144,10 +144,7 @@ mod tests {
     fn builds_expected_update_command_arguments() {
         let args = AptInstaller::update_command_args();
 
-        assert_eq!(
-            args,
-            vec![String::from("apt-get"), String::from("update")]
-        );
+        assert_eq!(args, vec![String::from("apt-get"), String::from("update")]);
     }
 
     #[test]
@@ -162,6 +159,7 @@ mod tests {
                 String::from("apt-get"),
                 String::from("install"),
                 String::from("--yes"),
+                String::from("--no-install-recommends"),
                 String::from("vim"),
                 String::from("curl"),
             ]

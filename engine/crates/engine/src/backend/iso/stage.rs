@@ -262,8 +262,7 @@ impl SquashFsStage {
             command.arg("-e").args(&squashfs.exclusions);
         }
 
-        println!("Running mksquashfs command: {:?}", command);
-
+        println!("Running mksquashfs command: {command:?}");
         let status = command.status()?;
 
         if !status.success() {
@@ -449,7 +448,7 @@ mod tests {
                     menu_title: "Debian AI Appliance".to_owned(),
                     timeout: 5,
 
-                    kernel_command_line: "boot=live components quiet".to_owned(),
+                    kernel_command_line: "boot=live components username=daia user-fullname=\"DAIA Live User\" hostname=daia quiet".to_owned(),
                 },
                 squashfs: SquashFsConfig {
                     compression: "xz".to_owned(),
@@ -578,7 +577,9 @@ mod tests {
         let contents = fs::read_to_string(output).expect("grub configuration should be readable");
 
         assert!(contents.contains("Debian AI Appliance"));
-        assert!(contents.contains("boot=live components quiet"));
+        assert!(contents.contains(
+    "boot=live components username=daia user-fullname=\"DAIA Live User\" hostname=daia quiet"
+));
     }
     #[test]
     fn creates_squashfs_image() {
