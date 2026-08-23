@@ -287,6 +287,57 @@ fn select_appliance_profile(state: &mut WizardState) -> Result<(), String> {
     Ok(())
 }
 
+fn select_content_repository(state: &mut WizardState) -> Result<(), String> {
+    let repositories = state.content_repositories();
+
+    if repositories.is_empty() {
+        return Err("No content repositories found.".to_owned());
+    }
+
+    println!();
+    println!("Content repositories:");
+
+    for (index, repository) in repositories.iter().enumerate() {
+        println!(
+            "  {}. {}  {}",
+            index + 1,
+            repository.id(),
+            repository.description()
+        );
+    }
+
+    print!("Select content repository [1-{}]: ", repositories.len());
+
+    io::stdout()
+        .flush()
+        .map_err(|error| format!("Error writing prompt: {error}"))?;
+
+    let mut input = String::new();
+
+    io::stdin()
+        .read_line(&mut input)
+        .map_err(|error| format!("Error reading selection: {error}"))?;
+
+    let selection = input
+        .trim()
+        .parse::<usize>()
+        .ok()
+        .filter(|selection| (1..=repositories.len()).contains(selection))
+        .ok_or_else(|| "Error: invalid content repository selection".to_owned())?;
+
+    let selected_id = repositories[selection - 1].id().clone();
+
+    state.select_content_repository(selected_id);
+
+    println!(
+        "Selected content repository: {}",
+        state
+            .selected_content_repository()
+            .expect("validated content repository selection should exist")
+    );
+
+    Ok(())
+}
 fn select_storage(state: &mut WizardState) -> Result<(), String> {
     let selectable = state.selectable_storage().collect::<Vec<_>>();
 
@@ -568,6 +619,11 @@ fn run_wizard() -> ExitCode {
         };
 
     state.set_content_repositories(content_repository.repositories().to_vec());
+
+    if let Err(error) = select_content_repository(&mut state) {
+        eprintln!("{error}");
+        return ExitCode::FAILURE;
+    }
 
     let inspector = LinuxStorageInspector::new();
 
