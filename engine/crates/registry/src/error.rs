@@ -4,7 +4,7 @@ use std::{
     io,
 };
 
-use model::{CapabilityId, ProviderId};
+use model::{CapabilityId, ContentRepositoryId, ProviderId};
 
 /// Error returned while loading registry data.
 #[derive(Debug)]
@@ -35,6 +35,8 @@ pub enum RegistryError {
 
     /// More than one appliance profile used the same name.
     DuplicateApplianceProfile(String),
+    /// More than one content repository used the same identifier.
+    DuplicateContentRepository(ContentRepositoryId),
 }
 
 impl Display for RegistryError {
@@ -67,6 +69,12 @@ impl Display for RegistryError {
             Self::DuplicateApplianceProfile(name) => {
                 write!(formatter, "duplicate appliance profile: {name}")
             }
+            Self::DuplicateContentRepository(repository_id) => {
+                write!(
+                    formatter,
+                    "duplicate content repository id: {repository_id}"
+                )
+            }
         }
     }
 }
@@ -81,8 +89,9 @@ impl Error for RegistryError {
             | Self::InvalidApplianceProfile(_)
             | Self::DuplicateProviderId(_)
             | Self::DuplicateCapability(_)
-            | Self::DuplicatePackageManifest(_) => None,
-            Self::DuplicateApplianceProfile(_) => None,
+            | Self::DuplicatePackageManifest(_)
+            | Self::DuplicateApplianceProfile(_)
+            | Self::DuplicateContentRepository(_) => None,
         }
     }
 }
