@@ -118,6 +118,24 @@ mod tests {
     use super::ContentRepositoryRepository;
 
     #[test]
+    fn repository_content_repository_directory_contains_local_models() {
+        let repository_directory = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../registry/content-repositories");
+
+        let repository = ContentRepositoryRepository::load_directory(&repository_directory)
+            .expect("repository content-repository directory should load");
+
+        let local_models = repository
+            .repository(&ContentRepositoryId::new("local-models"))
+            .expect("local-models content repository should exist");
+
+        assert_eq!(
+            local_models.description(),
+            "Models available on local storage"
+        );
+    }
+
+    #[test]
     fn repository_loads_content_repositories_from_directory() {
         let temp = tempfile::tempdir().expect("temporary directory should be created");
 
