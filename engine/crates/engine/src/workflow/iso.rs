@@ -6,56 +6,21 @@ use crate::{
 };
 use executor::RootfsRunError;
 use model::Plan;
-use std::fs;
-
 use registry::PackageRepository;
+use std::fs;
 
 /// Coordinates creation of a bootable ISO appliance.
 pub struct IsoWorkflow;
 
-struct IsoPipeline<B, R, I> {
-    bootstrapper: B,
-    rootfs_backend: R,
-    iso_backend: I,
+trait LiveRootfsPreparer {
+    fn prepare(&mut self, build_context: &BuildContext) -> Result<(), BuildError>;
 }
 
-impl<B, R, I> IsoPipeline<B, R, I>
-where
-    B: Bootstrapper<Error = MmdebstrapError>,
-    R: BuildBackend<Error = RootfsRunError>,
-    I: BuildBackend<Error = std::io::Error>,
-{
-    fn prepare(build_context: &BuildContext) -> Result<(), BuildError> {
-        clean_directory(build_context.rootfs())?;
-        clean_directory(build_context.work_directory())?;
+#[derive(Clone, Copy, Debug, Default)]
+struct SystemLiveRootfsPreparer;
 
-        if build_context.output_iso().exists() {
-            fs::remove_file(build_context.output_iso()).map_err(BuildError::Workspace)?;
-        }
-
-        Ok(())
-    }
-    fn execute(mut self, build_context: &BuildContext, plan: &Plan) -> Result<(), BuildError> {
-        Self::prepare(build_context)?;
-
-        self.bootstrap(build_context)?;
-        self.build_rootfs(plan)?;
-        self.prepare_live_rootfs(build_context)?;
-        self.build_iso(plan)?;
-
-        Ok(())
-    }
-    fn bootstrap(&self, build_context: &BuildContext) -> Result<(), BuildError> {
-        self.bootstrapper.bootstrap(build_context)?;
-
-        Ok(())
-    }
-
-    fn build_rootfs(&mut self, plan: &Plan) -> Result<(), BuildError> {
-        self.rootfs_backend.build(plan).map_err(BuildError::Rootfs)
-    }
-
-    fn prepare_live_rootfs(&self, build_context: &BuildContext) -> Result<(), BuildError> {
+impl LiveRootfsPreparer for SystemLiveRootfsPreparer {
+    fn prepare(&mut self, build_context: &BuildContext) -> Result<(), BuildError> {
         let daia_directory = build_context.rootfs().join("usr/share/daia");
 
         let registry_directory = build_context.asset_directory().parent().ok_or_else(|| {
@@ -88,26 +53,104 @@ where
 
             fs::create_dir_all(&usr_bin).map_err(BuildError::Workspace)?;
 
-            fs::copy(daia_binary, usr_bin.join("daia")).map_err(BuildError::Workspace)?;
+            let destination = usr_bin.join("daia");
+
+            fs::copy(daia_binary, &destination).map_err(|error| {
+                BuildError::Workspace(std::io::Error::new(
+                    error.kind(),
+                    format!(
+                        "failed to copy DAIA binary `{}` to `{}`: {error}",
+                        daia_binary.display(),
+                        destination.display()
+                    ),
+                ))
+            })?;
         }
 
         clean_live_rootfs(build_context.rootfs())?;
+
         Ok(())
+    }
+}
+
+struct IsoPipeline<B, R, L, I> {
+    bootstrapper: B,
+    rootfs_backend: R,
+    live_rootfs_preparer: L,
+    iso_backend: I,
+}
+
+impl<B, R, L, I> IsoPipeline<B, R, L, I>
+where
+    B: Bootstrapper<Error = MmdebstrapError>,
+    R: BuildBackend<Error = RootfsRunError>,
+    L: LiveRootfsPreparer,
+    I: BuildBackend<Error = std::io::Error>,
+{
+    fn prepare(build_context: &BuildContext) -> Result<(), BuildError> {
+        clean_directory(build_context.rootfs())?;
+        clean_directory(build_context.work_directory())?;
+
+        if build_context.output_iso().exists() {
+            fs::remove_file(build_context.output_iso()).map_err(BuildError::Workspace)?;
+        }
+
+        Ok(())
+    }
+    fn execute(mut self, build_context: &BuildContext, plan: &Plan) -> Result<(), BuildError> {
+        Self::prepare(build_context)?;
+
+        self.bootstrap(build_context)?;
+        self.build_rootfs(plan)?;
+        self.live_rootfs_preparer.prepare(build_context)?;
+        self.build_iso(plan)?;
+
+        Ok(())
+    }
+    fn bootstrap(&self, build_context: &BuildContext) -> Result<(), BuildError> {
+        self.bootstrapper.bootstrap(build_context)?;
+
+        Ok(())
+    }
+
+    fn build_rootfs(&mut self, plan: &Plan) -> Result<(), BuildError> {
+        self.rootfs_backend.build(plan).map_err(BuildError::Rootfs)
     }
 
     fn build_iso(&mut self, plan: &Plan) -> Result<(), BuildError> {
         self.iso_backend.build(plan).map_err(BuildError::Iso)
     }
 }
+
 fn clean_directory(path: &std::path::Path) -> Result<(), BuildError> {
     if path.exists() {
-        fs::remove_dir_all(path).map_err(BuildError::Workspace)?;
+        match fs::remove_dir_all(path) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
+                let status = std::process::Command::new("sudo")
+                    .arg("rm")
+                    .arg("-rf")
+                    .arg("--")
+                    .arg(path)
+                    .status()
+                    .map_err(BuildError::Workspace)?;
+
+                if !status.success() {
+                    return Err(BuildError::Workspace(std::io::Error::other(format!(
+                        "failed to remove privileged build directory `{}`",
+                        path.display()
+                    ))));
+                }
+            }
+            Err(error) => return Err(BuildError::Workspace(error)),
+        }
     }
 
     fs::create_dir_all(path).map_err(BuildError::Workspace)?;
 
     Ok(())
 }
+
 fn clean_live_rootfs(rootfs: &std::path::Path) -> Result<(), BuildError> {
     let paths = [
         rootfs.join("var/cache/apt/archives"),
@@ -115,11 +158,7 @@ fn clean_live_rootfs(rootfs: &std::path::Path) -> Result<(), BuildError> {
     ];
 
     for path in paths {
-        if path.exists() {
-            fs::remove_dir_all(&path).map_err(BuildError::Workspace)?;
-        }
-
-        fs::create_dir_all(&path).map_err(BuildError::Workspace)?;
+        clean_directory(&path)?;
     }
 
     Ok(())
@@ -129,9 +168,22 @@ fn copy_directory_contents(
     source: &std::path::Path,
     destination: &std::path::Path,
 ) -> Result<(), BuildError> {
-    fs::create_dir_all(destination).map_err(BuildError::Workspace)?;
+    fs::create_dir_all(destination).map_err(|error| {
+        BuildError::Workspace(std::io::Error::new(
+            error.kind(),
+            format!(
+                "failed to create directory `{}`: {error}",
+                destination.display()
+            ),
+        ))
+    })?;
 
-    for entry in fs::read_dir(source).map_err(BuildError::Workspace)? {
+    for entry in fs::read_dir(source).map_err(|error| {
+        BuildError::Workspace(std::io::Error::new(
+            error.kind(),
+            format!("failed to read directory `{}`: {error}", source.display()),
+        ))
+    })? {
         let entry = entry.map_err(BuildError::Workspace)?;
         let source_path = entry.path();
         let destination_path = destination.join(entry.file_name());
@@ -139,7 +191,16 @@ fn copy_directory_contents(
         if source_path.is_dir() {
             copy_directory_contents(&source_path, &destination_path)?;
         } else {
-            fs::copy(&source_path, &destination_path).map_err(BuildError::Workspace)?;
+            fs::copy(&source_path, &destination_path).map_err(|error| {
+                BuildError::Workspace(std::io::Error::new(
+                    error.kind(),
+                    format!(
+                        "failed to copy `{}` to `{}`: {error}",
+                        source_path.display(),
+                        destination_path.display()
+                    ),
+                ))
+            })?;
         }
     }
 
@@ -165,7 +226,8 @@ impl IsoWorkflow {
     fn production_pipeline(
         build_context: &BuildContext,
         package_repository: &PackageRepository,
-    ) -> IsoPipeline<MmdebstrapBootstrapper, RootfsBackend, IsoBackend> {
+    ) -> IsoPipeline<MmdebstrapBootstrapper, RootfsBackend, SystemLiveRootfsPreparer, IsoBackend>
+    {
         IsoPipeline {
             bootstrapper: MmdebstrapBootstrapper::new(),
             rootfs_backend: RootfsBackend::new(
@@ -173,18 +235,19 @@ impl IsoWorkflow {
                 build_context.asset_directory().to_path_buf(),
                 package_repository.clone(),
             ),
+            live_rootfs_preparer: SystemLiveRootfsPreparer,
             iso_backend: IsoBackend::from_context(build_context),
         }
     }
-
-    fn run_with<B, R, I>(
+    fn run_with<B, R, L, I>(
         build_context: &BuildContext,
         plan: Plan,
-        pipeline: IsoPipeline<B, R, I>,
+        pipeline: IsoPipeline<B, R, L, I>,
     ) -> Result<Plan, BuildError>
     where
         B: Bootstrapper<Error = MmdebstrapError>,
         R: BuildBackend<Error = RootfsRunError>,
+        L: LiveRootfsPreparer,
         I: BuildBackend<Error = std::io::Error>,
     {
         pipeline.execute(build_context, &plan)?;
@@ -194,16 +257,16 @@ impl IsoWorkflow {
 }
 #[cfg(test)]
 mod tests {
+
+    use executor::{ExecuteError, RootfsRunError};
+    use model::{Action, Capability, CapabilityId, Plan, PlanStep, Provider, ProviderId};
+    use registry::{PackageRepository, Registry};
     use std::{
         fs, io,
         sync::{Arc, Mutex},
     };
 
-    use executor::{ExecuteError, RootfsRunError};
-    use model::{Action, Capability, CapabilityId, Plan, PlanStep, Provider, ProviderId};
-    use registry::{PackageRepository, Registry};
-
-    use super::{IsoPipeline, IsoWorkflow};
+    use super::{IsoPipeline, IsoWorkflow, LiveRootfsPreparer, SystemLiveRootfsPreparer};
     use crate::{
         BootstrapConfig, Bootstrapper, BuildBackend, BuildContext, BuildError, Engine,
         MmdebstrapError,
@@ -365,6 +428,7 @@ mod tests {
                     log: Arc::clone(&log),
                     error: rootfs_error,
                 },
+                live_rootfs_preparer: SystemLiveRootfsPreparer,
                 iso_backend: RecordingIsoBackend {
                     log: Arc::clone(&log),
                     error: iso_error,
@@ -373,6 +437,11 @@ mod tests {
         );
 
         (result, log)
+    }
+
+    #[test]
+    fn system_live_rootfs_preparer_can_be_created() {
+        let _preparer = SystemLiveRootfsPreparer;
     }
 
     #[test]
@@ -421,14 +490,16 @@ mod tests {
                 log: Arc::new(Mutex::new(Vec::new())),
                 error: false,
             },
+            live_rootfs_preparer: SystemLiveRootfsPreparer,
             iso_backend: RecordingIsoBackend {
                 log: Arc::new(Mutex::new(Vec::new())),
                 error: false,
             },
         };
+        let mut preparer = SystemLiveRootfsPreparer;
 
-        pipeline
-            .prepare_live_rootfs(&build_context)
+        preparer
+            .prepare(&build_context)
             .expect("live rootfs preparation should succeed");
 
         assert_eq!(
@@ -478,14 +549,17 @@ mod tests {
                 log: Arc::new(Mutex::new(Vec::new())),
                 error: false,
             },
+            live_rootfs_preparer: SystemLiveRootfsPreparer,
             iso_backend: RecordingIsoBackend {
                 log: Arc::new(Mutex::new(Vec::new())),
                 error: false,
             },
         };
 
-        pipeline
-            .prepare_live_rootfs(&build_context)
+        let mut preparer = SystemLiveRootfsPreparer;
+
+        preparer
+            .prepare(&build_context)
             .expect("live rootfs preparation should succeed");
 
         assert!(rootfs.join("usr/share/daia/package-manifests").is_dir());
