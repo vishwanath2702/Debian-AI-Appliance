@@ -6,7 +6,7 @@ use engine::{
 };
 use inspector::{DebianIsoInspector, IsoInspector, LinuxStorageInspector};
 use model::{Capability, Plan};
-use registry::PackageRepository;
+use registry::{ContentRepositoryRepository, PackageRepository};
 use std::env;
 use std::io::{self, Write};
 use std::path::PathBuf;
@@ -36,7 +36,9 @@ fn daia_data_directory() -> PathBuf {
 fn package_manifest_directory() -> PathBuf {
     daia_data_directory().join("package-manifests")
 }
-
+fn content_repository_directory() -> PathBuf {
+    daia_data_directory().join("content-repositories")
+}
 fn asset_directory() -> PathBuf {
     daia_data_directory().join("assets")
 }
@@ -474,7 +476,6 @@ fn run_install() -> ExitCode {
         eprintln!("{error}");
         return ExitCode::FAILURE;
     }
-
     let inspector = LinuxStorageInspector::new();
 
     let storage = match engine.discover_storage(&inspector) {
@@ -556,6 +557,17 @@ fn run_wizard() -> ExitCode {
         eprintln!("{error}");
         return ExitCode::FAILURE;
     }
+
+    let content_repository =
+        match ContentRepositoryRepository::load_directory(&content_repository_directory()) {
+            Ok(repository) => repository,
+            Err(error) => {
+                eprintln!("Error loading content repositories: {error}");
+                return ExitCode::FAILURE;
+            }
+        };
+
+    state.set_content_repositories(content_repository.repositories().to_vec());
 
     let inspector = LinuxStorageInspector::new();
 
