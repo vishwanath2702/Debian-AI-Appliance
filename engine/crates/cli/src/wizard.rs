@@ -82,6 +82,7 @@ impl WizardState {
     pub fn into_config(self) -> Option<WizardConfig> {
         Some(WizardConfig {
             profile_name: self.profile_name?,
+            content_repository_id: self.selected_content_repository?,
             storage_id: self.selected_storage?,
         })
     }
@@ -90,16 +91,20 @@ impl WizardState {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct WizardConfig {
     profile_name: String,
+    content_repository_id: ContentRepositoryId,
     storage_id: DiscoveredStorageId,
 }
-
 impl WizardConfig {
     /// Returns the selected appliance profile name.
     #[must_use]
     pub fn profile_name(&self) -> &str {
         &self.profile_name
     }
-
+    /// Returns the selected content repository identifier.
+    #[must_use]
+    pub const fn content_repository_id(&self) -> &ContentRepositoryId {
+        &self.content_repository_id
+    }
     /// Returns the selected storage identifier.
     #[must_use]
     pub const fn storage_id(&self) -> &DiscoveredStorageId {
@@ -165,6 +170,7 @@ mod tests {
         let mut state = WizardState::new();
 
         state.set_profile_name("desktop");
+        state.select_content_repository(ContentRepositoryId::new("local-models"));
         state.select_storage(DiscoveredStorageId::new("serial:usb-disk"));
 
         let config = state
@@ -191,6 +197,7 @@ mod tests {
 
         let mut state = WizardState::new();
         state.set_profile_name("desktop");
+        state.select_content_repository(ContentRepositoryId::new("local-models"));
         state.select_storage(DiscoveredStorageId::new("serial:usb-disk"));
 
         let config = state
@@ -210,6 +217,7 @@ mod tests {
         let mut state = WizardState::new();
 
         state.set_profile_name("desktop");
+        state.select_content_repository(ContentRepositoryId::new("local-models"));
         state.select_storage(DiscoveredStorageId::new("serial:usb-disk"));
 
         let config = state
@@ -217,6 +225,10 @@ mod tests {
             .expect("completed wizard state should build configuration");
 
         assert_eq!(config.profile_name(), "desktop");
+        assert_eq!(
+            config.content_repository_id(),
+            &ContentRepositoryId::new("local-models")
+        );
         assert_eq!(
             config.storage_id(),
             &DiscoveredStorageId::new("serial:usb-disk")
