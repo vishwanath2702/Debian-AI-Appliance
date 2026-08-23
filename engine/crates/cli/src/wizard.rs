@@ -1,6 +1,7 @@
 //! Wizard state for interactive DAIA appliance configuration.
 use model::{
-    ContentRepository, DiscoveredStorage, DiscoveredStorageId, InstallationIntent, StorageKind,
+    ContentRepository, ContentRepositoryId, DiscoveredStorage, DiscoveredStorageId,
+    InstallationIntent, StorageKind,
 };
 use registry::ApplianceProfileRepository;
 /// State accumulated while configuring an appliance through the wizard.
@@ -8,6 +9,7 @@ use registry::ApplianceProfileRepository;
 pub struct WizardState {
     profile_name: Option<String>,
     content_repositories: Vec<ContentRepository>,
+    selected_content_repository: Option<ContentRepositoryId>,
     discovered_storage: Vec<DiscoveredStorage>,
     selected_storage: Option<DiscoveredStorageId>,
 }
@@ -18,6 +20,7 @@ impl WizardState {
         Self {
             profile_name: None,
             content_repositories: Vec::new(),
+            selected_content_repository: None,
             discovered_storage: Vec::new(),
             selected_storage: None,
         }
@@ -42,6 +45,16 @@ impl WizardState {
     #[must_use]
     pub fn content_repositories(&self) -> &[ContentRepository] {
         &self.content_repositories
+    }
+    /// Selects a content repository available to the wizard.
+    pub fn select_content_repository(&mut self, repository_id: ContentRepositoryId) {
+        self.selected_content_repository = Some(repository_id);
+    }
+
+    /// Returns the selected content repository identifier.
+    #[must_use]
+    pub fn selected_content_repository(&self) -> Option<&ContentRepositoryId> {
+        self.selected_content_repository.as_ref()
     }
     /// Replaces the storage discovered for the current system.
     pub fn set_discovered_storage(&mut self, storage: Vec<DiscoveredStorage>) {
@@ -111,8 +124,8 @@ impl WizardConfig {
 mod tests {
     use super::WizardState;
     use model::{
-        ApplianceProfile, Capability, ContentRepository, DiscoveredStorage, DiscoveredStorageId,
-        StorageKind,
+        ApplianceProfile, Capability, ContentRepository, ContentRepositoryId, DiscoveredStorage,
+        DiscoveredStorageId, StorageKind,
     };
     use registry::ApplianceProfileRepository;
 
@@ -130,6 +143,21 @@ mod tests {
         assert_eq!(repositories.len(), 2);
         assert_eq!(repositories[0].id().as_str(), "local-models");
         assert_eq!(repositories[1].id().as_str(), "offline-docs");
+    }
+
+    #[test]
+    fn wizard_state_stores_selected_content_repository() {
+        let mut state = WizardState::new();
+
+        state.select_content_repository(ContentRepositoryId::new("local-models"));
+
+        assert_eq!(
+            state
+                .selected_content_repository()
+                .expect("selected content repository should exist")
+                .as_str(),
+            "local-models"
+        );
     }
 
     #[test]
