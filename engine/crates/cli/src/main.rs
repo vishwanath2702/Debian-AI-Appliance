@@ -392,19 +392,24 @@ fn review_wizard_state(state: &WizardState) {
     println!();
     println!("Review:");
     println!(
-        "  Profile : {}",
+        "  Profile            : {}",
         state
             .profile_name()
             .expect("profile should be selected before review")
     );
     println!(
-        "  Storage : {}",
+        "  Content repository : {}",
+        state
+            .selected_content_repository()
+            .expect("content repository should be selected before review")
+    );
+    println!(
+        "  Storage            : {}",
         state
             .selected_storage()
             .expect("storage should be selected before review")
     );
 }
-
 fn confirm_wizard_state() -> Result<bool, String> {
     print!("Continue with this configuration? [y/N]: ");
 
