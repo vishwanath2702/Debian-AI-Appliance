@@ -1,6 +1,5 @@
-use std::collections::HashSet;
-
 use serde::Deserialize;
+use std::{collections::HashSet, fs, path::Path};
 
 use model::{ContentRepository, ContentRepositoryId};
 
@@ -40,6 +39,38 @@ impl ContentRepositoryRepository {
             .into_iter()
             .map(|document| ContentRepository::new(document.id, document.description))
             .collect();
+
+        Self::from_repositories(repositories)
+    }
+
+    /// Loads content repositories from every YAML file in a directory.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RegistryError`] if the directory cannot be read, a YAML file
+    /// cannot be read or parsed, or duplicate repository identifiers are found.
+    pub fn load_directory(path: &Path) -> Result<Self, RegistryError> {
+        let mut repositories = Vec::new();
+
+        for entry in fs::read_dir(path)? {
+            let entry = entry?;
+            let path = entry.path();
+
+            if !path.is_file() {
+                continue;
+            }
+
+            let extension = path.extension().and_then(|extension| extension.to_str());
+
+            if !matches!(extension, Some("yaml" | "yml")) {
+                continue;
+            }
+
+            let yaml = fs::read_to_string(&path)?;
+            let repository = Self::load_yaml(&yaml)?;
+
+            repositories.extend(repository.repositories);
+        }
 
         Self::from_repositories(repositories)
     }
@@ -85,6 +116,49 @@ mod tests {
     use crate::RegistryError;
 
     use super::ContentRepositoryRepository;
+
+    #[test]
+    fn repository_loads_content_repositories_from_directory() {
+        let temp = tempfile::tempdir().expect("temporary directory should be created");
+
+        std::fs::write(
+            temp.path().join("models.yaml"),
+            r#"
+- id: local-models
+  description: Models available on local storage
+"#,
+        )
+        .expect("models repository should be written");
+
+        std::fs::write(
+            temp.path().join("docs.yml"),
+            r#"
+- id: offline-docs
+  description: Offline documentation
+"#,
+        )
+        .expect("documentation repository should be written");
+
+        std::fs::write(temp.path().join("ignored.txt"), "not yaml")
+            .expect("non-YAML file should be written");
+
+        let repository = ContentRepositoryRepository::load_directory(temp.path())
+            .expect("content repository directory should load");
+
+        assert_eq!(repository.repositories().len(), 2);
+
+        assert!(
+            repository
+                .repository(&ContentRepositoryId::new("local-models"))
+                .is_some()
+        );
+
+        assert!(
+            repository
+                .repository(&ContentRepositoryId::new("offline-docs"))
+                .is_some()
+        );
+    }
 
     #[test]
     fn new_repository_is_empty() {
