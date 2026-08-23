@@ -293,7 +293,6 @@ fn select_storage(state: &mut WizardState) -> Result<(), String> {
     if selectable.is_empty() {
         return Err("No selectable storage devices found.".to_owned());
     }
-
     for (index, storage) in selectable.iter().enumerate() {
         println!(
             "  {}. {}  {}  {}",
@@ -570,56 +569,10 @@ fn run_wizard() -> ExitCode {
 
     state.set_discovered_storage(storage);
 
-    let selectable = state.selectable_storage().collect::<Vec<_>>();
-
-    println!("Storage devices:");
-
-    if selectable.is_empty() {
-        println!("  No selectable storage devices found.");
-        return ExitCode::SUCCESS;
-    }
-
-    for (index, storage) in selectable.iter().enumerate() {
-        println!(
-            "  {}. {}  {}  {}",
-            index + 1,
-            storage.kind(),
-            storage.id(),
-            storage.device_path().display()
-        );
-    }
-
-    print!("Select storage target [1-{}]: ", selectable.len());
-
-    if let Err(error) = io::stdout().flush() {
-        eprintln!("Error writing prompt: {error}");
+    if let Err(error) = select_storage(&mut state) {
+        eprintln!("{error}");
         return ExitCode::FAILURE;
     }
-
-    let mut input = String::new();
-
-    if let Err(error) = io::stdin().read_line(&mut input) {
-        eprintln!("Error reading selection: {error}");
-        return ExitCode::FAILURE;
-    }
-
-    let selection = match input.trim().parse::<usize>() {
-        Ok(selection) if (1..=selectable.len()).contains(&selection) => selection,
-        _ => {
-            eprintln!("Error: invalid storage selection");
-            return ExitCode::FAILURE;
-        }
-    };
-
-    let selected_id = selectable[selection - 1].id().clone();
-    state.select_storage(selected_id);
-
-    println!(
-        "Selected storage: {}",
-        state
-            .selected_storage()
-            .expect("validated storage selection should exist")
-    );
 
     review_wizard_state(&state);
 
