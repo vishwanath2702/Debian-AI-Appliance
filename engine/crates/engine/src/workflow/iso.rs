@@ -51,20 +51,11 @@ impl LiveRootfsPreparer for SystemLiveRootfsPreparer {
         if let Some(daia_binary) = build_context.daia_binary() {
             let usr_bin = build_context.rootfs().join("usr/bin");
 
-            fs::create_dir_all(&usr_bin).map_err(BuildError::Workspace)?;
+            create_directory(&usr_bin)?;
 
             let destination = usr_bin.join("daia");
 
-            fs::copy(daia_binary, &destination).map_err(|error| {
-                BuildError::Workspace(std::io::Error::new(
-                    error.kind(),
-                    format!(
-                        "failed to copy DAIA binary `{}` to `{}`: {error}",
-                        daia_binary.display(),
-                        destination.display()
-                    ),
-                ))
-            })?;
+            copy_file(daia_binary, &destination)?;
         }
 
         clean_live_rootfs(build_context.rootfs())?;
@@ -122,6 +113,31 @@ where
     }
 }
 
+fn create_directory(path: &std::path::Path) -> Result<(), BuildError> {
+    match fs::create_dir_all(path) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
+            let status = std::process::Command::new("sudo")
+                .arg("mkdir")
+                .arg("-p")
+                .arg("--")
+                .arg(path)
+                .status()
+                .map_err(BuildError::Workspace)?;
+
+            if status.success() {
+                Ok(())
+            } else {
+                Err(BuildError::Workspace(std::io::Error::other(format!(
+                    "failed to create privileged directory `{}`",
+                    path.display()
+                ))))
+            }
+        }
+        Err(error) => Err(BuildError::Workspace(error)),
+    }
+}
+
 fn clean_directory(path: &std::path::Path) -> Result<(), BuildError> {
     if path.exists() {
         match fs::remove_dir_all(path) {
@@ -164,19 +180,44 @@ fn clean_live_rootfs(rootfs: &std::path::Path) -> Result<(), BuildError> {
     Ok(())
 }
 
+fn copy_file(source: &std::path::Path, destination: &std::path::Path) -> Result<(), BuildError> {
+    match fs::copy(source, destination) {
+        Ok(_) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
+            let status = std::process::Command::new("sudo")
+                .arg("cp")
+                .arg("--")
+                .arg(source)
+                .arg(destination)
+                .status()
+                .map_err(BuildError::Workspace)?;
+
+            if status.success() {
+                Ok(())
+            } else {
+                Err(BuildError::Workspace(std::io::Error::other(format!(
+                    "failed to copy privileged file `{}` to `{}`",
+                    source.display(),
+                    destination.display()
+                ))))
+            }
+        }
+        Err(error) => Err(BuildError::Workspace(std::io::Error::new(
+            error.kind(),
+            format!(
+                "failed to copy `{}` to `{}`: {error}",
+                source.display(),
+                destination.display()
+            ),
+        ))),
+    }
+}
+
 fn copy_directory_contents(
     source: &std::path::Path,
     destination: &std::path::Path,
 ) -> Result<(), BuildError> {
-    fs::create_dir_all(destination).map_err(|error| {
-        BuildError::Workspace(std::io::Error::new(
-            error.kind(),
-            format!(
-                "failed to create directory `{}`: {error}",
-                destination.display()
-            ),
-        ))
-    })?;
+    create_directory(destination)?;
 
     for entry in fs::read_dir(source).map_err(|error| {
         BuildError::Workspace(std::io::Error::new(
@@ -191,16 +232,7 @@ fn copy_directory_contents(
         if source_path.is_dir() {
             copy_directory_contents(&source_path, &destination_path)?;
         } else {
-            fs::copy(&source_path, &destination_path).map_err(|error| {
-                BuildError::Workspace(std::io::Error::new(
-                    error.kind(),
-                    format!(
-                        "failed to copy `{}` to `{}`: {error}",
-                        source_path.display(),
-                        destination_path.display()
-                    ),
-                ))
-            })?;
+            copy_file(&source_path, &destination_path)?;
         }
     }
 
