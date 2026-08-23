@@ -162,7 +162,7 @@ fn clean_directory(path: &std::path::Path) -> Result<(), BuildError> {
         }
     }
 
-    fs::create_dir_all(path).map_err(BuildError::Workspace)?;
+    create_directory(path)?;
 
     Ok(())
 }
