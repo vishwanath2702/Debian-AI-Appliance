@@ -1,10 +1,13 @@
 //! Wizard state for interactive DAIA appliance configuration.
-use model::{DiscoveredStorage, DiscoveredStorageId, InstallationIntent, StorageKind};
+use model::{
+    ContentRepository, DiscoveredStorage, DiscoveredStorageId, InstallationIntent, StorageKind,
+};
 use registry::ApplianceProfileRepository;
 /// State accumulated while configuring an appliance through the wizard.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct WizardState {
     profile_name: Option<String>,
+    content_repositories: Vec<ContentRepository>,
     discovered_storage: Vec<DiscoveredStorage>,
     selected_storage: Option<DiscoveredStorageId>,
 }
@@ -14,6 +17,7 @@ impl WizardState {
     pub const fn new() -> Self {
         Self {
             profile_name: None,
+            content_repositories: Vec::new(),
             discovered_storage: Vec::new(),
             selected_storage: None,
         }
@@ -28,6 +32,16 @@ impl WizardState {
     #[must_use]
     pub fn profile_name(&self) -> Option<&str> {
         self.profile_name.as_deref()
+    }
+    /// Replaces the content repositories available to the wizard.
+    pub fn set_content_repositories(&mut self, repositories: Vec<ContentRepository>) {
+        self.content_repositories = repositories;
+    }
+
+    /// Returns the content repositories available to the wizard.
+    #[must_use]
+    pub fn content_repositories(&self) -> &[ContentRepository] {
+        &self.content_repositories
     }
     /// Replaces the storage discovered for the current system.
     pub fn set_discovered_storage(&mut self, storage: Vec<DiscoveredStorage>) {
@@ -97,9 +111,26 @@ impl WizardConfig {
 mod tests {
     use super::WizardState;
     use model::{
-        ApplianceProfile, Capability, DiscoveredStorage, DiscoveredStorageId, StorageKind,
+        ApplianceProfile, Capability, ContentRepository, DiscoveredStorage, DiscoveredStorageId,
+        StorageKind,
     };
     use registry::ApplianceProfileRepository;
+
+    #[test]
+    fn wizard_state_stores_content_repositories() {
+        let mut state = WizardState::new();
+
+        state.set_content_repositories(vec![
+            ContentRepository::new("local-models", "Models available on local storage"),
+            ContentRepository::new("offline-docs", "Offline documentation"),
+        ]);
+
+        let repositories = state.content_repositories();
+
+        assert_eq!(repositories.len(), 2);
+        assert_eq!(repositories[0].id().as_str(), "local-models");
+        assert_eq!(repositories[1].id().as_str(), "offline-docs");
+    }
 
     #[test]
     fn wizard_configuration_builds_installation_intent() {
