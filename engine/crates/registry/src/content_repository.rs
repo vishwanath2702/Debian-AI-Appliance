@@ -1,8 +1,16 @@
 use std::collections::HashSet;
 
+use serde::Deserialize;
+
 use model::{ContentRepository, ContentRepositoryId};
 
 use crate::RegistryError;
+
+#[derive(Debug, Deserialize)]
+struct ContentRepositoryDocument {
+    id: String,
+    description: String,
+}
 
 /// Collection of content repositories known to the DAIA engine.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -17,6 +25,23 @@ impl ContentRepositoryRepository {
         Self {
             repositories: Vec::new(),
         }
+    }
+
+    /// Loads content repositories from YAML.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RegistryError`] if the YAML cannot be parsed or contains
+    /// duplicate repository identifiers.
+    pub fn load_yaml(yaml: &str) -> Result<Self, RegistryError> {
+        let documents: Vec<ContentRepositoryDocument> = serde_yaml::from_str(yaml)?;
+
+        let repositories = documents
+            .into_iter()
+            .map(|document| ContentRepository::new(document.id, document.description))
+            .collect();
+
+        Self::from_repositories(repositories)
     }
 
     /// Creates a repository from an existing collection of content repositories.
@@ -38,7 +63,6 @@ impl ContentRepositoryRepository {
 
         Ok(Self { repositories })
     }
-
     /// Returns every content repository.
     #[must_use]
     pub fn repositories(&self) -> &[ContentRepository] {
@@ -67,6 +91,49 @@ mod tests {
         let repository = ContentRepositoryRepository::new();
 
         assert!(repository.repositories().is_empty());
+    }
+
+    #[test]
+    fn repository_loads_content_repositories_from_yaml() {
+        let yaml = r#"
+- id: local-models
+  description: Models available on local storage
+- id: offline-docs
+  description: Offline documentation
+"#;
+
+        let repository =
+            ContentRepositoryRepository::load_yaml(yaml).expect("valid content repository YAML");
+
+        assert_eq!(repository.repositories().len(), 2);
+
+        let local_models = repository
+            .repository(&ContentRepositoryId::new("local-models"))
+            .expect("local-models repository should exist");
+
+        assert_eq!(
+            local_models.description(),
+            "Models available on local storage"
+        );
+    }
+
+    #[test]
+    fn repository_rejects_duplicate_ids_from_yaml() {
+        let yaml = r#"
+- id: local-models
+  description: First repository
+- id: local-models
+  description: Second repository
+"#;
+
+        let error = ContentRepositoryRepository::load_yaml(yaml)
+            .expect_err("duplicate repository identifiers should fail");
+
+        assert!(matches!(
+            error,
+            RegistryError::DuplicateContentRepository(id)
+                if id == ContentRepositoryId::new("local-models")
+        ));
     }
 
     #[test]
