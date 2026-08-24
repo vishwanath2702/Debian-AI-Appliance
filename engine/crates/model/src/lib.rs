@@ -179,6 +179,36 @@ impl DiscoveredContent {
     }
 }
 
+/// Describes one importable item discovered in external content.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ExternalContentItem {
+    source_id: ContentSourceId,
+    path: PathBuf,
+}
+
+impl ExternalContentItem {
+    /// Creates an importable external content item.
+    #[must_use]
+    pub fn new(source_id: ContentSourceId, path: impl Into<PathBuf>) -> Self {
+        Self {
+            source_id,
+            path: path.into(),
+        }
+    }
+
+    /// Returns the content source that supplied this item.
+    #[must_use]
+    pub const fn source_id(&self) -> &ContentSourceId {
+        &self.source_id
+    }
+
+    /// Returns the path of this importable item.
+    #[must_use]
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+}
+
 /// Stable identifier for storage discovered by DAIA.
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub struct DiscoveredStorageId(String);
@@ -596,8 +626,8 @@ mod tests {
     use super::{
         Action, AssetId, Capability, CapabilityId, ContentRepository, ContentRepositoryId,
         ContentSource, ContentSourceId, DiscoveredContent, DiscoveredStorage, DiscoveredStorageId,
-        InstallationIntent, PackageManifest, PlanStep, ProviderId, StorageKind, StorageTarget,
-        StorageTargetId,
+        ExternalContentItem, InstallationIntent, PackageManifest, PlanStep, ProviderId,
+        StorageKind, StorageTarget, StorageTargetId,
     };
     use std::path::{Path, PathBuf};
 
@@ -622,6 +652,16 @@ mod tests {
 
         assert_eq!(content.source_id(), &ContentSourceId::new("documents-usb"));
         assert_eq!(content.path(), Path::new("/media/usb/daia-content"));
+    }
+    #[test]
+    fn external_content_item_exposes_source_and_path() {
+        let item = ExternalContentItem::new(
+            ContentSourceId::new("documents-usb"),
+            "/media/usb/daia-content/manual.pdf",
+        );
+
+        assert_eq!(item.source_id(), &ContentSourceId::new("documents-usb"));
+        assert_eq!(item.path(), Path::new("/media/usb/daia-content/manual.pdf"));
     }
 
     #[test]
