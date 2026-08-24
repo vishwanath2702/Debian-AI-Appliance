@@ -4,7 +4,9 @@ use engine::{
     BootstrapConfig, BuildContext, DryRunInstallationExecutor, Engine, InstallationOperation,
     SystemInstallationOperationExecutor,
 };
-use inspector::{DebianIsoInspector, IsoInspector, LinuxStorageInspector};
+use inspector::{
+    DebianIsoInspector, IsoInspector, LinuxStorageInspector, LocalFilesystemContentInspector,
+};
 use model::{Capability, Plan};
 use registry::{ContentRepositoryRepository, PackageRepository};
 use std::env;
@@ -630,6 +632,38 @@ fn run_wizard() -> ExitCode {
         return ExitCode::FAILURE;
     }
 
+    let selected_repository_id = state
+        .selected_content_repository()
+        .expect("content repository should be selected")
+        .clone();
+
+    let sources = state
+        .content_repositories()
+        .iter()
+        .find(|repository| repository.id() == &selected_repository_id)
+        .expect("selected content repository should exist")
+        .sources()
+        .to_vec();
+
+    let content_inspector = LocalFilesystemContentInspector::new();
+    let mut discovered_content = Vec::new();
+
+    for source in &sources {
+        let mut discovered = match engine.discover_content(source, &content_inspector) {
+            Ok(discovered) => discovered,
+            Err(error) => {
+                eprintln!(
+                    "Error discovering content from source \"{}\": {error}",
+                    source.id()
+                );
+                return ExitCode::FAILURE;
+            }
+        };
+
+        discovered_content.append(&mut discovered);
+    }
+
+    state.set_discovered_content(discovered_content);
     let inspector = LinuxStorageInspector::new();
 
     let storage = match engine.discover_storage(&inspector) {
