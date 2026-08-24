@@ -1,7 +1,7 @@
 use serde::Deserialize;
 use std::{collections::HashSet, fs, path::Path};
 
-use model::{ContentRepository, ContentRepositoryId};
+use model::{ContentRepository, ContentRepositoryId, ContentSource};
 
 use crate::RegistryError;
 
@@ -9,8 +9,15 @@ use crate::RegistryError;
 struct ContentRepositoryDocument {
     id: String,
     description: String,
+    #[serde(default)]
+    sources: Vec<ContentSourceDocument>,
 }
 
+#[derive(Debug, Deserialize)]
+struct ContentSourceDocument {
+    id: String,
+    locator: String,
+}
 /// Collection of content repositories known to the DAIA engine.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct ContentRepositoryRepository {
@@ -37,7 +44,19 @@ impl ContentRepositoryRepository {
 
         let repositories = documents
             .into_iter()
-            .map(|document| ContentRepository::new(document.id, document.description))
+            .map(|document| {
+                let repository_id = ContentRepositoryId::new(&document.id);
+
+                let sources = document
+                    .sources
+                    .into_iter()
+                    .map(|source| {
+                        ContentSource::new(source.id, repository_id.clone(), source.locator)
+                    })
+                    .collect();
+
+                ContentRepository::with_sources(document.id, document.description, sources)
+            })
             .collect();
 
         Self::from_repositories(repositories)
@@ -117,6 +136,34 @@ mod tests {
 
     use super::ContentRepositoryRepository;
 
+    #[test]
+    fn repository_loads_content_sources_from_yaml() {
+        let yaml = r#"
+- id: local-models
+  description: Models available on local storage
+  sources:
+    - id: local-models-directory
+      locator: /media/models
+"#;
+
+        let repository =
+            ContentRepositoryRepository::load_yaml(yaml).expect("valid content repository YAML");
+
+        let local_models = repository
+            .repository(&ContentRepositoryId::new("local-models"))
+            .expect("local-models repository should exist");
+
+        assert_eq!(local_models.sources().len(), 1);
+
+        let source = &local_models.sources()[0];
+
+        assert_eq!(source.id().as_str(), "local-models-directory");
+        assert_eq!(
+            source.repository(),
+            &ContentRepositoryId::new("local-models")
+        );
+        assert_eq!(source.locator(), "/media/models");
+    }
     #[test]
     fn repository_content_repository_directory_contains_local_models() {
         let repository_directory = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
