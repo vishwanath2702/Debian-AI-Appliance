@@ -224,20 +224,28 @@ impl fmt::Display for ExternalContentItemId {
 /// Describes one importable item discovered in external content.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ExternalContentItem {
+    id: ExternalContentItemId,
     source_id: ContentSourceId,
     path: PathBuf,
 }
-
 impl ExternalContentItem {
     /// Creates an importable external content item.
     #[must_use]
     pub fn new(source_id: ContentSourceId, path: impl Into<PathBuf>) -> Self {
+        let path = path.into();
+        let id = ExternalContentItemId::new(format!("{}:{}", source_id, path.display()));
+
         Self {
+            id,
             source_id,
-            path: path.into(),
+            path,
         }
     }
-
+    /// Returns the stable external content item identifier.
+    #[must_use]
+    pub const fn id(&self) -> &ExternalContentItemId {
+        &self.id
+    }
     /// Returns the content source that supplied this item.
     #[must_use]
     pub const fn source_id(&self) -> &ContentSourceId {
@@ -725,6 +733,10 @@ mod tests {
         let item = ExternalContentItem::new(
             ContentSourceId::new("documents-usb"),
             "/media/usb/daia-content/manual.pdf",
+        );
+        assert_eq!(
+            item.id(),
+            &ExternalContentItemId::new("documents-usb:/media/usb/daia-content/manual.pdf")
         );
 
         assert_eq!(item.source_id(), &ContentSourceId::new("documents-usb"));
