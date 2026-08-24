@@ -1,7 +1,7 @@
 //! Wizard state for interactive DAIA appliance configuration.
 use model::{
-    ContentRepository, ContentRepositoryId, DiscoveredStorage, DiscoveredStorageId,
-    InstallationIntent, StorageKind,
+    ContentRepository, ContentRepositoryId, DiscoveredContent, DiscoveredStorage,
+    DiscoveredStorageId, InstallationIntent, StorageKind,
 };
 use registry::ApplianceProfileRepository;
 /// State accumulated while configuring an appliance through the wizard.
@@ -10,6 +10,7 @@ pub struct WizardState {
     profile_name: Option<String>,
     content_repositories: Vec<ContentRepository>,
     selected_content_repository: Option<ContentRepositoryId>,
+    discovered_content: Vec<DiscoveredContent>,
     discovered_storage: Vec<DiscoveredStorage>,
     selected_storage: Option<DiscoveredStorageId>,
 }
@@ -21,11 +22,11 @@ impl WizardState {
             profile_name: None,
             content_repositories: Vec::new(),
             selected_content_repository: None,
+            discovered_content: Vec::new(),
             discovered_storage: Vec::new(),
             selected_storage: None,
         }
     }
-
     /// Sets the selected appliance profile.
     pub fn set_profile_name(&mut self, profile_name: impl Into<String>) {
         self.profile_name = Some(profile_name.into());
@@ -55,6 +56,16 @@ impl WizardState {
     #[must_use]
     pub fn selected_content_repository(&self) -> Option<&ContentRepositoryId> {
         self.selected_content_repository.as_ref()
+    }
+    /// Replaces the external content discovered for the current wizard session.
+    pub fn set_discovered_content(&mut self, content: Vec<DiscoveredContent>) {
+        self.discovered_content = content;
+    }
+
+    /// Returns external content discovered for the current wizard session.
+    #[must_use]
+    pub fn discovered_content(&self) -> &[DiscoveredContent] {
+        &self.discovered_content
     }
     /// Replaces the storage discovered for the current system.
     pub fn set_discovered_storage(&mut self, storage: Vec<DiscoveredStorage>) {
@@ -129,10 +140,31 @@ impl WizardConfig {
 mod tests {
     use super::WizardState;
     use model::{
-        ApplianceProfile, Capability, ContentRepository, ContentRepositoryId, DiscoveredStorage,
-        DiscoveredStorageId, StorageKind,
+        ApplianceProfile, Capability, ContentRepository, ContentRepositoryId, ContentSourceId,
+        DiscoveredContent, DiscoveredStorage, DiscoveredStorageId, StorageKind,
     };
     use registry::ApplianceProfileRepository;
+    #[test]
+    fn wizard_state_stores_discovered_content() {
+        let mut state = WizardState::new();
+
+        state.set_discovered_content(vec![DiscoveredContent::new(
+            ContentSourceId::new("local-models-directory"),
+            "/media/daia/models",
+        )]);
+
+        let discovered = state.discovered_content();
+
+        assert_eq!(discovered.len(), 1);
+        assert_eq!(
+            discovered[0].source_id(),
+            &ContentSourceId::new("local-models-directory")
+        );
+        assert_eq!(
+            discovered[0].path(),
+            std::path::Path::new("/media/daia/models")
+        );
+    }
 
     #[test]
     fn wizard_state_stores_content_repositories() {
