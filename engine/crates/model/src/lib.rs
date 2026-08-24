@@ -198,6 +198,29 @@ impl DiscoveredContent {
     }
 }
 
+/// Stable identifier for an importable external content item.
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub struct ExternalContentItemId(String);
+
+impl ExternalContentItemId {
+    /// Creates an external content item identifier.
+    #[must_use]
+    pub fn new(value: impl Into<String>) -> Self {
+        Self(value.into())
+    }
+
+    /// Returns the external content item identifier as a string slice.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl fmt::Display for ExternalContentItemId {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.as_str())
+    }
+}
 /// Describes one importable item discovered in external content.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ExternalContentItem {
@@ -645,10 +668,18 @@ mod tests {
     use super::{
         Action, AssetId, Capability, CapabilityId, ContentRepository, ContentRepositoryId,
         ContentSource, ContentSourceId, DiscoveredContent, DiscoveredStorage, DiscoveredStorageId,
-        ExternalContentItem, InstallationIntent, PackageManifest, PlanStep, ProviderId,
-        StorageKind, StorageTarget, StorageTargetId,
+        ExternalContentItem, ExternalContentItemId, InstallationIntent, PackageManifest, PlanStep,
+        ProviderId, StorageKind, StorageTarget, StorageTargetId,
     };
     use std::path::{Path, PathBuf};
+
+    #[test]
+    fn external_content_item_id_exposes_value() {
+        let id = ExternalContentItemId::new("local-models-directory:model.gguf");
+
+        assert_eq!(id.as_str(), "local-models-directory:model.gguf");
+        assert_eq!(id.to_string(), "local-models-directory:model.gguf");
+    }
 
     #[test]
     fn content_repository_exposes_sources() {
