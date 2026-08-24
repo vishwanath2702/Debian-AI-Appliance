@@ -1,6 +1,6 @@
 //! External content discovery abstraction.
 
-use model::{ContentSource, DiscoveredContent};
+use model::{ContentSource, DiscoveredContent, ExternalContentItem};
 
 use crate::ContentInspectError;
 
@@ -15,4 +15,13 @@ pub trait ContentInspector {
         &self,
         source: &ContentSource,
     ) -> Result<Vec<DiscoveredContent>, ContentInspectError>;
+    /// Enumerates importable items from discovered content.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`ContentInspectError`] if the discovered content cannot be enumerated.
+    fn items(
+        &self,
+        content: &DiscoveredContent,
+    ) -> Result<Vec<ExternalContentItem>, ContentInspectError>;
 }

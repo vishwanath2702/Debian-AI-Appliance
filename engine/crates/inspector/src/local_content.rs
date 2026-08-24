@@ -2,7 +2,7 @@
 
 use std::path::Path;
 
-use model::{ContentSource, DiscoveredContent};
+use model::{ContentSource, DiscoveredContent, ExternalContentItem};
 
 use crate::{ContentInspectError, ContentInspector};
 
@@ -33,6 +33,12 @@ impl ContentInspector for LocalFilesystemContentInspector {
             source.id().clone(),
             path.to_path_buf(),
         )])
+    }
+    fn items(
+        &self,
+        _content: &DiscoveredContent,
+    ) -> Result<Vec<ExternalContentItem>, ContentInspectError> {
+        Ok(Vec::new())
     }
 }
 
