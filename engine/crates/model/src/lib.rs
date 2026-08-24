@@ -149,6 +149,36 @@ impl ContentSource {
     }
 }
 
+/// Describes content discovered from a configured DAIA content source.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DiscoveredContent {
+    source_id: ContentSourceId,
+    path: PathBuf,
+}
+
+impl DiscoveredContent {
+    /// Creates discovered content.
+    #[must_use]
+    pub fn new(source_id: ContentSourceId, path: impl Into<PathBuf>) -> Self {
+        Self {
+            source_id,
+            path: path.into(),
+        }
+    }
+
+    /// Returns the configured source that supplied the content.
+    #[must_use]
+    pub const fn source_id(&self) -> &ContentSourceId {
+        &self.source_id
+    }
+
+    /// Returns the discovered content path.
+    #[must_use]
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+}
+
 /// Stable identifier for storage discovered by DAIA.
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub struct DiscoveredStorageId(String);
@@ -565,10 +595,11 @@ impl InstallationIntent {
 mod tests {
     use super::{
         Action, AssetId, Capability, CapabilityId, ContentRepository, ContentRepositoryId,
-        ContentSource, ContentSourceId, DiscoveredStorage, DiscoveredStorageId, InstallationIntent,
-        PackageManifest, PlanStep, ProviderId, StorageKind, StorageTarget, StorageTargetId,
+        ContentSource, ContentSourceId, DiscoveredContent, DiscoveredStorage, DiscoveredStorageId,
+        InstallationIntent, PackageManifest, PlanStep, ProviderId, StorageKind, StorageTarget,
+        StorageTargetId,
     };
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
 
     #[test]
     fn installation_intent_exposes_profile_and_storage() {
@@ -580,6 +611,17 @@ mod tests {
             intent.storage_id(),
             &DiscoveredStorageId::new("serial:usb-disk")
         );
+    }
+
+    #[test]
+    fn discovered_content_exposes_source_and_path() {
+        let content = DiscoveredContent::new(
+            ContentSourceId::new("documents-usb"),
+            "/media/usb/daia-content",
+        );
+
+        assert_eq!(content.source_id(), &ContentSourceId::new("documents-usb"));
+        assert_eq!(content.path(), Path::new("/media/usb/daia-content"));
     }
 
     #[test]
