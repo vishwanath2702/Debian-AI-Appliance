@@ -36,9 +36,24 @@ impl ContentInspector for LocalFilesystemContentInspector {
     }
     fn items(
         &self,
-        _content: &DiscoveredContent,
+        content: &DiscoveredContent,
     ) -> Result<Vec<ExternalContentItem>, ContentInspectError> {
-        Ok(Vec::new())
+        let mut items = Vec::new();
+
+        for entry in std::fs::read_dir(content.path())? {
+            let entry = entry?;
+
+            if !entry.file_type()?.is_file() {
+                continue;
+            }
+
+            items.push(ExternalContentItem::new(
+                content.source_id().clone(),
+                entry.path(),
+            ));
+        }
+
+        Ok(items)
     }
 }
 
@@ -50,6 +65,47 @@ mod tests {
     use super::LocalFilesystemContentInspector;
     use crate::ContentInspector;
 
+    #[test]
+    fn enumerates_immediate_regular_files() {
+        let directory = tempdir().expect("temporary directory should be created");
+
+        let first = directory.path().join("model.gguf");
+        let second = directory.path().join("manual.pdf");
+        let nested = directory.path().join("nested");
+
+        std::fs::write(&first, "model").expect("first content file should be written");
+        std::fs::write(&second, "manual").expect("second content file should be written");
+        std::fs::create_dir(&nested).expect("nested directory should be created");
+        std::fs::write(nested.join("ignored.txt"), "nested")
+            .expect("nested content file should be written");
+
+        let source = ContentSource::new(
+            "local-models",
+            ContentRepositoryId::new("models"),
+            directory.path().to_string_lossy(),
+        );
+
+        let inspector = LocalFilesystemContentInspector::new();
+
+        let discovered = inspector
+            .inspect(&source)
+            .expect("local content inspection should succeed");
+
+        let mut items = inspector
+            .items(&discovered[0])
+            .expect("local content enumeration should succeed");
+
+        items.sort_by(|left, right| left.path().cmp(right.path()));
+
+        let mut expected = vec![first, second];
+        expected.sort();
+
+        assert_eq!(items.len(), 2);
+        assert_eq!(items[0].source_id(), source.id());
+        assert_eq!(items[1].source_id(), source.id());
+        assert_eq!(items[0].path(), expected[0].as_path());
+        assert_eq!(items[1].path(), expected[1].as_path());
+    }
     #[test]
     fn discovers_existing_local_content_path() {
         let directory = tempdir().expect("temporary directory should be created");
