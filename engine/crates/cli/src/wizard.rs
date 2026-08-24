@@ -1,7 +1,8 @@
 //! Wizard state for interactive DAIA appliance configuration.
 use model::{
     ContentRepository, ContentRepositoryId, DiscoveredContent, DiscoveredStorage,
-    DiscoveredStorageId, ExternalContentItem, InstallationIntent, StorageKind,
+    DiscoveredStorageId, ExternalContentItem, ExternalContentItemId, InstallationIntent,
+    StorageKind,
 };
 use registry::ApplianceProfileRepository;
 /// State accumulated while configuring an appliance through the wizard.
@@ -12,6 +13,7 @@ pub struct WizardState {
     selected_content_repository: Option<ContentRepositoryId>,
     discovered_content: Vec<DiscoveredContent>,
     external_content_items: Vec<ExternalContentItem>,
+    selected_external_content: Vec<ExternalContentItemId>,
     discovered_storage: Vec<DiscoveredStorage>,
     selected_storage: Option<DiscoveredStorageId>,
 }
@@ -25,6 +27,7 @@ impl WizardState {
             selected_content_repository: None,
             discovered_content: Vec::new(),
             external_content_items: Vec::new(),
+            selected_external_content: Vec::new(),
             discovered_storage: Vec::new(),
             selected_storage: None,
         }
@@ -78,6 +81,16 @@ impl WizardState {
     #[must_use]
     pub fn external_content_items(&self) -> &[ExternalContentItem] {
         &self.external_content_items
+    }
+    /// Replaces the external content selected for import.
+    pub fn select_external_content(&mut self, items: Vec<ExternalContentItemId>) {
+        self.selected_external_content = items;
+    }
+
+    /// Returns the external content selected for import.
+    #[must_use]
+    pub fn selected_external_content(&self) -> &[ExternalContentItemId] {
+        &self.selected_external_content
     }
     /// Replaces the storage discovered for the current system.
     pub fn set_discovered_storage(&mut self, storage: Vec<DiscoveredStorage>) {
@@ -154,9 +167,31 @@ mod tests {
     use model::{
         ApplianceProfile, Capability, ContentRepository, ContentRepositoryId, ContentSourceId,
         DiscoveredContent, DiscoveredStorage, DiscoveredStorageId, ExternalContentItem,
-        StorageKind,
+        ExternalContentItemId, StorageKind,
     };
     use registry::ApplianceProfileRepository;
+
+    #[test]
+    fn wizard_state_stores_selected_external_content() {
+        let mut state = WizardState::new();
+
+        state.select_external_content(vec![
+            ExternalContentItemId::new("local-models-directory:/media/daia/models/model.gguf"),
+            ExternalContentItemId::new("local-models-directory:/media/daia/models/tokenizer.json"),
+        ]);
+
+        let selected = state.selected_external_content();
+
+        assert_eq!(selected.len(), 2);
+        assert_eq!(
+            selected[0],
+            ExternalContentItemId::new("local-models-directory:/media/daia/models/model.gguf")
+        );
+        assert_eq!(
+            selected[1],
+            ExternalContentItemId::new("local-models-directory:/media/daia/models/tokenizer.json")
+        );
+    }
 
     #[test]
     fn wizard_state_stores_external_content_items() {
