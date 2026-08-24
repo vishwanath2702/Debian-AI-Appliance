@@ -25,10 +25,11 @@ pub use bootstrap::BootstrapConfig;
 pub use bootstrapper::Bootstrapper;
 pub use context::BuildContext;
 use executor::{ExecuteError, RootfsRunError};
-use inspector::{StorageInspectError, StorageInspector};
+use inspector::{ContentInspectError, ContentInspector, StorageInspectError, StorageInspector};
 pub use mmdebstrap::{MmdebstrapBootstrapper, MmdebstrapError};
 use model::{
-    ApplianceProfile, Capability, DiscoveredStorage, InstallationIntent, Plan, StorageKind,
+    ApplianceProfile, Capability, ContentSource, DiscoveredContent, DiscoveredStorage,
+    InstallationIntent, Plan, StorageKind,
 };
 use planner::{PlanError, Planner};
 use registry::{PackageRepository, Registry};
@@ -186,6 +187,22 @@ impl Engine {
         self.plan_profile(profile)
     }
 
+    /// Discovers external content using the supplied content inspector.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`ContentInspectError`] if content discovery fails.
+    pub fn discover_content<I>(
+        &self,
+        source: &ContentSource,
+        inspector: &I,
+    ) -> Result<Vec<DiscoveredContent>, ContentInspectError>
+    where
+        I: ContentInspector,
+    {
+        inspector.inspect(source)
+    }
+
     /// Discovers storage devices using the supplied storage inspector.
     ///
     /// # Errors
@@ -313,20 +330,42 @@ impl Engine {
 #[cfg(test)]
 mod tests {
 
-    use inspector::{StorageInspectError, StorageInspector};
+    use inspector::{ContentInspectError, ContentInspector, StorageInspectError, StorageInspector};
     use model::{
-        Action, ApplianceProfile, Capability, CapabilityId, DiscoveredStorage, DiscoveredStorageId,
-        InstallationIntent, PlanStep, Provider, ProviderId, StorageKind,
+        Action, ApplianceProfile, Capability, CapabilityId, ContentRepositoryId, DiscoveredStorage,
+        DiscoveredStorageId, InstallationIntent, PlanStep, Provider, ProviderId, StorageKind,
     };
     use registry::{PackageRepository, Registry};
 
     use super::{
-        BootstrapConfig, BuildContext, BuildError, DryRunInstallationExecutor, Engine,
-        InstallationExecutor, InstallationOperation, InstallationOperationExecutor,
-        InstallationPlan, PreparedInstallation, RootfsInstallationPlanExecutor, RootfsRunError,
-        SystemInstallationOperationExecutor, default_installation_mounts,
-        default_installation_partitions,
+        BootstrapConfig, BuildContext, BuildError, ContentSource, DiscoveredContent,
+        DryRunInstallationExecutor, Engine, InstallationExecutor, InstallationOperation,
+        InstallationOperationExecutor, InstallationPlan, PreparedInstallation,
+        RootfsInstallationPlanExecutor, RootfsRunError, SystemInstallationOperationExecutor,
+        default_installation_mounts, default_installation_partitions,
     };
+
+    struct TestContentInspector;
+
+    impl ContentInspector for TestContentInspector {
+        fn inspect(
+            &self,
+            source: &ContentSource,
+        ) -> Result<Vec<DiscoveredContent>, ContentInspectError> {
+            Ok(vec![DiscoveredContent::new(
+                source.id().clone(),
+                "/media/daia/models",
+            )])
+        }
+
+        fn items(
+            &self,
+            _content: &DiscoveredContent,
+        ) -> Result<Vec<model::ExternalContentItem>, ContentInspectError> {
+            Ok(Vec::new())
+        }
+    }
+
     struct TestStorageInspector;
 
     impl StorageInspector for TestStorageInspector {
@@ -914,6 +953,28 @@ mod tests {
 
         assert_eq!(plans.len(), 1);
         assert_eq!(plans[0].capability, Capability::new("desktop"));
+    }
+
+    #[test]
+    fn discovers_content_through_inspector() {
+        let engine = Engine::from_registry(desktop_registry());
+
+        let source = ContentSource::new(
+            "local-models-directory",
+            ContentRepositoryId::new("local-models"),
+            "/media/daia/models",
+        );
+
+        let discovered = engine
+            .discover_content(&source, &TestContentInspector)
+            .expect("content discovery should succeed");
+
+        assert_eq!(discovered.len(), 1);
+        assert_eq!(discovered[0].source_id(), source.id());
+        assert_eq!(
+            discovered[0].path(),
+            std::path::Path::new("/media/daia/models")
+        );
     }
 
     #[test]
