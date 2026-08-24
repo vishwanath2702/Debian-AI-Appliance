@@ -29,7 +29,7 @@ use inspector::{ContentInspectError, ContentInspector, StorageInspectError, Stor
 pub use mmdebstrap::{MmdebstrapBootstrapper, MmdebstrapError};
 use model::{
     ApplianceProfile, Capability, ContentSource, DiscoveredContent, DiscoveredStorage,
-    InstallationIntent, Plan, StorageKind,
+    ExternalContentItem, InstallationIntent, Plan, StorageKind,
 };
 use planner::{PlanError, Planner};
 use registry::{PackageRepository, Registry};
@@ -202,6 +202,21 @@ impl Engine {
     {
         inspector.inspect(source)
     }
+    /// Enumerates importable items from discovered external content.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`ContentInspectError`] if content enumeration fails.
+    pub fn external_content_items<I>(
+        &self,
+        content: &DiscoveredContent,
+        inspector: &I,
+    ) -> Result<Vec<ExternalContentItem>, ContentInspectError>
+    where
+        I: ContentInspector,
+    {
+        inspector.items(content)
+    }
 
     /// Discovers storage devices using the supplied storage inspector.
     ///
@@ -332,8 +347,9 @@ mod tests {
 
     use inspector::{ContentInspectError, ContentInspector, StorageInspectError, StorageInspector};
     use model::{
-        Action, ApplianceProfile, Capability, CapabilityId, ContentRepositoryId, DiscoveredStorage,
-        DiscoveredStorageId, InstallationIntent, PlanStep, Provider, ProviderId, StorageKind,
+        Action, ApplianceProfile, Capability, CapabilityId, ContentRepositoryId, ContentSourceId,
+        DiscoveredStorage, DiscoveredStorageId, InstallationIntent, PlanStep, Provider, ProviderId,
+        StorageKind,
     };
     use registry::{PackageRepository, Registry};
 
@@ -360,12 +376,14 @@ mod tests {
 
         fn items(
             &self,
-            _content: &DiscoveredContent,
+            content: &DiscoveredContent,
         ) -> Result<Vec<model::ExternalContentItem>, ContentInspectError> {
-            Ok(Vec::new())
+            Ok(vec![model::ExternalContentItem::new(
+                content.source_id().clone(),
+                "/media/daia/models/model.gguf",
+            )])
         }
     }
-
     struct TestStorageInspector;
 
     impl StorageInspector for TestStorageInspector {
@@ -443,6 +461,27 @@ mod tests {
             self.operations.push(operation.clone());
             Ok(())
         }
+    }
+
+    #[test]
+    fn enumerates_external_content_items_through_inspector() {
+        let engine = Engine::from_registry(desktop_registry());
+
+        let content = DiscoveredContent::new(
+            ContentSourceId::new("local-models-directory"),
+            "/media/daia/models",
+        );
+
+        let items = engine
+            .external_content_items(&content, &TestContentInspector)
+            .expect("content item enumeration should succeed");
+
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].source_id(), content.source_id());
+        assert_eq!(
+            items[0].path(),
+            std::path::Path::new("/media/daia/models/model.gguf")
+        );
     }
 
     #[test]
