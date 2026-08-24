@@ -664,8 +664,27 @@ fn run_wizard() -> ExitCode {
     }
 
     state.set_discovered_content(discovered_content);
-    let inspector = LinuxStorageInspector::new();
 
+    let mut external_content_items = Vec::new();
+
+    for content in state.discovered_content() {
+        let mut items = match engine.external_content_items(content, &content_inspector) {
+            Ok(items) => items,
+            Err(error) => {
+                eprintln!(
+                    "Error enumerating external content from \"{}\": {error}",
+                    content.path().display()
+                );
+                return ExitCode::FAILURE;
+            }
+        };
+
+        external_content_items.append(&mut items);
+    }
+
+    state.set_external_content_items(external_content_items);
+
+    let inspector = LinuxStorageInspector::new();
     let storage = match engine.discover_storage(&inspector) {
         Ok(storage) => storage,
         Err(error) => {
