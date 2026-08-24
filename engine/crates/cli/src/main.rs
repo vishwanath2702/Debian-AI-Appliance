@@ -340,6 +340,55 @@ fn select_content_repository(state: &mut WizardState) -> Result<(), String> {
 
     Ok(())
 }
+
+fn select_external_content(state: &mut WizardState) -> Result<(), String> {
+    let items = state.external_content_items();
+
+    if items.is_empty() {
+        return Ok(());
+    }
+
+    println!();
+    println!("External content:");
+
+    for (index, item) in items.iter().enumerate() {
+        println!("  {}. {}  {}", index + 1, item.id(), item.path().display());
+    }
+
+    print!("Select external content [1-{}]: ", items.len());
+
+    io::stdout()
+        .flush()
+        .map_err(|error| format!("Error writing prompt: {error}"))?;
+
+    let mut input = String::new();
+
+    io::stdin()
+        .read_line(&mut input)
+        .map_err(|error| format!("Error reading selection: {error}"))?;
+
+    let selection = input
+        .trim()
+        .parse::<usize>()
+        .ok()
+        .filter(|selection| (1..=items.len()).contains(selection))
+        .ok_or_else(|| "Error: invalid external content selection".to_owned())?;
+
+    let selected_id = items[selection - 1].id().clone();
+
+    state.select_external_content(vec![selected_id]);
+
+    println!(
+        "Selected external content: {}",
+        state
+            .selected_external_content()
+            .first()
+            .expect("validated external content selection should exist")
+    );
+
+    Ok(())
+}
+
 fn select_storage(state: &mut WizardState) -> Result<(), String> {
     let selectable = state.selectable_storage().collect::<Vec<_>>();
 
@@ -683,6 +732,11 @@ fn run_wizard() -> ExitCode {
     }
 
     state.set_external_content_items(external_content_items);
+
+    if let Err(error) = select_external_content(&mut state) {
+        eprintln!("{error}");
+        return ExitCode::FAILURE;
+    }
 
     let inspector = LinuxStorageInspector::new();
     let storage = match engine.discover_storage(&inspector) {
