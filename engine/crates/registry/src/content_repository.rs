@@ -180,6 +180,16 @@ mod tests {
             local_models.description(),
             "Models available on local storage"
         );
+        assert_eq!(local_models.sources().len(), 1);
+
+        let source = &local_models.sources()[0];
+
+        assert_eq!(source.id().as_str(), "local-models-directory");
+        assert_eq!(
+            source.repository(),
+            &ContentRepositoryId::new("local-models")
+        );
+        assert_eq!(source.locator(), "/media/daia/models");
     }
 
     #[test]

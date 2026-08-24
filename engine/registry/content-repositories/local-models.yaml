@@ -1,2 +1,5 @@
 - id: local-models
   description: Models available on local storage
+  sources:
+    - id: local-models-directory
+      locator: /media/daia/models
