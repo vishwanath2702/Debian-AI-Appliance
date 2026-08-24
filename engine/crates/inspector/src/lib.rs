@@ -1,5 +1,7 @@
 //! Inspection and identification of Debian installation media.
 
+mod content;
+mod content_error;
 mod debian;
 mod error;
 mod linux_storage;
@@ -12,6 +14,8 @@ use std::path::{Path, PathBuf};
 
 use model::DiscoveredStorage;
 
+pub use content::ContentInspector;
+pub use content_error::ContentInspectError;
 pub use debian::{DebianIsoInspector, parse_disk_info};
 pub use error::InspectError;
 pub use linux_storage::LinuxStorageInspector;
