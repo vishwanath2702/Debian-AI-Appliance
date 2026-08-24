@@ -58,18 +58,37 @@ impl fmt::Display for ContentRepositoryId {
 pub struct ContentRepository {
     id: ContentRepositoryId,
     description: String,
+    sources: Vec<ContentSource>,
 }
 
 impl ContentRepository {
+    /// Returns the configured content sources.
+    #[must_use]
+    pub fn sources(&self) -> &[ContentSource] {
+        &self.sources
+    }
+    /// Creates a content repository with configured content sources.
+    #[must_use]
+    pub fn with_sources(
+        id: impl Into<String>,
+        description: impl Into<String>,
+        sources: Vec<ContentSource>,
+    ) -> Self {
+        Self {
+            id: ContentRepositoryId::new(id),
+            description: description.into(),
+            sources,
+        }
+    }
     /// Creates a content repository.
     #[must_use]
     pub fn new(id: impl Into<String>, description: impl Into<String>) -> Self {
         Self {
             id: ContentRepositoryId::new(id),
             description: description.into(),
+            sources: Vec::new(),
         }
     }
-
     /// Returns the repository identifier.
     #[must_use]
     pub const fn id(&self) -> &ContentRepositoryId {
@@ -630,6 +649,23 @@ mod tests {
         StorageKind, StorageTarget, StorageTargetId,
     };
     use std::path::{Path, PathBuf};
+
+    #[test]
+    fn content_repository_exposes_sources() {
+        let source = ContentSource::new(
+            "local-models-directory",
+            ContentRepositoryId::new("local-models"),
+            "/media/models",
+        );
+
+        let repository = ContentRepository::with_sources(
+            "local-models",
+            "Models available on local storage",
+            vec![source.clone()],
+        );
+
+        assert_eq!(repository.sources(), &[source]);
+    }
 
     #[test]
     fn installation_intent_exposes_profile_and_storage() {
