@@ -236,7 +236,14 @@ impl Engine {
     {
         inspector.items(content)
     }
-
+    /// Prepares confirmed external content for later import.
+    #[must_use]
+    pub const fn prepare_content_import(
+        &self,
+        intent: ContentImportIntent,
+    ) -> PreparedContentImport {
+        PreparedContentImport::new(intent)
+    }
     /// Discovers storage devices using the supplied storage inspector.
     ///
     /// # Errors
@@ -481,6 +488,20 @@ mod tests {
             self.operations.push(operation.clone());
             Ok(())
         }
+    }
+
+    #[test]
+    fn prepares_content_import_intent() {
+        let engine = Engine::from_registry(desktop_registry());
+
+        let intent = ContentImportIntent::new(vec![
+            ExternalContentItemId::new("local-models-directory:/media/daia/models/model.gguf"),
+            ExternalContentItemId::new("local-models-directory:/media/daia/models/tokenizer.json"),
+        ]);
+
+        let prepared = engine.prepare_content_import(intent.clone());
+
+        assert_eq!(prepared.intent(), &intent);
     }
 
     #[test]
