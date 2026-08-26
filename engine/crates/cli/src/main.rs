@@ -439,6 +439,7 @@ fn select_storage(state: &mut WizardState) -> Result<(), String> {
 
     Ok(())
 }
+
 fn review_wizard_state(state: &WizardState) {
     println!();
     println!("Review:");
@@ -454,6 +455,16 @@ fn review_wizard_state(state: &WizardState) {
             .selected_content_repository()
             .expect("content repository should be selected before review")
     );
+
+    if state.selected_external_content().is_empty() {
+        println!("  External content   : none");
+    } else {
+        println!("  External content   :");
+        for item_id in state.selected_external_content() {
+            println!("    {item_id}");
+        }
+    }
+
     println!(
         "  Storage            : {}",
         state
@@ -461,6 +472,7 @@ fn review_wizard_state(state: &WizardState) {
             .expect("storage should be selected before review")
     );
 }
+
 fn confirm_wizard_state() -> Result<bool, String> {
     print!("Continue with this configuration? [y/N]: ");
 
