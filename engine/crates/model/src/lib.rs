@@ -641,6 +641,26 @@ pub struct Plan {
     pub steps: Vec<PlanStep>,
 }
 
+/// Describes confirmed external content selected for import.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ContentImportIntent {
+    items: Vec<ExternalContentItemId>,
+}
+
+impl ContentImportIntent {
+    /// Creates a confirmed content import intent.
+    #[must_use]
+    pub const fn new(items: Vec<ExternalContentItemId>) -> Self {
+        Self { items }
+    }
+
+    /// Returns the external content selected for import.
+    #[must_use]
+    pub fn items(&self) -> &[ExternalContentItemId] {
+        &self.items
+    }
+}
+
 /// Describes a confirmed DAIA installation intent.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct InstallationIntent {
@@ -674,13 +694,30 @@ impl InstallationIntent {
 #[cfg(test)]
 mod tests {
     use super::{
-        Action, AssetId, Capability, CapabilityId, ContentRepository, ContentRepositoryId,
-        ContentSource, ContentSourceId, DiscoveredContent, DiscoveredStorage, DiscoveredStorageId,
-        ExternalContentItem, ExternalContentItemId, InstallationIntent, PackageManifest, PlanStep,
-        ProviderId, StorageKind, StorageTarget, StorageTargetId,
+        Action, AssetId, Capability, CapabilityId, ContentImportIntent, ContentRepository,
+        ContentRepositoryId, ContentSource, ContentSourceId, DiscoveredContent, DiscoveredStorage,
+        DiscoveredStorageId, ExternalContentItem, ExternalContentItemId, InstallationIntent,
+        PackageManifest, PlanStep, ProviderId, StorageKind, StorageTarget, StorageTargetId,
     };
     use std::path::{Path, PathBuf};
 
+    #[test]
+    fn content_import_intent_exposes_selected_items() {
+        let intent = ContentImportIntent::new(vec![
+            ExternalContentItemId::new("local-models-directory:/media/daia/models/model.gguf"),
+            ExternalContentItemId::new("local-models-directory:/media/daia/models/tokenizer.json"),
+        ]);
+
+        assert_eq!(
+            intent.items(),
+            &[
+                ExternalContentItemId::new("local-models-directory:/media/daia/models/model.gguf"),
+                ExternalContentItemId::new(
+                    "local-models-directory:/media/daia/models/tokenizer.json"
+                ),
+            ]
+        );
+    }
     #[test]
     fn external_content_item_id_exposes_value() {
         let id = ExternalContentItemId::new("local-models-directory:model.gguf");
