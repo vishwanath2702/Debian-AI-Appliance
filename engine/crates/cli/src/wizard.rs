@@ -115,19 +115,24 @@ impl WizardState {
         self.selected_storage.as_ref()
     }
     /// Converts the completed wizard state into a confirmed configuration.
+
     pub fn into_config(self) -> Option<WizardConfig> {
         Some(WizardConfig {
             profile_name: self.profile_name?,
             content_repository_id: self.selected_content_repository?,
+            external_content: self.selected_external_content,
             storage_id: self.selected_storage?,
         })
     }
 }
+
 /// Confirmed wizard configuration ready for planning or execution.
 #[derive(Clone, Debug, Eq, PartialEq)]
+
 pub struct WizardConfig {
     profile_name: String,
     content_repository_id: ContentRepositoryId,
+    external_content: Vec<ExternalContentItemId>,
     storage_id: DiscoveredStorageId,
 }
 impl WizardConfig {
@@ -140,6 +145,12 @@ impl WizardConfig {
     #[must_use]
     pub const fn content_repository_id(&self) -> &ContentRepositoryId {
         &self.content_repository_id
+    }
+
+    /// Returns the external content selected for import.
+    #[must_use]
+    pub fn external_content(&self) -> &[ExternalContentItemId] {
+        &self.external_content
     }
     /// Returns the selected storage identifier.
     #[must_use]
@@ -170,6 +181,34 @@ mod tests {
         ExternalContentItemId, StorageKind,
     };
     use registry::ApplianceProfileRepository;
+
+    #[test]
+    fn wizard_configuration_preserves_selected_external_content() {
+        let mut state = WizardState::new();
+
+        state.set_profile_name("desktop");
+        state.select_content_repository(ContentRepositoryId::new("local-models"));
+        state.select_external_content(vec![ExternalContentItemId::new(
+            "local-models-directory:/media/daia/models/model.gguf",
+        )]);
+        state.set_discovered_storage(vec![DiscoveredStorage::new(
+            "serial:usb-disk",
+            StorageKind::Removable,
+            "/dev/sdb",
+        )]);
+        state.select_storage(DiscoveredStorageId::new("serial:usb-disk"));
+
+        let config = state
+            .into_config()
+            .expect("completed wizard state should produce configuration");
+
+        assert_eq!(
+            config.external_content(),
+            &[ExternalContentItemId::new(
+                "local-models-directory:/media/daia/models/model.gguf"
+            )]
+        );
+    }
 
     #[test]
     fn wizard_state_stores_selected_external_content() {
