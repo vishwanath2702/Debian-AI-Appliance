@@ -1,8 +1,8 @@
 //! Wizard state for interactive DAIA appliance configuration.
 use model::{
-    ContentRepository, ContentRepositoryId, DiscoveredContent, DiscoveredStorage,
-    DiscoveredStorageId, ExternalContentItem, ExternalContentItemId, InstallationIntent,
-    StorageKind,
+    ContentImportIntent, ContentRepository, ContentRepositoryId, DiscoveredContent,
+    DiscoveredStorage, DiscoveredStorageId, ExternalContentItem, ExternalContentItemId,
+    InstallationIntent, StorageKind,
 };
 use registry::ApplianceProfileRepository;
 /// State accumulated while configuring an appliance through the wizard.
@@ -152,6 +152,11 @@ impl WizardConfig {
     pub fn external_content(&self) -> &[ExternalContentItemId] {
         &self.external_content
     }
+    /// Builds the confirmed external content import intent.
+    #[must_use]
+    pub fn content_import_intent(&self) -> ContentImportIntent {
+        ContentImportIntent::new(self.external_content.clone())
+    }
     /// Returns the selected storage identifier.
     #[must_use]
     pub const fn storage_id(&self) -> &DiscoveredStorageId {
@@ -207,6 +212,35 @@ mod tests {
             &[ExternalContentItemId::new(
                 "local-models-directory:/media/daia/models/model.gguf"
             )]
+        );
+    }
+
+    #[test]
+    fn wizard_configuration_builds_content_import_intent() {
+        let mut state = WizardState::new();
+
+        state.set_profile_name("desktop");
+        state.select_content_repository(ContentRepositoryId::new("local-models"));
+        state.select_external_content(vec![
+            ExternalContentItemId::new("local-models-directory:/media/daia/models/model.gguf"),
+            ExternalContentItemId::new("local-models-directory:/media/daia/models/tokenizer.json"),
+        ]);
+        state.select_storage(DiscoveredStorageId::new("serial:usb-disk"));
+
+        let config = state
+            .into_config()
+            .expect("completed wizard state should produce configuration");
+
+        let intent = config.content_import_intent();
+
+        assert_eq!(
+            intent.items(),
+            &[
+                ExternalContentItemId::new("local-models-directory:/media/daia/models/model.gguf"),
+                ExternalContentItemId::new(
+                    "local-models-directory:/media/daia/models/tokenizer.json"
+                ),
+            ]
         );
     }
 
