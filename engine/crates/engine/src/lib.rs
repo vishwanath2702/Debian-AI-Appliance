@@ -115,6 +115,16 @@ impl From<ExecuteError<std::io::Error>> for BuildError {
 mod backend;
 
 pub use backend::{BuildBackend, IsoBackend, RootfsBackend, RunnerBackend};
+/// A non-executed operation required to import external content.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum ContentImportOperation {
+    /// Import one selected external content item.
+    ImportItem {
+        /// Stable identifier of the selected external content item.
+        item_id: model::ExternalContentItemId,
+    },
+}
+
 /// A validated external content import ready for execution.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PreparedContentImport {
@@ -132,6 +142,17 @@ impl PreparedContentImport {
     #[must_use]
     pub const fn intent(&self) -> &ContentImportIntent {
         &self.intent
+    }
+
+    /// Builds the ordered content-import operations.
+    #[must_use]
+    pub fn operations(&self) -> Vec<ContentImportOperation> {
+        self.intent
+            .items()
+            .iter()
+            .cloned()
+            .map(|item_id| ContentImportOperation::ImportItem { item_id })
+            .collect()
     }
 }
 /// High-level orchestration entry point.
@@ -380,14 +401,13 @@ mod tests {
     use registry::{PackageRepository, Registry};
 
     use super::{
-        BootstrapConfig, BuildContext, BuildError, ContentSource, DiscoveredContent,
-        DryRunInstallationExecutor, Engine, InstallationExecutor, InstallationOperation,
-        InstallationOperationExecutor, InstallationPlan, PreparedContentImport,
-        PreparedInstallation, RootfsInstallationPlanExecutor, RootfsRunError,
-        SystemInstallationOperationExecutor, default_installation_mounts,
+        BootstrapConfig, BuildContext, BuildError, ContentImportOperation, ContentSource,
+        DiscoveredContent, DryRunInstallationExecutor, Engine, InstallationExecutor,
+        InstallationOperation, InstallationOperationExecutor, InstallationPlan,
+        PreparedContentImport, PreparedInstallation, RootfsInstallationPlanExecutor,
+        RootfsRunError, SystemInstallationOperationExecutor, default_installation_mounts,
         default_installation_partitions,
     };
-
     struct TestContentInspector;
 
     impl ContentInspector for TestContentInspector {
@@ -515,6 +535,31 @@ mod tests {
 
         assert_eq!(prepared.intent(), &intent);
     }
+
+    #[test]
+    fn prepared_content_import_builds_operations_for_selected_items() {
+        let prepared = PreparedContentImport::new(ContentImportIntent::new(vec![
+            ExternalContentItemId::new("local-models-directory:/media/daia/models/model.gguf"),
+            ExternalContentItemId::new("local-models-directory:/media/daia/models/tokenizer.json"),
+        ]));
+
+        assert_eq!(
+            prepared.operations(),
+            vec![
+                ContentImportOperation::ImportItem {
+                    item_id: ExternalContentItemId::new(
+                        "local-models-directory:/media/daia/models/model.gguf",
+                    ),
+                },
+                ContentImportOperation::ImportItem {
+                    item_id: ExternalContentItemId::new(
+                        "local-models-directory:/media/daia/models/tokenizer.json",
+                    ),
+                },
+            ]
+        );
+    }
+
     #[test]
     fn enumerates_external_content_items_through_inspector() {
         let engine = Engine::from_registry(desktop_registry());
