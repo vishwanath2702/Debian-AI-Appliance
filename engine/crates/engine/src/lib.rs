@@ -28,8 +28,8 @@ use executor::{ExecuteError, RootfsRunError};
 use inspector::{ContentInspectError, ContentInspector, StorageInspectError, StorageInspector};
 pub use mmdebstrap::{MmdebstrapBootstrapper, MmdebstrapError};
 use model::{
-    ApplianceProfile, Capability, ContentSource, DiscoveredContent, DiscoveredStorage,
-    ExternalContentItem, InstallationIntent, Plan, StorageKind,
+    ApplianceProfile, Capability, ContentImportIntent, ContentSource, DiscoveredContent,
+    DiscoveredStorage, ExternalContentItem, InstallationIntent, Plan, StorageKind,
 };
 use planner::{PlanError, Planner};
 use registry::{PackageRepository, Registry};
@@ -115,6 +115,25 @@ impl From<ExecuteError<std::io::Error>> for BuildError {
 mod backend;
 
 pub use backend::{BuildBackend, IsoBackend, RootfsBackend, RunnerBackend};
+/// A validated external content import ready for execution.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PreparedContentImport {
+    intent: ContentImportIntent,
+}
+
+impl PreparedContentImport {
+    /// Creates a prepared external content import.
+    #[must_use]
+    pub const fn new(intent: ContentImportIntent) -> Self {
+        Self { intent }
+    }
+
+    /// Returns the confirmed content import intent.
+    #[must_use]
+    pub const fn intent(&self) -> &ContentImportIntent {
+        &self.intent
+    }
+}
 /// High-level orchestration entry point.
 
 #[derive(Clone, Debug)]
@@ -347,18 +366,19 @@ mod tests {
 
     use inspector::{ContentInspectError, ContentInspector, StorageInspectError, StorageInspector};
     use model::{
-        Action, ApplianceProfile, Capability, CapabilityId, ContentRepositoryId, ContentSourceId,
-        DiscoveredStorage, DiscoveredStorageId, InstallationIntent, PlanStep, Provider, ProviderId,
-        StorageKind,
+        Action, ApplianceProfile, Capability, CapabilityId, ContentImportIntent,
+        ContentRepositoryId, ContentSourceId, DiscoveredStorage, DiscoveredStorageId,
+        ExternalContentItemId, InstallationIntent, PlanStep, Provider, ProviderId, StorageKind,
     };
     use registry::{PackageRepository, Registry};
 
     use super::{
         BootstrapConfig, BuildContext, BuildError, ContentSource, DiscoveredContent,
         DryRunInstallationExecutor, Engine, InstallationExecutor, InstallationOperation,
-        InstallationOperationExecutor, InstallationPlan, PreparedInstallation,
-        RootfsInstallationPlanExecutor, RootfsRunError, SystemInstallationOperationExecutor,
-        default_installation_mounts, default_installation_partitions,
+        InstallationOperationExecutor, InstallationPlan, PreparedContentImport,
+        PreparedInstallation, RootfsInstallationPlanExecutor, RootfsRunError,
+        SystemInstallationOperationExecutor, default_installation_mounts,
+        default_installation_partitions,
     };
 
     struct TestContentInspector;
@@ -463,6 +483,17 @@ mod tests {
         }
     }
 
+    #[test]
+    fn prepared_content_import_exposes_intent() {
+        let intent = ContentImportIntent::new(vec![
+            ExternalContentItemId::new("local-models-directory:/media/daia/models/model.gguf"),
+            ExternalContentItemId::new("local-models-directory:/media/daia/models/tokenizer.json"),
+        ]);
+
+        let prepared = PreparedContentImport::new(intent.clone());
+
+        assert_eq!(prepared.intent(), &intent);
+    }
     #[test]
     fn enumerates_external_content_items_through_inspector() {
         let engine = Engine::from_registry(desktop_registry());
