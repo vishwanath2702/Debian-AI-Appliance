@@ -124,7 +124,18 @@ pub enum ContentImportOperation {
         item_id: model::ExternalContentItemId,
     },
 }
+/// Executes one planned external content import operation.
+pub trait ContentImportOperationExecutor {
+    /// Error produced while executing an operation.
+    type Error;
 
+    /// Executes one content import operation.
+    ///
+    /// # Errors
+    ///
+    /// Returns an executor-specific error if the operation fails.
+    fn execute_operation(&mut self, operation: &ContentImportOperation) -> Result<(), Self::Error>;
+}
 /// A validated external content import ready for execution.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PreparedContentImport {
@@ -153,6 +164,21 @@ impl PreparedContentImport {
             .cloned()
             .map(|item_id| ContentImportOperation::ImportItem { item_id })
             .collect()
+    }
+    /// Executes the prepared content-import operations in order.
+    ///
+    /// # Errors
+    ///
+    /// Returns the first error produced by the operation executor.
+    pub fn execute<E>(&self, executor: &mut E) -> Result<(), E::Error>
+    where
+        E: ContentImportOperationExecutor,
+    {
+        for operation in self.operations() {
+            executor.execute_operation(&operation)?;
+        }
+
+        Ok(())
     }
 }
 /// High-level orchestration entry point.
@@ -401,11 +427,12 @@ mod tests {
     use registry::{PackageRepository, Registry};
 
     use super::{
-        BootstrapConfig, BuildContext, BuildError, ContentImportOperation, ContentSource,
-        DiscoveredContent, DryRunInstallationExecutor, Engine, InstallationExecutor,
-        InstallationOperation, InstallationOperationExecutor, InstallationPlan,
-        PreparedContentImport, PreparedInstallation, RootfsInstallationPlanExecutor,
-        RootfsRunError, SystemInstallationOperationExecutor, default_installation_mounts,
+        BootstrapConfig, BuildContext, BuildError, ContentImportOperation,
+        ContentImportOperationExecutor, ContentSource, DiscoveredContent,
+        DryRunInstallationExecutor, Engine, InstallationExecutor, InstallationOperation,
+        InstallationOperationExecutor, InstallationPlan, PreparedContentImport,
+        PreparedInstallation, RootfsInstallationPlanExecutor, RootfsRunError,
+        SystemInstallationOperationExecutor, default_installation_mounts,
         default_installation_partitions,
     };
     struct TestContentInspector;
@@ -510,6 +537,22 @@ mod tests {
         }
     }
 
+    #[derive(Default)]
+    struct RecordingContentImportOperationExecutor {
+        operations: Vec<ContentImportOperation>,
+    }
+
+    impl ContentImportOperationExecutor for RecordingContentImportOperationExecutor {
+        type Error = std::convert::Infallible;
+
+        fn execute_operation(
+            &mut self,
+            operation: &ContentImportOperation,
+        ) -> Result<(), Self::Error> {
+            self.operations.push(operation.clone());
+            Ok(())
+        }
+    }
     #[test]
     fn prepares_content_import_intent() {
         let engine = Engine::from_registry(desktop_registry());
@@ -536,6 +579,35 @@ mod tests {
         assert_eq!(prepared.intent(), &intent);
     }
 
+    #[test]
+    fn prepared_content_import_executes_operations_in_order() {
+        let prepared = PreparedContentImport::new(ContentImportIntent::new(vec![
+            ExternalContentItemId::new("local-models-directory:/media/daia/models/model.gguf"),
+            ExternalContentItemId::new("local-models-directory:/media/daia/models/tokenizer.json"),
+        ]));
+
+        let mut executor = RecordingContentImportOperationExecutor::default();
+
+        prepared
+            .execute(&mut executor)
+            .expect("content import operations should execute");
+
+        assert_eq!(
+            executor.operations,
+            vec![
+                ContentImportOperation::ImportItem {
+                    item_id: ExternalContentItemId::new(
+                        "local-models-directory:/media/daia/models/model.gguf",
+                    ),
+                },
+                ContentImportOperation::ImportItem {
+                    item_id: ExternalContentItemId::new(
+                        "local-models-directory:/media/daia/models/tokenizer.json",
+                    ),
+                },
+            ]
+        );
+    }
     #[test]
     fn prepared_content_import_builds_operations_for_selected_items() {
         let prepared = PreparedContentImport::new(ContentImportIntent::new(vec![
