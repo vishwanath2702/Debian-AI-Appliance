@@ -189,6 +189,16 @@ impl ContentImportFileSystem for SystemContentImportFileSystem {
 
         let destination = std::path::Path::new(destination.path()).join(file_name);
 
+        if destination.exists() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::AlreadyExists,
+                format!(
+                    "content import destination already exists: {}",
+                    destination.display()
+                ),
+            ));
+        }
+
         std::fs::copy(item.path(), destination)?;
         Ok(())
     }
@@ -762,6 +772,37 @@ mod tests {
             std::fs::read_to_string(destination.join("model.gguf"))
                 .expect("copied content should be readable"),
             "model"
+        );
+    }
+    #[test]
+    fn system_content_import_file_system_rejects_existing_item() {
+        let directory = tempfile::tempdir().expect("temporary directory should be created");
+
+        let source = directory.path().join("model.gguf");
+        let destination = directory.path().join("content");
+
+        std::fs::write(&source, "new model").expect("source content should be written");
+        std::fs::create_dir(&destination).expect("destination directory should be created");
+        std::fs::write(destination.join("model.gguf"), "existing model")
+            .expect("existing content should be written");
+
+        let item = ExternalContentItem::new(ContentSourceId::new("local-models-directory"), source);
+
+        let mut file_system = SystemContentImportFileSystem::new();
+
+        let error = file_system
+            .copy_item(
+                &item,
+                &ContentImportDestination::new(destination.to_string_lossy()),
+            )
+            .expect_err("existing content item should not be overwritten");
+
+        assert_eq!(error.kind(), std::io::ErrorKind::AlreadyExists);
+
+        assert_eq!(
+            std::fs::read_to_string(destination.join("model.gguf"))
+                .expect("existing content should remain readable"),
+            "existing model"
         );
     }
     #[test]
