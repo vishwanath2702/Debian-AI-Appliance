@@ -185,6 +185,8 @@ impl ContentImportFileSystem for SystemContentImportFileSystem {
             )
         })?;
 
+        std::fs::create_dir_all(destination.path())?;
+
         let destination = std::path::Path::new(destination.path()).join(file_name);
 
         std::fs::copy(item.path(), destination)?;
@@ -719,7 +721,6 @@ fn system_content_import_file_system_copies_item() {
     let destination = directory.path().join("content");
 
     std::fs::write(&source, "model").expect("source content should be written");
-    std::fs::create_dir(&destination).expect("destination directory should be created");
 
     let item = ExternalContentItem::new(
         ContentSourceId::new("local-models-directory"),
