@@ -4,7 +4,7 @@ use model::{
     DiscoveredStorage, DiscoveredStorageId, ExternalContentItem, ExternalContentItemId,
     InstallationIntent, StorageKind,
 };
-use registry::ApplianceProfileRepository;
+use registry::{ApplianceProfileRepository, ContentRepositoryRepository};
 /// State accumulated while configuring an appliance through the wizard.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct WizardState {
@@ -146,7 +146,14 @@ impl WizardConfig {
     pub const fn content_repository_id(&self) -> &ContentRepositoryId {
         &self.content_repository_id
     }
-
+    /// Resolves the selected content repository from a repository collection.
+    #[must_use]
+    pub fn content_repository<'a>(
+        &self,
+        repository: &'a ContentRepositoryRepository,
+    ) -> Option<&'a ContentRepository> {
+        repository.repository(&self.content_repository_id)
+    }
     /// Returns the external content selected for import.
     #[must_use]
     pub fn external_content(&self) -> &[ExternalContentItemId] {
@@ -185,8 +192,36 @@ mod tests {
         DiscoveredContent, DiscoveredStorage, DiscoveredStorageId, ExternalContentItem,
         ExternalContentItemId, StorageKind,
     };
-    use registry::ApplianceProfileRepository;
+    use registry::{ApplianceProfileRepository, ContentRepositoryRepository};
 
+    #[test]
+    fn wizard_configuration_resolves_content_repository() {
+        let repositories =
+            ContentRepositoryRepository::from_repositories(vec![ContentRepository::new(
+                "local-models",
+                "Models available on local storage",
+            )])
+            .expect("content repository collection should be valid");
+
+        let mut state = WizardState::new();
+        state.set_profile_name("desktop");
+        state.select_content_repository(ContentRepositoryId::new("local-models"));
+        state.select_storage(DiscoveredStorageId::new("serial:usb-disk"));
+
+        let config = state
+            .into_config()
+            .expect("completed wizard state should build configuration");
+
+        let repository = config
+            .content_repository(&repositories)
+            .expect("selected content repository should resolve");
+
+        assert_eq!(repository.id(), config.content_repository_id());
+        assert_eq!(
+            repository.description(),
+            "Models available on local storage"
+        );
+    }
     #[test]
     fn wizard_configuration_preserves_selected_external_content() {
         let mut state = WizardState::new();
