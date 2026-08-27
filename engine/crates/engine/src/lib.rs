@@ -28,8 +28,9 @@ use executor::{ExecuteError, RootfsRunError};
 use inspector::{ContentInspectError, ContentInspector, StorageInspectError, StorageInspector};
 pub use mmdebstrap::{MmdebstrapBootstrapper, MmdebstrapError};
 use model::{
-    ApplianceProfile, Capability, ContentImportIntent, ContentSource, DiscoveredContent,
-    DiscoveredStorage, ExternalContentItem, InstallationIntent, Plan, StorageKind,
+    ApplianceProfile, Capability, ContentImportIntent, ContentRepository, ContentRepositoryId,
+    ContentSource, DiscoveredContent, DiscoveredStorage, ExternalContentItem,
+    ExternalContentItemId, InstallationIntent, Plan, StorageKind,
 };
 use planner::{PlanError, Planner};
 use registry::{PackageRepository, Registry};
@@ -136,6 +137,27 @@ pub trait ContentImportOperationExecutor {
     /// Returns an executor-specific error if the operation fails.
     fn execute_operation(&mut self, operation: &ContentImportOperation) -> Result<(), Self::Error>;
 }
+/// Error returned when external content cannot be prepared for import.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum PrepareContentImportError {
+    /// A selected external content item could not be resolved.
+    UnknownItem(ExternalContentItemId),
+}
+
+impl Display for PrepareContentImportError {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::UnknownItem(item_id) => {
+                write!(
+                    formatter,
+                    "selected external content item not found: {item_id}"
+                )
+            }
+        }
+    }
+}
+
+impl std::error::Error for PrepareContentImportError {}
 /// A validated external content import ready for execution.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PreparedContentImport {
@@ -438,9 +460,9 @@ mod tests {
         BootstrapConfig, BuildContext, BuildError, ContentImportOperation,
         ContentImportOperationExecutor, ContentSource, DiscoveredContent,
         DryRunInstallationExecutor, Engine, InstallationExecutor, InstallationOperation,
-        InstallationOperationExecutor, InstallationPlan, PreparedContentImport,
-        PreparedInstallation, RootfsInstallationPlanExecutor, RootfsRunError,
-        SystemInstallationOperationExecutor, default_installation_mounts,
+        InstallationOperationExecutor, InstallationPlan, PrepareContentImportError,
+        PreparedContentImport, PreparedInstallation, RootfsInstallationPlanExecutor,
+        RootfsRunError, SystemInstallationOperationExecutor, default_installation_mounts,
         default_installation_partitions,
     };
     struct TestContentInspector;
@@ -560,6 +582,19 @@ mod tests {
             self.operations.push(operation.clone());
             Ok(())
         }
+    }
+
+    #[test]
+    fn prepare_content_import_error_describes_unknown_item() {
+        let item_id =
+            ExternalContentItemId::new("local-models-directory:/media/daia/models/missing.gguf");
+
+        let error = PrepareContentImportError::UnknownItem(item_id);
+
+        assert_eq!(
+            error.to_string(),
+            "selected external content item not found: local-models-directory:/media/daia/models/missing.gguf"
+        );
     }
     #[test]
     fn prepares_content_import_intent() {
