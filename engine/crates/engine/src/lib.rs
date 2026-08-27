@@ -137,6 +137,7 @@ pub trait ContentImportOperationExecutor {
     /// Returns an executor-specific error if the operation fails.
     fn execute_operation(&mut self, operation: &ContentImportOperation) -> Result<(), Self::Error>;
 }
+
 /// Provides filesystem operations required by external content import.
 pub trait ContentImportFileSystem {
     /// Error produced by a filesystem operation.
@@ -633,6 +634,7 @@ mod tests {
     impl ContentImportFileSystem for RecordingContentImportFileSystem {
         type Error = std::convert::Infallible;
     }
+
     #[test]
     fn creates_system_content_import_operation_executor() {
         let mut executor =
