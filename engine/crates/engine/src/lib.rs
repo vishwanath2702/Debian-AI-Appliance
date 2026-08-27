@@ -28,10 +28,11 @@ use executor::{ExecuteError, RootfsRunError};
 use inspector::{ContentInspectError, ContentInspector, StorageInspectError, StorageInspector};
 pub use mmdebstrap::{MmdebstrapBootstrapper, MmdebstrapError};
 use model::{
-    ApplianceProfile, Capability, ContentImportIntent, ContentRepository, ContentRepositoryId,
-    ContentSource, DiscoveredContent, DiscoveredStorage, ExternalContentItem,
+    ApplianceProfile, Capability, ContentImportDestination, ContentImportIntent, ContentRepository,
+    ContentRepositoryId, ContentSource, DiscoveredContent, DiscoveredStorage, ExternalContentItem,
     ExternalContentItemId, InstallationIntent, Plan, StorageKind,
 };
+
 use planner::{PlanError, Planner};
 use registry::{PackageRepository, Registry};
 use resolver::Resolver;
@@ -196,15 +197,22 @@ impl std::error::Error for PrepareContentImportError {}
 pub struct PreparedContentImport {
     intent: ContentImportIntent,
     items: Vec<ExternalContentItem>,
+    destination: ContentImportDestination,
 }
-
 impl PreparedContentImport {
     /// Creates a prepared external content import.
     #[must_use]
-    const fn new(intent: ContentImportIntent, items: Vec<ExternalContentItem>) -> Self {
-        Self { intent, items }
+    const fn new(
+        intent: ContentImportIntent,
+        items: Vec<ExternalContentItem>,
+        destination: ContentImportDestination,
+    ) -> Self {
+        Self {
+            intent,
+            items,
+            destination,
+        }
     }
-
     /// Returns the confirmed content import intent.
     #[must_use]
     pub const fn intent(&self) -> &ContentImportIntent {
@@ -215,6 +223,11 @@ impl PreparedContentImport {
     #[must_use]
     pub fn items(&self) -> &[ExternalContentItem] {
         &self.items
+    }
+    /// Returns the destination for imported content.
+    #[must_use]
+    pub const fn destination(&self) -> &ContentImportDestination {
+        &self.destination
     }
     /// Builds the ordered content-import operations.
     #[must_use]
@@ -356,6 +369,7 @@ impl Engine {
         &self,
         intent: ContentImportIntent,
         items: Vec<ExternalContentItem>,
+        destination: ContentImportDestination,
     ) -> Result<PreparedContentImport, PrepareContentImportError> {
         for item_id in intent.items() {
             if !items.iter().any(|item| item.id() == item_id) {
@@ -363,7 +377,7 @@ impl Engine {
             }
         }
 
-        Ok(PreparedContentImport::new(intent, items))
+        Ok(PreparedContentImport::new(intent, items, destination))
     }
     /// Discovers storage devices using the supplied storage inspector.
     ///
@@ -494,10 +508,10 @@ mod tests {
 
     use inspector::{ContentInspectError, ContentInspector, StorageInspectError, StorageInspector};
     use model::{
-        Action, ApplianceProfile, Capability, CapabilityId, ContentImportIntent,
-        ContentRepositoryId, ContentSourceId, DiscoveredStorage, DiscoveredStorageId,
-        ExternalContentItem, ExternalContentItemId, InstallationIntent, PlanStep, Provider,
-        ProviderId, StorageKind,
+        Action, ApplianceProfile, Capability, CapabilityId, ContentImportDestination,
+        ContentImportIntent, ContentRepositoryId, ContentSourceId, DiscoveredStorage,
+        DiscoveredStorageId, ExternalContentItem, ExternalContentItemId, InstallationIntent,
+        PlanStep, Provider, ProviderId, StorageKind,
     };
     use registry::{PackageRepository, Registry};
 
@@ -666,7 +680,11 @@ mod tests {
         )];
 
         let error = engine
-            .prepare_content_import(intent, items)
+            .prepare_content_import(
+                intent,
+                items,
+                ContentImportDestination::new("/var/lib/daia/content"),
+            )
             .expect_err("unknown selected content should be rejected");
 
         assert_eq!(error, PrepareContentImportError::UnknownItem(missing_id));
@@ -705,11 +723,16 @@ mod tests {
         ];
 
         let prepared = engine
-            .prepare_content_import(intent.clone(), items.clone())
+            .prepare_content_import(
+                intent.clone(),
+                items.clone(),
+                ContentImportDestination::new("/var/lib/daia/content"),
+            )
             .expect("selected content items should resolve");
 
         assert_eq!(prepared.intent(), &intent);
         assert_eq!(prepared.items(), items.as_slice());
+        assert_eq!(prepared.destination().path(), "/var/lib/daia/content");
     }
 
     #[test]
@@ -719,8 +742,11 @@ mod tests {
             ExternalContentItemId::new("local-models-directory:/media/daia/models/tokenizer.json"),
         ]);
 
-        let prepared = PreparedContentImport::new(intent.clone(), Vec::new());
-
+        let prepared = PreparedContentImport::new(
+            intent.clone(),
+            Vec::new(),
+            ContentImportDestination::new("/var/lib/daia/content"),
+        );
         assert_eq!(prepared.intent(), &intent);
     }
 
@@ -740,6 +766,7 @@ mod tests {
         let prepared = PreparedContentImport::new(
             ContentImportIntent::new(vec![items[0].id().clone(), items[1].id().clone()]),
             items.clone(),
+            ContentImportDestination::new("/var/lib/daia/content"),
         );
 
         let mut executor = RecordingContentImportOperationExecutor::default();
@@ -777,6 +804,7 @@ mod tests {
         let prepared = PreparedContentImport::new(
             ContentImportIntent::new(vec![items[0].id().clone(), items[1].id().clone()]),
             items.clone(),
+            ContentImportDestination::new("/var/lib/daia/content"),
         );
 
         assert_eq!(
