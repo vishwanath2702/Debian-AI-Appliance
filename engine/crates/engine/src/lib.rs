@@ -567,15 +567,16 @@ mod tests {
     };
     use registry::{PackageRepository, Registry};
 
-use super::{
-    BootstrapConfig, BuildContext, BuildError, ContentImportFileSystem, ContentImportOperation,
-    ContentImportOperationExecutor, ContentSource, DiscoveredContent, DryRunInstallationExecutor,
-    Engine, InstallationExecutor, InstallationOperation, InstallationOperationExecutor,
-    InstallationPlan, PrepareContentImportError, PreparedContentImport, PreparedInstallation,
-    RootfsInstallationPlanExecutor, RootfsRunError, SystemContentImportFileSystem,
-    SystemContentImportOperationExecutor, SystemInstallationOperationExecutor,
-    default_installation_mounts, default_installation_partitions,
-};
+    use super::{
+        BootstrapConfig, BuildContext, BuildError, ContentImportFileSystem, ContentImportOperation,
+        ContentImportOperationExecutor, ContentSource, DiscoveredContent,
+        DryRunInstallationExecutor, Engine, InstallationExecutor, InstallationOperation,
+        InstallationOperationExecutor, InstallationPlan, PrepareContentImportError,
+        PreparedContentImport, PreparedInstallation, RootfsInstallationPlanExecutor,
+        RootfsRunError, SystemContentImportFileSystem, SystemContentImportOperationExecutor,
+        SystemInstallationOperationExecutor, default_installation_mounts,
+        default_installation_partitions,
+    };
     struct TestContentInspector;
 
     impl ContentInspector for TestContentInspector {
@@ -694,7 +695,31 @@ use super::{
             Ok(())
         }
     }
+    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+    enum RecordingContentImportOperationError {
+        Failed,
+    }
 
+    struct FailingContentImportOperationExecutor {
+        operations: Vec<ContentImportOperation>,
+        fail_at: usize,
+    }
+
+    impl ContentImportOperationExecutor for FailingContentImportOperationExecutor {
+        type Error = RecordingContentImportOperationError;
+
+        fn execute_operation(
+            &mut self,
+            operation: &ContentImportOperation,
+        ) -> Result<(), Self::Error> {
+            if self.operations.len() == self.fail_at {
+                return Err(RecordingContentImportOperationError::Failed);
+            }
+
+            self.operations.push(operation.clone());
+            Ok(())
+        }
+    }
     #[derive(Default)]
     struct RecordingContentImportFileSystem {
         copies: Vec<(ExternalContentItem, ContentImportDestination)>,
@@ -713,36 +738,33 @@ use super::{
         }
     }
 
-#[test]
-fn system_content_import_file_system_copies_item() {
-    let directory = tempfile::tempdir().expect("temporary directory should be created");
+    #[test]
+    fn system_content_import_file_system_copies_item() {
+        let directory = tempfile::tempdir().expect("temporary directory should be created");
 
-    let source = directory.path().join("model.gguf");
-    let destination = directory.path().join("content");
+        let source = directory.path().join("model.gguf");
+        let destination = directory.path().join("content");
 
-    std::fs::write(&source, "model").expect("source content should be written");
+        std::fs::write(&source, "model").expect("source content should be written");
 
-    let item = ExternalContentItem::new(
-        ContentSourceId::new("local-models-directory"),
-        source,
-    );
+        let item = ExternalContentItem::new(ContentSourceId::new("local-models-directory"), source);
 
-    let mut file_system = SystemContentImportFileSystem::new();
+        let mut file_system = SystemContentImportFileSystem::new();
 
-    file_system
-        .copy_item(
-            &item,
-            &ContentImportDestination::new(destination.to_string_lossy()),
-        )
-        .expect("content item should be copied");
+        file_system
+            .copy_item(
+                &item,
+                &ContentImportDestination::new(destination.to_string_lossy()),
+            )
+            .expect("content item should be copied");
 
-    assert_eq!(
-        std::fs::read_to_string(destination.join("model.gguf"))
-            .expect("copied content should be readable"),
-        "model"
-    );
-}
-   #[test]
+        assert_eq!(
+            std::fs::read_to_string(destination.join("model.gguf"))
+                .expect("copied content should be readable"),
+            "model"
+        );
+    }
+    #[test]
     fn creates_system_content_import_operation_executor() {
         let mut executor =
             SystemContentImportOperationExecutor::new(RecordingContentImportFileSystem::default());
@@ -892,7 +914,50 @@ fn system_content_import_file_system_copies_item() {
             ]
         );
     }
+    #[test]
+    fn prepared_content_import_stops_after_operation_failure() {
+        let items = vec![
+            ExternalContentItem::new(
+                ContentSourceId::new("local-models-directory"),
+                "/media/daia/models/model.gguf",
+            ),
+            ExternalContentItem::new(
+                ContentSourceId::new("local-models-directory"),
+                "/media/daia/models/tokenizer.json",
+            ),
+            ExternalContentItem::new(
+                ContentSourceId::new("local-models-directory"),
+                "/media/daia/models/config.json",
+            ),
+        ];
 
+        let prepared = PreparedContentImport::new(
+            ContentImportIntent::new(vec![
+                items[0].id().clone(),
+                items[1].id().clone(),
+                items[2].id().clone(),
+            ]),
+            items.clone(),
+            ContentImportDestination::new("/var/lib/daia/content"),
+        );
+
+        let mut executor = FailingContentImportOperationExecutor {
+            operations: Vec::new(),
+            fail_at: 1,
+        };
+
+        let result = prepared.execute(&mut executor);
+
+        assert_eq!(result, Err(RecordingContentImportOperationError::Failed));
+
+        assert_eq!(
+            executor.operations,
+            vec![ContentImportOperation::ImportItem {
+                item: items[0].clone(),
+                destination: ContentImportDestination::new("/var/lib/daia/content"),
+            }]
+        );
+    }
     #[test]
     fn prepared_content_import_builds_operations_for_selected_items() {
         let items = vec![
