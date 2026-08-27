@@ -492,6 +492,18 @@ fn confirm_wizard_state() -> Result<bool, String> {
     ))
 }
 
+fn prepare_wizard_content_import(
+    engine: &Engine,
+    config: &wizard::WizardConfig,
+) -> Result<engine::PreparedContentImport, String> {
+    engine
+        .prepare_content_import(
+            config.content_import_intent(),
+            config.external_content_items().to_vec(),
+            model::ContentImportDestination::new("/var/lib/daia/content"),
+        )
+        .map_err(|error| format!("Error preparing content import: {error:?}"))
+}
 fn prepare_wizard_installation(
     engine: &Engine,
     config: &wizard::WizardConfig,
@@ -811,6 +823,38 @@ fn run_wizard() -> ExitCode {
 }
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn prepares_content_import_from_wizard_configuration() {
+        use model::{
+            ContentRepositoryId, ContentSourceId, DiscoveredStorageId, ExternalContentItem,
+        };
+
+        let engine = super::load_engine().expect("engine should load");
+
+        let item = ExternalContentItem::new(
+            ContentSourceId::new("local-models-directory"),
+            "/media/daia/models/model.gguf",
+        );
+
+        let mut state = super::WizardState::new();
+        state.set_profile_name("desktop");
+        state.select_content_repository(ContentRepositoryId::new("local-models"));
+        state.set_external_content_items(vec![item.clone()]);
+        state.select_external_content(vec![item.id().clone()]);
+        state.select_storage(DiscoveredStorageId::new("serial:usb-disk"));
+
+        let config = state
+            .into_config()
+            .expect("completed wizard state should build configuration");
+
+        let prepared = super::prepare_wizard_content_import(&engine, &config)
+            .expect("wizard content import should prepare");
+
+        assert_eq!(prepared.intent(), &config.content_import_intent());
+        assert_eq!(prepared.items(), &[item]);
+        assert_eq!(prepared.destination().path(), "/var/lib/daia/content");
+    }
+
     use super::{BuildOptions, run};
     use std::path::PathBuf;
     use std::process::ExitCode;
