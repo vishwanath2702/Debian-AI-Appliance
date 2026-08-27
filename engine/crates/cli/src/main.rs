@@ -786,6 +786,15 @@ fn run_wizard() -> ExitCode {
                 eprintln!("Error: wizard configuration is incomplete");
                 return ExitCode::FAILURE;
             };
+
+            let _prepared_content_import = match prepare_wizard_content_import(&engine, &config) {
+                Ok(prepared) => prepared,
+                Err(error) => {
+                    eprintln!("{error}");
+                    return ExitCode::FAILURE;
+                }
+            };
+
             let prepared = match prepare_wizard_installation(&engine, &config) {
                 Ok(prepared) => prepared,
                 Err(error) => {
