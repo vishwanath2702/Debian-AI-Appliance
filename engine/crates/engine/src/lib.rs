@@ -146,6 +146,17 @@ pub trait ContentImportOperationExecutor {
 pub trait ContentImportFileSystem {
     /// Error produced by a filesystem operation.
     type Error;
+
+    /// Copies one external content item to its import destination.
+    ///
+    /// # Errors
+    ///
+    /// Returns a filesystem-specific error if the copy fails.
+    fn copy_item(
+        &mut self,
+        item: &ExternalContentItem,
+        destination: &ContentImportDestination,
+    ) -> Result<(), Self::Error>;
 }
 /// Executes content import operations against the host system.
 #[derive(Clone, Debug)]
@@ -168,7 +179,9 @@ where
 
     fn execute_operation(&mut self, operation: &ContentImportOperation) -> Result<(), Self::Error> {
         match operation {
-            ContentImportOperation::ImportItem { .. } => Ok(()),
+            ContentImportOperation::ImportItem { item, destination } => {
+                self.file_system.copy_item(item, destination)
+            }
         }
     }
 }
@@ -647,16 +660,27 @@ mod tests {
         }
     }
 
-    struct RecordingContentImportFileSystem;
+    #[derive(Default)]
+    struct RecordingContentImportFileSystem {
+        copies: Vec<(ExternalContentItem, ContentImportDestination)>,
+    }
 
     impl ContentImportFileSystem for RecordingContentImportFileSystem {
         type Error = std::convert::Infallible;
-    }
 
+        fn copy_item(
+            &mut self,
+            item: &ExternalContentItem,
+            destination: &ContentImportDestination,
+        ) -> Result<(), Self::Error> {
+            self.copies.push((item.clone(), destination.clone()));
+            Ok(())
+        }
+    }
     #[test]
     fn creates_system_content_import_operation_executor() {
         let mut executor =
-            SystemContentImportOperationExecutor::new(RecordingContentImportFileSystem);
+            SystemContentImportOperationExecutor::new(RecordingContentImportFileSystem::default());
         let operation = ContentImportOperation::ImportItem {
             item: ExternalContentItem::new(
                 ContentSourceId::new("local-models-directory"),
@@ -667,6 +691,16 @@ mod tests {
         executor
             .execute_operation(&operation)
             .expect("system content import executor should accept import operation");
+        assert_eq!(
+            executor.file_system.copies,
+            vec![(
+                ExternalContentItem::new(
+                    ContentSourceId::new("local-models-directory"),
+                    "/media/daia/models/model.gguf",
+                ),
+                ContentImportDestination::new("/var/lib/daia/content"),
+            )]
+        );
     }
 
     #[test]
