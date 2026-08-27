@@ -239,6 +239,35 @@ impl fmt::Display for ExternalContentItemId {
         formatter.write_str(self.as_str())
     }
 }
+/// Content item realized in a DAIA content destination.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ImportedContentItem {
+    source_item_id: ExternalContentItemId,
+    path: PathBuf,
+}
+
+impl ImportedContentItem {
+    /// Creates an imported content item.
+    #[must_use]
+    pub fn new(source_item_id: ExternalContentItemId, path: impl Into<PathBuf>) -> Self {
+        Self {
+            source_item_id,
+            path: path.into(),
+        }
+    }
+
+    /// Returns the external content item from which this item was imported.
+    #[must_use]
+    pub const fn source_item_id(&self) -> &ExternalContentItemId {
+        &self.source_item_id
+    }
+
+    /// Returns the realized path of the imported content item.
+    #[must_use]
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+}
 /// Describes one importable item discovered in external content.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ExternalContentItem {
@@ -715,8 +744,8 @@ mod tests {
         Action, AssetId, Capability, CapabilityId, ContentImportDestination, ContentImportIntent,
         ContentRepository, ContentRepositoryId, ContentSource, ContentSourceId, DiscoveredContent,
         DiscoveredStorage, DiscoveredStorageId, ExternalContentItem, ExternalContentItemId,
-        InstallationIntent, PackageManifest, PlanStep, ProviderId, StorageKind, StorageTarget,
-        StorageTargetId,
+        ImportedContentItem, InstallationIntent, PackageManifest, PlanStep, ProviderId,
+        StorageKind, StorageTarget, StorageTargetId,
     };
     use std::path::{Path, PathBuf};
 
@@ -727,6 +756,17 @@ mod tests {
         assert_eq!(destination.path(), "/var/lib/daia/content");
     }
 
+    #[test]
+    fn imported_content_item_exposes_source_item_and_path() {
+        let source_item_id =
+            ExternalContentItemId::new("local-models-directory:/media/daia/models/model.gguf");
+
+        let item =
+            ImportedContentItem::new(source_item_id.clone(), "/var/lib/daia/content/model.gguf");
+
+        assert_eq!(item.source_item_id(), &source_item_id);
+        assert_eq!(item.path(), Path::new("/var/lib/daia/content/model.gguf"));
+    }
     #[test]
     fn content_import_intent_exposes_selected_items() {
         let intent = ContentImportIntent::new(vec![
