@@ -30,7 +30,7 @@ pub use mmdebstrap::{MmdebstrapBootstrapper, MmdebstrapError};
 use model::{
     ApplianceProfile, Capability, ContentImportDestination, ContentImportIntent, ContentRepository,
     ContentRepositoryId, ContentSource, DiscoveredContent, DiscoveredStorage, ExternalContentItem,
-    ExternalContentItemId, InstallationIntent, Plan, StorageKind,
+    ExternalContentItemId, ImportedContentItem, InstallationIntent, Plan, StorageKind,
 };
 
 use planner::{PlanError, Planner};
@@ -156,7 +156,7 @@ pub trait ContentImportFileSystem {
         &mut self,
         item: &ExternalContentItem,
         destination: &ContentImportDestination,
-    ) -> Result<(), Self::Error>;
+    ) -> Result<ImportedContentItem, Self::Error>;
 }
 /// Performs external content import using the host filesystem.
 #[derive(Clone, Copy, Debug, Default)]
@@ -177,7 +177,7 @@ impl ContentImportFileSystem for SystemContentImportFileSystem {
         &mut self,
         item: &ExternalContentItem,
         destination: &ContentImportDestination,
-    ) -> Result<(), Self::Error> {
+    ) -> Result<ImportedContentItem, Self::Error> {
         let file_name = item.path().file_name().ok_or_else(|| {
             std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
@@ -199,8 +199,9 @@ impl ContentImportFileSystem for SystemContentImportFileSystem {
             ));
         }
 
-        std::fs::copy(item.path(), destination)?;
-        Ok(())
+        std::fs::copy(item.path(), &destination)?;
+
+        Ok(ImportedContentItem::new(item.id().clone(), destination))
     }
 }
 /// Executes content import operations against the host system.
@@ -225,7 +226,8 @@ where
     fn execute_operation(&mut self, operation: &ContentImportOperation) -> Result<(), Self::Error> {
         match operation {
             ContentImportOperation::ImportItem { item, destination } => {
-                self.file_system.copy_item(item, destination)
+                self.file_system.copy_item(item, destination)?;
+                Ok(())
             }
         }
     }
@@ -580,12 +582,12 @@ mod tests {
     use super::{
         BootstrapConfig, BuildContext, BuildError, ContentImportFileSystem, ContentImportOperation,
         ContentImportOperationExecutor, ContentSource, DiscoveredContent,
-        DryRunInstallationExecutor, Engine, InstallationExecutor, InstallationOperation,
-        InstallationOperationExecutor, InstallationPlan, PrepareContentImportError,
-        PreparedContentImport, PreparedInstallation, RootfsInstallationPlanExecutor,
-        RootfsRunError, SystemContentImportFileSystem, SystemContentImportOperationExecutor,
-        SystemInstallationOperationExecutor, default_installation_mounts,
-        default_installation_partitions,
+        DryRunInstallationExecutor, Engine, ImportedContentItem, InstallationExecutor,
+        InstallationOperation, InstallationOperationExecutor, InstallationPlan,
+        PrepareContentImportError, PreparedContentImport, PreparedInstallation,
+        RootfsInstallationPlanExecutor, RootfsRunError, SystemContentImportFileSystem,
+        SystemContentImportOperationExecutor, SystemInstallationOperationExecutor,
+        default_installation_mounts, default_installation_partitions,
     };
     struct TestContentInspector;
 
@@ -742,9 +744,18 @@ mod tests {
             &mut self,
             item: &ExternalContentItem,
             destination: &ContentImportDestination,
-        ) -> Result<(), Self::Error> {
+        ) -> Result<ImportedContentItem, Self::Error> {
             self.copies.push((item.clone(), destination.clone()));
-            Ok(())
+
+            let file_name = item
+                .path()
+                .file_name()
+                .expect("recording content item should have a file name");
+
+            Ok(ImportedContentItem::new(
+                item.id().clone(),
+                std::path::Path::new(destination.path()).join(file_name),
+            ))
         }
     }
 
@@ -761,13 +772,15 @@ mod tests {
 
         let mut file_system = SystemContentImportFileSystem::new();
 
-        file_system
+        let imported = file_system
             .copy_item(
                 &item,
                 &ContentImportDestination::new(destination.to_string_lossy()),
             )
             .expect("content item should be copied");
 
+        assert_eq!(imported.source_item_id(), item.id());
+        assert_eq!(imported.path(), destination.join("model.gguf"));
         assert_eq!(
             std::fs::read_to_string(destination.join("model.gguf"))
                 .expect("copied content should be readable"),
