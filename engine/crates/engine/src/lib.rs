@@ -137,21 +137,31 @@ pub trait ContentImportOperationExecutor {
     /// Returns an executor-specific error if the operation fails.
     fn execute_operation(&mut self, operation: &ContentImportOperation) -> Result<(), Self::Error>;
 }
+/// Provides filesystem operations required by external content import.
+pub trait ContentImportFileSystem {
+    /// Error produced by a filesystem operation.
+    type Error;
+}
 
 /// Executes content import operations against the host system.
-#[derive(Clone, Copy, Debug, Default)]
-pub struct SystemContentImportOperationExecutor;
+#[derive(Clone, Debug)]
+pub struct SystemContentImportOperationExecutor<F> {
+    file_system: F,
+}
 
-impl SystemContentImportOperationExecutor {
-    /// Creates a production content import operation executor.
+impl<F> SystemContentImportOperationExecutor<F> {
+    /// Creates a system content import operation executor.
     #[must_use]
-    pub const fn new() -> Self {
-        Self
+    pub const fn new(file_system: F) -> Self {
+        Self { file_system }
     }
 }
 
-impl ContentImportOperationExecutor for SystemContentImportOperationExecutor {
-    type Error = std::io::Error;
+impl<F> ContentImportOperationExecutor for SystemContentImportOperationExecutor<F>
+where
+    F: ContentImportFileSystem,
+{
+    type Error = F::Error;
 
     fn execute_operation(&mut self, operation: &ContentImportOperation) -> Result<(), Self::Error> {
         match operation {
@@ -491,7 +501,7 @@ mod tests {
     use registry::{PackageRepository, Registry};
 
     use super::{
-        BootstrapConfig, BuildContext, BuildError, ContentImportOperation,
+        BootstrapConfig, BuildContext, BuildError, ContentImportFileSystem, ContentImportOperation,
         ContentImportOperationExecutor, ContentSource, DiscoveredContent,
         DryRunInstallationExecutor, Engine, InstallationExecutor, InstallationOperation,
         InstallationOperationExecutor, InstallationPlan, PrepareContentImportError,
@@ -618,10 +628,15 @@ mod tests {
         }
     }
 
+    struct RecordingContentImportFileSystem;
+
+    impl ContentImportFileSystem for RecordingContentImportFileSystem {
+        type Error = std::convert::Infallible;
+    }
     #[test]
     fn creates_system_content_import_operation_executor() {
-        let mut executor = SystemContentImportOperationExecutor::new();
-
+        let mut executor =
+            SystemContentImportOperationExecutor::new(RecordingContentImportFileSystem);
         let operation = ContentImportOperation::ImportItem {
             item: ExternalContentItem::new(
                 ContentSourceId::new("local-models-directory"),
