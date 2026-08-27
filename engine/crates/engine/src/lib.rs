@@ -140,13 +140,14 @@ pub trait ContentImportOperationExecutor {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PreparedContentImport {
     intent: ContentImportIntent,
+    items: Vec<ExternalContentItem>,
 }
 
 impl PreparedContentImport {
     /// Creates a prepared external content import.
     #[must_use]
-    pub const fn new(intent: ContentImportIntent) -> Self {
-        Self { intent }
+    pub const fn new(intent: ContentImportIntent, items: Vec<ExternalContentItem>) -> Self {
+        Self { intent, items }
     }
 
     /// Returns the confirmed content import intent.
@@ -155,6 +156,11 @@ impl PreparedContentImport {
         &self.intent
     }
 
+    /// Returns the resolved external content items.
+    #[must_use]
+    pub fn items(&self) -> &[ExternalContentItem] {
+        &self.items
+    }
     /// Builds the ordered content-import operations.
     #[must_use]
     pub fn operations(&self) -> Vec<ContentImportOperation> {
@@ -285,11 +291,12 @@ impl Engine {
     }
     /// Prepares confirmed external content for later import.
     #[must_use]
-    pub const fn prepare_content_import(
+    pub fn prepare_content_import(
         &self,
         intent: ContentImportIntent,
+        items: Vec<ExternalContentItem>,
     ) -> PreparedContentImport {
-        PreparedContentImport::new(intent)
+        PreparedContentImport::new(intent, items)
     }
     /// Discovers storage devices using the supplied storage inspector.
     ///
@@ -422,7 +429,8 @@ mod tests {
     use model::{
         Action, ApplianceProfile, Capability, CapabilityId, ContentImportIntent,
         ContentRepositoryId, ContentSourceId, DiscoveredStorage, DiscoveredStorageId,
-        ExternalContentItemId, InstallationIntent, PlanStep, Provider, ProviderId, StorageKind,
+        ExternalContentItem, ExternalContentItemId, InstallationIntent, PlanStep, Provider,
+        ProviderId, StorageKind,
     };
     use registry::{PackageRepository, Registry};
 
@@ -562,9 +570,21 @@ mod tests {
             ExternalContentItemId::new("local-models-directory:/media/daia/models/tokenizer.json"),
         ]);
 
-        let prepared = engine.prepare_content_import(intent.clone());
+        let items = vec![
+            ExternalContentItem::new(
+                ContentSourceId::new("local-models-directory"),
+                "/media/daia/models/model.gguf",
+            ),
+            ExternalContentItem::new(
+                ContentSourceId::new("local-models-directory"),
+                "/media/daia/models/tokenizer.json",
+            ),
+        ];
+
+        let prepared = engine.prepare_content_import(intent.clone(), items.clone());
 
         assert_eq!(prepared.intent(), &intent);
+        assert_eq!(prepared.items(), items.as_slice());
     }
 
     #[test]
@@ -574,17 +594,22 @@ mod tests {
             ExternalContentItemId::new("local-models-directory:/media/daia/models/tokenizer.json"),
         ]);
 
-        let prepared = PreparedContentImport::new(intent.clone());
+        let prepared = PreparedContentImport::new(intent.clone(), Vec::new());
 
         assert_eq!(prepared.intent(), &intent);
     }
 
     #[test]
     fn prepared_content_import_executes_operations_in_order() {
-        let prepared = PreparedContentImport::new(ContentImportIntent::new(vec![
-            ExternalContentItemId::new("local-models-directory:/media/daia/models/model.gguf"),
-            ExternalContentItemId::new("local-models-directory:/media/daia/models/tokenizer.json"),
-        ]));
+        let prepared = PreparedContentImport::new(
+            ContentImportIntent::new(vec![
+                ExternalContentItemId::new("local-models-directory:/media/daia/models/model.gguf"),
+                ExternalContentItemId::new(
+                    "local-models-directory:/media/daia/models/tokenizer.json",
+                ),
+            ]),
+            Vec::new(),
+        );
 
         let mut executor = RecordingContentImportOperationExecutor::default();
 
@@ -610,10 +635,15 @@ mod tests {
     }
     #[test]
     fn prepared_content_import_builds_operations_for_selected_items() {
-        let prepared = PreparedContentImport::new(ContentImportIntent::new(vec![
-            ExternalContentItemId::new("local-models-directory:/media/daia/models/model.gguf"),
-            ExternalContentItemId::new("local-models-directory:/media/daia/models/tokenizer.json"),
-        ]));
+        let prepared = PreparedContentImport::new(
+            ContentImportIntent::new(vec![
+                ExternalContentItemId::new("local-models-directory:/media/daia/models/model.gguf"),
+                ExternalContentItemId::new(
+                    "local-models-directory:/media/daia/models/tokenizer.json",
+                ),
+            ]),
+            Vec::new(),
+        );
 
         assert_eq!(
             prepared.operations(),
