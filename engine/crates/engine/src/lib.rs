@@ -168,7 +168,7 @@ pub struct PreparedContentImport {
 impl PreparedContentImport {
     /// Creates a prepared external content import.
     #[must_use]
-    pub const fn new(intent: ContentImportIntent, items: Vec<ExternalContentItem>) -> Self {
+    const fn new(intent: ContentImportIntent, items: Vec<ExternalContentItem>) -> Self {
         Self { intent, items }
     }
 
