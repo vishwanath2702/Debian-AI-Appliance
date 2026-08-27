@@ -189,7 +189,13 @@ impl PreparedContentImport {
         self.intent
             .items()
             .iter()
-            .filter_map(|item_id| self.items.iter().find(|item| item.id() == item_id).cloned())
+            .map(|item_id| {
+                self.items
+                    .iter()
+                    .find(|item| item.id() == item_id)
+                    .expect("prepared content import should contain every selected item")
+                    .clone()
+            })
             .map(|item| ContentImportOperation::ImportItem { item })
             .collect()
     }
