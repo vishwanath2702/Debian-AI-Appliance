@@ -139,7 +139,10 @@ pub trait ContentImportOperationExecutor {
     /// # Errors
     ///
     /// Returns an executor-specific error if the operation fails.
-    fn execute_operation(&mut self, operation: &ContentImportOperation) -> Result<(), Self::Error>;
+    fn execute_operation(
+        &mut self,
+        operation: &ContentImportOperation,
+    ) -> Result<ImportedContentItem, Self::Error>;
 }
 
 /// Provides filesystem operations required by external content import.
@@ -223,11 +226,13 @@ where
 {
     type Error = F::Error;
 
-    fn execute_operation(&mut self, operation: &ContentImportOperation) -> Result<(), Self::Error> {
+    fn execute_operation(
+        &mut self,
+        operation: &ContentImportOperation,
+    ) -> Result<ImportedContentItem, Self::Error> {
         match operation {
             ContentImportOperation::ImportItem { item, destination } => {
-                self.file_system.copy_item(item, destination)?;
-                Ok(())
+                self.file_system.copy_item(item, destination)
             }
         }
     }
@@ -702,9 +707,22 @@ mod tests {
         fn execute_operation(
             &mut self,
             operation: &ContentImportOperation,
-        ) -> Result<(), Self::Error> {
+        ) -> Result<ImportedContentItem, Self::Error> {
             self.operations.push(operation.clone());
-            Ok(())
+
+            match operation {
+                ContentImportOperation::ImportItem { item, destination } => {
+                    let file_name = item
+                        .path()
+                        .file_name()
+                        .expect("recording content item should have a file name");
+
+                    Ok(ImportedContentItem::new(
+                        item.id().clone(),
+                        std::path::Path::new(destination.path()).join(file_name),
+                    ))
+                }
+            }
         }
     }
     #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -723,13 +741,26 @@ mod tests {
         fn execute_operation(
             &mut self,
             operation: &ContentImportOperation,
-        ) -> Result<(), Self::Error> {
+        ) -> Result<ImportedContentItem, Self::Error> {
             if self.operations.len() == self.fail_at {
                 return Err(RecordingContentImportOperationError::Failed);
             }
 
             self.operations.push(operation.clone());
-            Ok(())
+
+            match operation {
+                ContentImportOperation::ImportItem { item, destination } => {
+                    let file_name = item
+                        .path()
+                        .file_name()
+                        .expect("recording content item should have a file name");
+
+                    Ok(ImportedContentItem::new(
+                        item.id().clone(),
+                        std::path::Path::new(destination.path()).join(file_name),
+                    ))
+                }
+            }
         }
     }
     #[derive(Default)]
