@@ -158,6 +158,30 @@ pub trait ContentImportFileSystem {
         destination: &ContentImportDestination,
     ) -> Result<(), Self::Error>;
 }
+/// Performs external content import using the host filesystem.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct SystemContentImportFileSystem;
+
+impl SystemContentImportFileSystem {
+    /// Creates a system content import filesystem.
+    #[must_use]
+    pub const fn new() -> Self {
+        Self
+    }
+}
+
+impl ContentImportFileSystem for SystemContentImportFileSystem {
+    type Error = std::io::Error;
+
+    fn copy_item(
+        &mut self,
+        item: &ExternalContentItem,
+        destination: &ContentImportDestination,
+    ) -> Result<(), Self::Error> {
+        std::fs::copy(item.path(), destination.path())?;
+        Ok(())
+    }
+}
 /// Executes content import operations against the host system.
 #[derive(Clone, Debug)]
 pub struct SystemContentImportOperationExecutor<F> {
@@ -532,15 +556,15 @@ mod tests {
     };
     use registry::{PackageRepository, Registry};
 
-    use super::{
-        BootstrapConfig, BuildContext, BuildError, ContentImportFileSystem, ContentImportOperation,
-        ContentImportOperationExecutor, ContentSource, DiscoveredContent,
-        DryRunInstallationExecutor, Engine, InstallationExecutor, InstallationOperation,
-        InstallationOperationExecutor, InstallationPlan, PrepareContentImportError,
-        PreparedContentImport, PreparedInstallation, RootfsInstallationPlanExecutor,
-        RootfsRunError, SystemContentImportOperationExecutor, SystemInstallationOperationExecutor,
-        default_installation_mounts, default_installation_partitions,
-    };
+use super::{
+    BootstrapConfig, BuildContext, BuildError, ContentImportFileSystem, ContentImportOperation,
+    ContentImportOperationExecutor, ContentSource, DiscoveredContent, DryRunInstallationExecutor,
+    Engine, InstallationExecutor, InstallationOperation, InstallationOperationExecutor,
+    InstallationPlan, PrepareContentImportError, PreparedContentImport, PreparedInstallation,
+    RootfsInstallationPlanExecutor, RootfsRunError, SystemContentImportFileSystem,
+    SystemContentImportOperationExecutor, SystemInstallationOperationExecutor,
+    default_installation_mounts, default_installation_partitions,
+};
     struct TestContentInspector;
 
     impl ContentInspector for TestContentInspector {
@@ -677,7 +701,36 @@ mod tests {
             Ok(())
         }
     }
-    #[test]
+
+#[test]
+fn system_content_import_file_system_copies_item() {
+    let directory = tempfile::tempdir().expect("temporary directory should be created");
+
+    let source = directory.path().join("model.gguf");
+    let destination = directory.path().join("imported-model.gguf");
+
+    std::fs::write(&source, "model").expect("source content should be written");
+
+    let item = ExternalContentItem::new(
+        ContentSourceId::new("local-models-directory"),
+        source,
+    );
+
+    let mut file_system = SystemContentImportFileSystem::new();
+
+    file_system
+        .copy_item(
+            &item,
+            &ContentImportDestination::new(destination.to_string_lossy()),
+        )
+        .expect("content item should be copied");
+
+    assert_eq!(
+        std::fs::read_to_string(destination).expect("copied content should be readable"),
+        "model"
+    );
+} 
+   #[test]
     fn creates_system_content_import_operation_executor() {
         let mut executor =
             SystemContentImportOperationExecutor::new(RecordingContentImportFileSystem::default());
