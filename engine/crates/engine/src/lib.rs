@@ -319,15 +319,17 @@ impl PreparedContentImport {
     /// # Errors
     ///
     /// Returns the first error produced by the operation executor.
-    pub fn execute<E>(&self, executor: &mut E) -> Result<(), E::Error>
+    pub fn execute<E>(&self, executor: &mut E) -> Result<Vec<ImportedContentItem>, E::Error>
     where
         E: ContentImportOperationExecutor,
     {
+        let mut imported_items = Vec::new();
+
         for operation in self.operations() {
-            executor.execute_operation(&operation)?;
+            imported_items.push(executor.execute_operation(&operation)?);
         }
 
-        Ok(())
+        Ok(imported_items)
     }
 }
 /// High-level orchestration entry point.
@@ -981,10 +983,9 @@ mod tests {
 
         let mut executor = RecordingContentImportOperationExecutor::default();
 
-        prepared
+        let imported_items = prepared
             .execute(&mut executor)
             .expect("content import operations should execute");
-
         assert_eq!(
             executor.operations,
             vec![
@@ -996,6 +997,16 @@ mod tests {
                     item: items[1].clone(),
                     destination: ContentImportDestination::new("/var/lib/daia/content"),
                 },
+            ]
+        );
+        assert_eq!(
+            imported_items,
+            vec![
+                ImportedContentItem::new(items[0].id().clone(), "/var/lib/daia/content/model.gguf",),
+                ImportedContentItem::new(
+                    items[1].id().clone(),
+                    "/var/lib/daia/content/tokenizer.json",
+                ),
             ]
         );
     }
