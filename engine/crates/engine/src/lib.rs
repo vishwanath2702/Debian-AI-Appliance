@@ -124,6 +124,9 @@ pub enum ContentImportOperation {
     ImportItem {
         /// Resolved external content item to import.
         item: ExternalContentItem,
+
+        /// Destination for the imported content.
+        destination: ContentImportDestination,
     },
 }
 /// Executes one planned external content import operation.
@@ -144,7 +147,6 @@ pub trait ContentImportFileSystem {
     /// Error produced by a filesystem operation.
     type Error;
 }
-
 /// Executes content import operations against the host system.
 #[derive(Clone, Debug)]
 pub struct SystemContentImportOperationExecutor<F> {
@@ -158,7 +160,6 @@ impl<F> SystemContentImportOperationExecutor<F> {
         Self { file_system }
     }
 }
-
 impl<F> ContentImportOperationExecutor for SystemContentImportOperationExecutor<F>
 where
     F: ContentImportFileSystem,
@@ -242,7 +243,10 @@ impl PreparedContentImport {
                     .expect("prepared content import should contain every selected item")
                     .clone()
             })
-            .map(|item| ContentImportOperation::ImportItem { item })
+            .map(|item| ContentImportOperation::ImportItem {
+                item,
+                destination: self.destination.clone(),
+            })
             .collect()
     }
     /// Executes the prepared content-import operations in order.
@@ -658,8 +662,8 @@ mod tests {
                 ContentSourceId::new("local-models-directory"),
                 "/media/daia/models/model.gguf",
             ),
+            destination: ContentImportDestination::new("/var/lib/daia/content"),
         };
-
         executor
             .execute_operation(&operation)
             .expect("system content import executor should accept import operation");
@@ -780,9 +784,11 @@ mod tests {
             vec![
                 ContentImportOperation::ImportItem {
                     item: items[0].clone(),
+                    destination: ContentImportDestination::new("/var/lib/daia/content"),
                 },
                 ContentImportOperation::ImportItem {
                     item: items[1].clone(),
+                    destination: ContentImportDestination::new("/var/lib/daia/content"),
                 },
             ]
         );
@@ -812,9 +818,11 @@ mod tests {
             vec![
                 ContentImportOperation::ImportItem {
                     item: items[0].clone(),
+                    destination: ContentImportDestination::new("/var/lib/daia/content"),
                 },
                 ContentImportOperation::ImportItem {
                     item: items[1].clone(),
+                    destination: ContentImportDestination::new("/var/lib/daia/content"),
                 },
             ]
         );
