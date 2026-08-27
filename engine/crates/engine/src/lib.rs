@@ -137,6 +137,28 @@ pub trait ContentImportOperationExecutor {
     /// Returns an executor-specific error if the operation fails.
     fn execute_operation(&mut self, operation: &ContentImportOperation) -> Result<(), Self::Error>;
 }
+
+/// Executes content import operations against the host system.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct SystemContentImportOperationExecutor;
+
+impl SystemContentImportOperationExecutor {
+    /// Creates a production content import operation executor.
+    #[must_use]
+    pub const fn new() -> Self {
+        Self
+    }
+}
+
+impl ContentImportOperationExecutor for SystemContentImportOperationExecutor {
+    type Error = std::io::Error;
+
+    fn execute_operation(&mut self, operation: &ContentImportOperation) -> Result<(), Self::Error> {
+        match operation {
+            ContentImportOperation::ImportItem { .. } => Ok(()),
+        }
+    }
+}
 /// Error returned when external content cannot be prepared for import.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum PrepareContentImportError {
@@ -474,8 +496,8 @@ mod tests {
         DryRunInstallationExecutor, Engine, InstallationExecutor, InstallationOperation,
         InstallationOperationExecutor, InstallationPlan, PrepareContentImportError,
         PreparedContentImport, PreparedInstallation, RootfsInstallationPlanExecutor,
-        RootfsRunError, SystemInstallationOperationExecutor, default_installation_mounts,
-        default_installation_partitions,
+        RootfsRunError, SystemContentImportOperationExecutor, SystemInstallationOperationExecutor,
+        default_installation_mounts, default_installation_partitions,
     };
     struct TestContentInspector;
 
@@ -594,6 +616,22 @@ mod tests {
             self.operations.push(operation.clone());
             Ok(())
         }
+    }
+
+    #[test]
+    fn creates_system_content_import_operation_executor() {
+        let mut executor = SystemContentImportOperationExecutor::new();
+
+        let operation = ContentImportOperation::ImportItem {
+            item: ExternalContentItem::new(
+                ContentSourceId::new("local-models-directory"),
+                "/media/daia/models/model.gguf",
+            ),
+        };
+
+        executor
+            .execute_operation(&operation)
+            .expect("system content import executor should accept import operation");
     }
 
     #[test]
