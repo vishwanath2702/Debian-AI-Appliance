@@ -317,8 +317,14 @@ impl Engine {
         &self,
         intent: ContentImportIntent,
         items: Vec<ExternalContentItem>,
-    ) -> PreparedContentImport {
-        PreparedContentImport::new(intent, items)
+    ) -> Result<PreparedContentImport, PrepareContentImportError> {
+        for item_id in intent.items() {
+            if !items.iter().any(|item| item.id() == item_id) {
+                return Err(PrepareContentImportError::UnknownItem(item_id.clone()));
+            }
+        }
+
+        Ok(PreparedContentImport::new(intent, items))
     }
     /// Discovers storage devices using the supplied storage inspector.
     ///
@@ -585,6 +591,27 @@ mod tests {
     }
 
     #[test]
+    fn prepare_content_import_rejects_unknown_selected_item() {
+        let engine = Engine::from_registry(desktop_registry());
+
+        let missing_id =
+            ExternalContentItemId::new("local-models-directory:/media/daia/models/missing.gguf");
+
+        let intent = ContentImportIntent::new(vec![missing_id.clone()]);
+
+        let items = vec![ExternalContentItem::new(
+            ContentSourceId::new("local-models-directory"),
+            "/media/daia/models/model.gguf",
+        )];
+
+        let error = engine
+            .prepare_content_import(intent, items)
+            .expect_err("unknown selected content should be rejected");
+
+        assert_eq!(error, PrepareContentImportError::UnknownItem(missing_id));
+    }
+
+    #[test]
     fn prepare_content_import_error_describes_unknown_item() {
         let item_id =
             ExternalContentItemId::new("local-models-directory:/media/daia/models/missing.gguf");
@@ -616,7 +643,9 @@ mod tests {
             ),
         ];
 
-        let prepared = engine.prepare_content_import(intent.clone(), items.clone());
+        let prepared = engine
+            .prepare_content_import(intent.clone(), items.clone())
+            .expect("selected content items should resolve");
 
         assert_eq!(prepared.intent(), &intent);
         assert_eq!(prepared.items(), items.as_slice());
