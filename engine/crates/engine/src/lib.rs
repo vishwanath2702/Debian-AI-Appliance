@@ -120,8 +120,8 @@ pub use backend::{BuildBackend, IsoBackend, RootfsBackend, RunnerBackend};
 pub enum ContentImportOperation {
     /// Import one selected external content item.
     ImportItem {
-        /// Stable identifier of the selected external content item.
-        item_id: model::ExternalContentItemId,
+        /// Resolved external content item to import.
+        item: ExternalContentItem,
     },
 }
 /// Executes one planned external content import operation.
@@ -167,8 +167,8 @@ impl PreparedContentImport {
         self.intent
             .items()
             .iter()
-            .cloned()
-            .map(|item_id| ContentImportOperation::ImportItem { item_id })
+            .filter_map(|item_id| self.items.iter().find(|item| item.id() == item_id).cloned())
+            .map(|item| ContentImportOperation::ImportItem { item })
             .collect()
     }
     /// Executes the prepared content-import operations in order.
@@ -601,14 +601,20 @@ mod tests {
 
     #[test]
     fn prepared_content_import_executes_operations_in_order() {
+        let items = vec![
+            ExternalContentItem::new(
+                ContentSourceId::new("local-models-directory"),
+                "/media/daia/models/model.gguf",
+            ),
+            ExternalContentItem::new(
+                ContentSourceId::new("local-models-directory"),
+                "/media/daia/models/tokenizer.json",
+            ),
+        ];
+
         let prepared = PreparedContentImport::new(
-            ContentImportIntent::new(vec![
-                ExternalContentItemId::new("local-models-directory:/media/daia/models/model.gguf"),
-                ExternalContentItemId::new(
-                    "local-models-directory:/media/daia/models/tokenizer.json",
-                ),
-            ]),
-            Vec::new(),
+            ContentImportIntent::new(vec![items[0].id().clone(), items[1].id().clone()]),
+            items.clone(),
         );
 
         let mut executor = RecordingContentImportOperationExecutor::default();
@@ -621,42 +627,41 @@ mod tests {
             executor.operations,
             vec![
                 ContentImportOperation::ImportItem {
-                    item_id: ExternalContentItemId::new(
-                        "local-models-directory:/media/daia/models/model.gguf",
-                    ),
+                    item: items[0].clone(),
                 },
                 ContentImportOperation::ImportItem {
-                    item_id: ExternalContentItemId::new(
-                        "local-models-directory:/media/daia/models/tokenizer.json",
-                    ),
+                    item: items[1].clone(),
                 },
             ]
         );
     }
+
     #[test]
     fn prepared_content_import_builds_operations_for_selected_items() {
+        let items = vec![
+            ExternalContentItem::new(
+                ContentSourceId::new("local-models-directory"),
+                "/media/daia/models/model.gguf",
+            ),
+            ExternalContentItem::new(
+                ContentSourceId::new("local-models-directory"),
+                "/media/daia/models/tokenizer.json",
+            ),
+        ];
+
         let prepared = PreparedContentImport::new(
-            ContentImportIntent::new(vec![
-                ExternalContentItemId::new("local-models-directory:/media/daia/models/model.gguf"),
-                ExternalContentItemId::new(
-                    "local-models-directory:/media/daia/models/tokenizer.json",
-                ),
-            ]),
-            Vec::new(),
+            ContentImportIntent::new(vec![items[0].id().clone(), items[1].id().clone()]),
+            items.clone(),
         );
 
         assert_eq!(
             prepared.operations(),
             vec![
                 ContentImportOperation::ImportItem {
-                    item_id: ExternalContentItemId::new(
-                        "local-models-directory:/media/daia/models/model.gguf",
-                    ),
+                    item: items[0].clone(),
                 },
                 ContentImportOperation::ImportItem {
-                    item_id: ExternalContentItemId::new(
-                        "local-models-directory:/media/daia/models/tokenizer.json",
-                    ),
+                    item: items[1].clone(),
                 },
             ]
         );
