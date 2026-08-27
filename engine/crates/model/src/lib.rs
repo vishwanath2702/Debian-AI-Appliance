@@ -52,7 +52,25 @@ impl fmt::Display for ContentRepositoryId {
         formatter.write_str(self.as_str())
     }
 }
+/// Destination for imported external content.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ContentImportDestination {
+    path: String,
+}
 
+impl ContentImportDestination {
+    /// Creates a content import destination.
+    #[must_use]
+    pub fn new(path: impl Into<String>) -> Self {
+        Self { path: path.into() }
+    }
+
+    /// Returns the destination path.
+    #[must_use]
+    pub fn path(&self) -> &str {
+        &self.path
+    }
+}
 /// Describes a logical collection of content available to an appliance.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ContentRepository {
@@ -694,12 +712,20 @@ impl InstallationIntent {
 #[cfg(test)]
 mod tests {
     use super::{
-        Action, AssetId, Capability, CapabilityId, ContentImportIntent, ContentRepository,
-        ContentRepositoryId, ContentSource, ContentSourceId, DiscoveredContent, DiscoveredStorage,
-        DiscoveredStorageId, ExternalContentItem, ExternalContentItemId, InstallationIntent,
-        PackageManifest, PlanStep, ProviderId, StorageKind, StorageTarget, StorageTargetId,
+        Action, AssetId, Capability, CapabilityId, ContentImportDestination, ContentImportIntent,
+        ContentRepository, ContentRepositoryId, ContentSource, ContentSourceId, DiscoveredContent,
+        DiscoveredStorage, DiscoveredStorageId, ExternalContentItem, ExternalContentItemId,
+        InstallationIntent, PackageManifest, PlanStep, ProviderId, StorageKind, StorageTarget,
+        StorageTargetId,
     };
     use std::path::{Path, PathBuf};
+
+    #[test]
+    fn content_import_destination_exposes_path() {
+        let destination = ContentImportDestination::new("/var/lib/daia/content");
+
+        assert_eq!(destination.path(), "/var/lib/daia/content");
+    }
 
     #[test]
     fn content_import_intent_exposes_selected_items() {
