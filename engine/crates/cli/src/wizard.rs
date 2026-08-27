@@ -120,6 +120,7 @@ impl WizardState {
         Some(WizardConfig {
             profile_name: self.profile_name?,
             content_repository_id: self.selected_content_repository?,
+            external_content_items: self.external_content_items,
             external_content: self.selected_external_content,
             storage_id: self.selected_storage?,
         })
@@ -132,6 +133,7 @@ impl WizardState {
 pub struct WizardConfig {
     profile_name: String,
     content_repository_id: ContentRepositoryId,
+    external_content_items: Vec<ExternalContentItem>,
     external_content: Vec<ExternalContentItemId>,
     storage_id: DiscoveredStorageId,
 }
@@ -153,6 +155,11 @@ impl WizardConfig {
         repository: &'a ContentRepositoryRepository,
     ) -> Option<&'a ContentRepository> {
         repository.repository(&self.content_repository_id)
+    }
+    /// Returns the external content items discovered before confirmation.
+    #[must_use]
+    pub fn external_content_items(&self) -> &[ExternalContentItem] {
+        &self.external_content_items
     }
     /// Returns the external content selected for import.
     #[must_use]
@@ -221,6 +228,33 @@ mod tests {
             repository.description(),
             "Models available on local storage"
         );
+    }
+    #[test]
+    fn wizard_configuration_preserves_external_content_items() {
+        let mut state = WizardState::new();
+
+        state.set_profile_name("desktop");
+        state.select_content_repository(ContentRepositoryId::new("local-models"));
+
+        let items = vec![
+            ExternalContentItem::new(
+                ContentSourceId::new("local-models-directory"),
+                "/media/daia/models/model.gguf",
+            ),
+            ExternalContentItem::new(
+                ContentSourceId::new("local-models-directory"),
+                "/media/daia/models/tokenizer.json",
+            ),
+        ];
+
+        state.set_external_content_items(items.clone());
+        state.select_storage(DiscoveredStorageId::new("serial:usb-disk"));
+
+        let config = state
+            .into_config()
+            .expect("completed wizard state should produce configuration");
+
+        assert_eq!(config.external_content_items(), items.as_slice());
     }
     #[test]
     fn wizard_configuration_preserves_selected_external_content() {
