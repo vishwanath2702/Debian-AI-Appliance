@@ -178,7 +178,16 @@ impl ContentImportFileSystem for SystemContentImportFileSystem {
         item: &ExternalContentItem,
         destination: &ContentImportDestination,
     ) -> Result<(), Self::Error> {
-        std::fs::copy(item.path(), destination.path())?;
+        let file_name = item.path().file_name().ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "external content item path has no file name",
+            )
+        })?;
+
+        let destination = std::path::Path::new(destination.path()).join(file_name);
+
+        std::fs::copy(item.path(), destination)?;
         Ok(())
     }
 }
@@ -707,9 +716,10 @@ fn system_content_import_file_system_copies_item() {
     let directory = tempfile::tempdir().expect("temporary directory should be created");
 
     let source = directory.path().join("model.gguf");
-    let destination = directory.path().join("imported-model.gguf");
+    let destination = directory.path().join("content");
 
     std::fs::write(&source, "model").expect("source content should be written");
+    std::fs::create_dir(&destination).expect("destination directory should be created");
 
     let item = ExternalContentItem::new(
         ContentSourceId::new("local-models-directory"),
@@ -726,10 +736,11 @@ fn system_content_import_file_system_copies_item() {
         .expect("content item should be copied");
 
     assert_eq!(
-        std::fs::read_to_string(destination).expect("copied content should be readable"),
+        std::fs::read_to_string(destination.join("model.gguf"))
+            .expect("copied content should be readable"),
         "model"
     );
-} 
+}
    #[test]
     fn creates_system_content_import_operation_executor() {
         let mut executor =
