@@ -506,19 +506,19 @@ fn prepare_wizard_content_import(
 }
 fn prepare_wizard_installation(
     engine: &Engine,
-    config: &wizard::WizardConfig,
+    config: &model::ApplianceConfiguration,
 ) -> Result<engine::PreparedInstallation, String> {
     let repository = appliance_profile_repository::load()
         .map_err(|error| format!("Error loading appliance profiles: {error}"))?;
 
-    let profile = config.profile(&repository).ok_or_else(|| {
+    let profile = repository.profile(config.profile_name()).ok_or_else(|| {
         format!(
             "Error: selected appliance profile \"{}\" no longer exists",
             config.profile_name()
         )
     })?;
 
-    let intent = config.installation_intent();
+    let intent = config.installation().clone();
 
     let storage = engine
         .discover_storage(&LinuxStorageInspector::new())
@@ -649,7 +649,9 @@ fn run_install() -> ExitCode {
         return ExitCode::FAILURE;
     };
 
-    let prepared = match prepare_wizard_installation(&engine, &config) {
+    let appliance_configuration = config.appliance_configuration();
+
+    let prepared = match prepare_wizard_installation(&engine, &appliance_configuration) {
         Ok(prepared) => prepared,
         Err(error) => {
             eprintln!("{error}");
@@ -822,7 +824,9 @@ fn run_wizard() -> ExitCode {
                 match error {}
             }
 
-            let prepared = match prepare_wizard_installation(&engine, &config) {
+            let appliance_configuration = config.appliance_configuration();
+
+            let prepared = match prepare_wizard_installation(&engine, &appliance_configuration) {
                 Ok(prepared) => prepared,
                 Err(error) => {
                     eprintln!("{error}");
