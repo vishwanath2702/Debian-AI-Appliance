@@ -5,7 +5,8 @@ use engine::{
     DryRunInstallationExecutor, Engine, InstallationOperation, SystemInstallationOperationExecutor,
 };
 use inspector::{
-    DebianIsoInspector, IsoInspector, LinuxStorageInspector, LocalFilesystemContentInspector,
+    ContentInspector, DebianIsoInspector, IsoInspector, LinuxStorageInspector,
+    LocalFilesystemContentInspector,
 };
 use model::{Capability, Plan};
 use registry::{ContentRepositoryRepository, PackageRepository};
@@ -492,17 +493,47 @@ fn confirm_wizard_state() -> Result<bool, String> {
     ))
 }
 
-fn prepare_wizard_content_import(
+fn prepare_wizard_content_import_with<I>(
     engine: &Engine,
-    config: &wizard::WizardConfig,
-) -> Result<engine::PreparedContentImport, String> {
+    config: &model::ApplianceConfiguration,
+    repository: &model::ContentRepository,
+    inspector: &I,
+) -> Result<engine::PreparedContentImport, String>
+where
+    I: ContentInspector,
+{
+    let items = engine
+        .repository_content_items(repository, inspector)
+        .map_err(|error| format!("Error discovering content: {error}"))?;
+
     engine
         .prepare_content_import(
-            config.content_import_intent(),
-            config.external_content_items().to_vec(),
+            config.content_import().clone(),
+            items,
             model::ContentImportDestination::new("/var/lib/daia/content"),
         )
         .map_err(|error| format!("Error preparing content import: {error:?}"))
+}
+
+fn prepare_wizard_content_import(
+    engine: &Engine,
+    config: &model::ApplianceConfiguration,
+) -> Result<engine::PreparedContentImport, String> {
+    let repositories = ContentRepositoryRepository::load_directory(&content_repository_directory())
+        .map_err(|error| format!("Error loading content repositories: {error}"))?;
+
+    let repository = repositories
+        .repository(config.content_repository_id())
+        .ok_or_else(|| {
+            format!(
+                "Error: selected content repository \"{}\" no longer exists",
+                config.content_repository_id()
+            )
+        })?;
+
+    let inspector = LocalFilesystemContentInspector::new();
+
+    prepare_wizard_content_import_with(engine, config, repository, &inspector)
 }
 fn prepare_wizard_installation(
     engine: &Engine,
@@ -810,21 +841,22 @@ fn run_wizard() -> ExitCode {
                 return ExitCode::FAILURE;
             };
 
-            let prepared_content_import = match prepare_wizard_content_import(&engine, &config) {
-                Ok(prepared) => prepared,
-                Err(error) => {
-                    eprintln!("{error}");
-                    return ExitCode::FAILURE;
-                }
-            };
+            let appliance_configuration = config.appliance_configuration();
+
+            let prepared_content_import =
+                match prepare_wizard_content_import(&engine, &appliance_configuration) {
+                    Ok(prepared) => prepared,
+                    Err(error) => {
+                        eprintln!("{error}");
+                        return ExitCode::FAILURE;
+                    }
+                };
 
             let mut content_import_executor = DryRunContentImportOperationExecutor::default();
 
             if let Err(error) = prepared_content_import.execute(&mut content_import_executor) {
                 match error {}
             }
-
-            let appliance_configuration = config.appliance_configuration();
 
             let prepared = match prepare_wizard_installation(&engine, &appliance_configuration) {
                 Ok(prepared) => prepared,
@@ -865,42 +897,63 @@ fn run_wizard() -> ExitCode {
 }
 #[cfg(test)]
 mod tests {
-    #[test]
-    fn prepares_content_import_from_wizard_configuration() {
-        use model::{
-            ContentRepositoryId, ContentSourceId, DiscoveredStorageId, ExternalContentItem,
-        };
-
-        let engine = super::load_engine().expect("engine should load");
-
-        let item = ExternalContentItem::new(
-            ContentSourceId::new("local-models-directory"),
-            "/media/daia/models/model.gguf",
-        );
-
-        let mut state = super::WizardState::new();
-        state.set_profile_name("desktop");
-        state.select_content_repository(ContentRepositoryId::new("local-models"));
-        state.set_external_content_items(vec![item.clone()]);
-        state.select_external_content(vec![item.id().clone()]);
-        state.select_storage(DiscoveredStorageId::new("serial:usb-disk"));
-
-        let config = state
-            .into_config()
-            .expect("completed wizard state should build configuration");
-
-        let prepared = super::prepare_wizard_content_import(&engine, &config)
-            .expect("wizard content import should prepare");
-
-        assert_eq!(prepared.intent(), &config.content_import_intent());
-        assert_eq!(prepared.items(), &[item]);
-        assert_eq!(prepared.destination().path(), "/var/lib/daia/content");
-    }
-
     use super::{BuildOptions, run};
     use std::path::PathBuf;
     use std::process::ExitCode;
+    #[test]
+    fn prepares_content_import_from_appliance_configuration() {
+        use model::{
+            ApplianceConfiguration, ContentImportIntent, ContentRepository, ContentRepositoryId,
+            ContentSource, ContentSourceId, DiscoveredStorageId, ExternalContentItem,
+            InstallationIntent,
+        };
 
+        let directory =
+            std::env::temp_dir().join(format!("daia-content-import-test-{}", std::process::id()));
+
+        if directory.exists() {
+            std::fs::remove_dir_all(&directory).expect("existing test directory should be removed");
+        }
+
+        std::fs::create_dir(&directory).expect("temporary directory should be created");
+
+        let model_path = directory.join("model.gguf");
+
+        std::fs::write(&model_path, "model").expect("model content should be written");
+
+        let repository = ContentRepository::with_sources(
+            "local-models",
+            "Models available on local storage",
+            vec![ContentSource::new(
+                "local-models-directory",
+                ContentRepositoryId::new("local-models"),
+                directory.to_string_lossy(),
+            )],
+        );
+
+        let item =
+            ExternalContentItem::new(ContentSourceId::new("local-models-directory"), &model_path);
+
+        let config = ApplianceConfiguration::new(
+            "desktop",
+            ContentRepositoryId::new("local-models"),
+            ContentImportIntent::new(vec![item.id().clone()]),
+            InstallationIntent::new("desktop", DiscoveredStorageId::new("serial:usb-disk")),
+        );
+
+        let engine = super::load_engine().expect("engine should load");
+        let inspector = inspector::LocalFilesystemContentInspector::new();
+
+        let prepared =
+            super::prepare_wizard_content_import_with(&engine, &config, &repository, &inspector)
+                .expect("appliance content import should prepare");
+
+        assert_eq!(prepared.intent(), config.content_import());
+        assert_eq!(prepared.items(), &[item]);
+        assert_eq!(prepared.destination().path(), "/var/lib/daia/content");
+
+        std::fs::remove_dir_all(&directory).expect("test directory should be removed");
+    }
     #[test]
     fn plans_repository_appliance_profile() {
         let arguments = vec!["plan-profile".to_owned(), "desktop".to_owned()];
