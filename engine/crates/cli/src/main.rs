@@ -576,6 +576,27 @@ fn installation_operation_name(operation: &InstallationOperation) -> String {
         }
     }
 }
+fn print_content_import_operations(executor: &DryRunContentImportOperationExecutor) {
+    if executor.executed_operations().is_empty() {
+        return;
+    }
+
+    println!();
+    println!("Planned content import operations:");
+
+    for (index, operation) in executor.executed_operations().iter().enumerate() {
+        match operation {
+            engine::ContentImportOperation::ImportItem { item, destination } => {
+                println!(
+                    "  {}. Import {} to {}",
+                    index + 1,
+                    item.path().display(),
+                    destination.path()
+                );
+            }
+        }
+    }
+}
 fn print_installation_operations(executor: &DryRunInstallationExecutor) {
     let Some(plan) = executor.plan() else {
         return;
@@ -821,6 +842,8 @@ fn run_wizard() -> ExitCode {
             if let Some(summary) = executor.summary() {
                 println!("{summary}");
             }
+
+            print_content_import_operations(&content_import_executor);
             print_installation_operations(&executor);
             ExitCode::SUCCESS
         }
