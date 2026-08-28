@@ -1,8 +1,8 @@
 //! Wizard state for interactive DAIA appliance configuration.
 use model::{
-    ContentImportIntent, ContentRepository, ContentRepositoryId, DiscoveredContent,
-    DiscoveredStorage, DiscoveredStorageId, ExternalContentItem, ExternalContentItemId,
-    InstallationIntent, StorageKind,
+    ApplianceConfiguration, ContentImportIntent, ContentRepository, ContentRepositoryId,
+    DiscoveredContent, DiscoveredStorage, DiscoveredStorageId, ExternalContentItem,
+    ExternalContentItemId, InstallationIntent, StorageKind,
 };
 use registry::{ApplianceProfileRepository, ContentRepositoryRepository};
 /// State accumulated while configuring an appliance through the wizard.
@@ -189,6 +189,16 @@ impl WizardConfig {
     pub fn installation_intent(&self) -> InstallationIntent {
         InstallationIntent::new(self.profile_name.clone(), self.storage_id().clone())
     }
+    /// Builds the confirmed appliance configuration.
+    #[must_use]
+    pub fn appliance_configuration(&self) -> ApplianceConfiguration {
+        ApplianceConfiguration::new(
+            self.profile_name.clone(),
+            self.content_repository_id.clone(),
+            self.content_import_intent(),
+            self.installation_intent(),
+        )
+    }
 }
 
 #[cfg(test)]
@@ -200,6 +210,36 @@ mod tests {
         ExternalContentItemId, StorageKind,
     };
     use registry::{ApplianceProfileRepository, ContentRepositoryRepository};
+
+    #[test]
+    fn wizard_configuration_builds_appliance_configuration() {
+        let item_id =
+            ExternalContentItemId::new("local-models-directory:/media/daia/models/model.gguf");
+
+        let mut state = WizardState::new();
+        state.set_profile_name("desktop");
+        state.select_content_repository(ContentRepositoryId::new("local-models"));
+        state.select_external_content(vec![item_id.clone()]);
+        state.select_storage(DiscoveredStorageId::new("serial:usb-disk"));
+
+        let config = state
+            .into_config()
+            .expect("completed wizard state should build configuration");
+
+        let appliance = config.appliance_configuration();
+
+        assert_eq!(appliance.profile_name(), "desktop");
+        assert_eq!(
+            appliance.content_repository_id(),
+            &ContentRepositoryId::new("local-models")
+        );
+        assert_eq!(appliance.content_import().items(), &[item_id]);
+        assert_eq!(appliance.installation().profile_name(), "desktop");
+        assert_eq!(
+            appliance.installation().storage_id(),
+            &DiscoveredStorageId::new("serial:usb-disk")
+        );
+    }
 
     #[test]
     fn wizard_configuration_resolves_content_repository() {
