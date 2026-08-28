@@ -1,8 +1,8 @@
 //! DAIA command-line interface.
 
 use engine::{
-    BootstrapConfig, BuildContext, DryRunInstallationExecutor, Engine, InstallationOperation,
-    SystemInstallationOperationExecutor,
+    BootstrapConfig, BuildContext, DryRunContentImportOperationExecutor,
+    DryRunInstallationExecutor, Engine, InstallationOperation, SystemInstallationOperationExecutor,
 };
 use inspector::{
     DebianIsoInspector, IsoInspector, LinuxStorageInspector, LocalFilesystemContentInspector,
@@ -787,13 +787,19 @@ fn run_wizard() -> ExitCode {
                 return ExitCode::FAILURE;
             };
 
-            let _prepared_content_import = match prepare_wizard_content_import(&engine, &config) {
+            let prepared_content_import = match prepare_wizard_content_import(&engine, &config) {
                 Ok(prepared) => prepared,
                 Err(error) => {
                     eprintln!("{error}");
                     return ExitCode::FAILURE;
                 }
             };
+
+            let mut content_import_executor = DryRunContentImportOperationExecutor::default();
+
+            if let Err(error) = prepared_content_import.execute(&mut content_import_executor) {
+                match error {}
+            }
 
             let prepared = match prepare_wizard_installation(&engine, &config) {
                 Ok(prepared) => prepared,
