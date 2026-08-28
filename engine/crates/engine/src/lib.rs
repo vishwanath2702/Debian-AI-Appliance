@@ -144,7 +144,44 @@ pub trait ContentImportOperationExecutor {
         operation: &ContentImportOperation,
     ) -> Result<ImportedContentItem, Self::Error>;
 }
+/// Non-destructive content import executor used for validation and previews.
+#[derive(Clone, Debug, Default)]
+pub struct DryRunContentImportOperationExecutor {
+    operations: Vec<ContentImportOperation>,
+}
 
+impl DryRunContentImportOperationExecutor {
+    /// Returns content import operations recorded during execution.
+    #[must_use]
+    pub fn executed_operations(&self) -> &[ContentImportOperation] {
+        &self.operations
+    }
+}
+
+impl ContentImportOperationExecutor for DryRunContentImportOperationExecutor {
+    type Error = std::convert::Infallible;
+
+    fn execute_operation(
+        &mut self,
+        operation: &ContentImportOperation,
+    ) -> Result<ImportedContentItem, Self::Error> {
+        self.operations.push(operation.clone());
+
+        match operation {
+            ContentImportOperation::ImportItem { item, destination } => {
+                let file_name = item
+                    .path()
+                    .file_name()
+                    .expect("prepared content import item should have a file name");
+
+                Ok(ImportedContentItem::new(
+                    item.id().clone(),
+                    std::path::Path::new(destination.path()).join(file_name),
+                ))
+            }
+        }
+    }
+}
 /// Provides filesystem operations required by external content import.
 pub trait ContentImportFileSystem {
     /// Error produced by a filesystem operation.
@@ -589,12 +626,13 @@ mod tests {
     use super::{
         BootstrapConfig, BuildContext, BuildError, ContentImportFileSystem, ContentImportOperation,
         ContentImportOperationExecutor, ContentSource, DiscoveredContent,
-        DryRunInstallationExecutor, Engine, ImportedContentItem, InstallationExecutor,
-        InstallationOperation, InstallationOperationExecutor, InstallationPlan,
-        PrepareContentImportError, PreparedContentImport, PreparedInstallation,
-        RootfsInstallationPlanExecutor, RootfsRunError, SystemContentImportFileSystem,
-        SystemContentImportOperationExecutor, SystemInstallationOperationExecutor,
-        default_installation_mounts, default_installation_partitions,
+        DryRunContentImportOperationExecutor, DryRunInstallationExecutor, Engine,
+        ImportedContentItem, InstallationExecutor, InstallationOperation,
+        InstallationOperationExecutor, InstallationPlan, PrepareContentImportError,
+        PreparedContentImport, PreparedInstallation, RootfsInstallationPlanExecutor,
+        RootfsRunError, SystemContentImportFileSystem, SystemContentImportOperationExecutor,
+        SystemInstallationOperationExecutor, default_installation_mounts,
+        default_installation_partitions,
     };
     struct TestContentInspector;
 
@@ -1009,6 +1047,46 @@ mod tests {
                 ),
             ]
         );
+    }
+    #[test]
+    fn dry_run_content_import_records_operations_without_copying() {
+        let directory = tempfile::tempdir().expect("temporary directory should be created");
+        let destination = directory.path().join("content");
+
+        let item = ExternalContentItem::new(
+            ContentSourceId::new("local-models-directory"),
+            "/media/daia/models/model.gguf",
+        );
+
+        let prepared = PreparedContentImport::new(
+            ContentImportIntent::new(vec![item.id().clone()]),
+            vec![item.clone()],
+            ContentImportDestination::new(destination.to_string_lossy()),
+        );
+
+        let mut executor = DryRunContentImportOperationExecutor::default();
+
+        let imported_items = prepared
+            .execute(&mut executor)
+            .expect("dry-run content import should execute");
+
+        assert_eq!(
+            executor.executed_operations(),
+            &[ContentImportOperation::ImportItem {
+                item: item.clone(),
+                destination: ContentImportDestination::new(destination.to_string_lossy()),
+            }]
+        );
+
+        assert_eq!(
+            imported_items,
+            vec![ImportedContentItem::new(
+                item.id().clone(),
+                destination.join("model.gguf"),
+            )]
+        );
+
+        assert!(!destination.exists());
     }
     #[test]
     fn prepared_content_import_stops_after_operation_failure() {
