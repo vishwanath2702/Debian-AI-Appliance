@@ -199,17 +199,37 @@ pub trait ContentImportFileSystem {
     ) -> Result<ImportedContentItem, Self::Error>;
 }
 /// Performs external content import using the host filesystem.
-#[derive(Clone, Copy, Debug, Default)]
-pub struct SystemContentImportFileSystem;
+#[derive(Clone, Debug, Default)]
+pub struct SystemContentImportFileSystem {
+    root: Option<std::path::PathBuf>,
+}
 
 impl SystemContentImportFileSystem {
     /// Creates a system content import filesystem.
     #[must_use]
     pub const fn new() -> Self {
-        Self
+        Self { root: None }
+    }
+
+    /// Creates a system content import filesystem rooted beneath a target directory.
+    #[must_use]
+    pub fn with_root(root: impl Into<std::path::PathBuf>) -> Self {
+        Self {
+            root: Some(root.into()),
+        }
+    }
+
+    fn destination_path(&self, destination: &ContentImportDestination) -> std::path::PathBuf {
+        match &self.root {
+            Some(root) => root.join(
+                std::path::Path::new(destination.path())
+                    .strip_prefix("/")
+                    .unwrap_or_else(|_| std::path::Path::new(destination.path())),
+            ),
+            None => std::path::PathBuf::from(destination.path()),
+        }
     }
 }
-
 impl ContentImportFileSystem for SystemContentImportFileSystem {
     type Error = std::io::Error;
 
@@ -225,9 +245,11 @@ impl ContentImportFileSystem for SystemContentImportFileSystem {
             )
         })?;
 
-        std::fs::create_dir_all(destination.path())?;
+        let destination = self.destination_path(destination);
 
-        let destination = std::path::Path::new(destination.path()).join(file_name);
+        std::fs::create_dir_all(&destination)?;
+
+        let destination = destination.join(file_name);
 
         if destination.exists() {
             return Err(std::io::Error::new(
@@ -905,6 +927,44 @@ mod tests {
         assert_eq!(
             std::fs::read_to_string(destination.join("model.gguf"))
                 .expect("copied content should be readable"),
+            "model"
+        );
+    }
+    #[test]
+    fn system_content_import_file_system_roots_destination() {
+        let file_system = SystemContentImportFileSystem::with_root("/target");
+
+        assert_eq!(
+            file_system.destination_path(&ContentImportDestination::new("/var/lib/daia/content")),
+            std::path::PathBuf::from("/target/var/lib/daia/content")
+        );
+    }
+    #[test]
+    fn system_content_import_file_system_copies_item_under_root() {
+        let directory = tempfile::tempdir().expect("temporary directory should be created");
+
+        let source = directory.path().join("model.gguf");
+        let root = directory.path().join("target");
+
+        std::fs::write(&source, "model").expect("source content should be written");
+
+        let item = ExternalContentItem::new(ContentSourceId::new("local-models-directory"), source);
+
+        let mut file_system = SystemContentImportFileSystem::with_root(&root);
+
+        let imported = file_system
+            .copy_item(
+                &item,
+                &ContentImportDestination::new("/var/lib/daia/content"),
+            )
+            .expect("content item should be copied beneath root");
+
+        let expected = root.join("var/lib/daia/content/model.gguf");
+
+        assert_eq!(imported.source_item_id(), item.id());
+        assert_eq!(imported.path(), expected);
+        assert_eq!(
+            std::fs::read_to_string(&expected).expect("rooted content should be readable"),
             "model"
         );
     }
