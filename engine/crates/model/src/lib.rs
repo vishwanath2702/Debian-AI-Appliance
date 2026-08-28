@@ -688,6 +688,56 @@ pub struct Plan {
     pub steps: Vec<PlanStep>,
 }
 
+/// Describes the confirmed configuration of a DAIA appliance.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ApplianceConfiguration {
+    profile_name: String,
+    content_repository_id: ContentRepositoryId,
+    content_import: ContentImportIntent,
+    installation: InstallationIntent,
+}
+
+impl ApplianceConfiguration {
+    /// Creates a confirmed appliance configuration.
+    #[must_use]
+    pub fn new(
+        profile_name: impl Into<String>,
+        content_repository_id: ContentRepositoryId,
+        content_import: ContentImportIntent,
+        installation: InstallationIntent,
+    ) -> Self {
+        Self {
+            profile_name: profile_name.into(),
+            content_repository_id,
+            content_import,
+            installation,
+        }
+    }
+
+    /// Returns the selected appliance profile name.
+    #[must_use]
+    pub fn profile_name(&self) -> &str {
+        &self.profile_name
+    }
+
+    /// Returns the selected content repository identifier.
+    #[must_use]
+    pub const fn content_repository_id(&self) -> &ContentRepositoryId {
+        &self.content_repository_id
+    }
+
+    /// Returns the confirmed content import intent.
+    #[must_use]
+    pub const fn content_import(&self) -> &ContentImportIntent {
+        &self.content_import
+    }
+
+    /// Returns the confirmed installation intent.
+    #[must_use]
+    pub const fn installation(&self) -> &InstallationIntent {
+        &self.installation
+    }
+}
 /// Describes confirmed external content selected for import.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ContentImportIntent {
@@ -741,14 +791,38 @@ impl InstallationIntent {
 #[cfg(test)]
 mod tests {
     use super::{
-        Action, AssetId, Capability, CapabilityId, ContentImportDestination, ContentImportIntent,
-        ContentRepository, ContentRepositoryId, ContentSource, ContentSourceId, DiscoveredContent,
-        DiscoveredStorage, DiscoveredStorageId, ExternalContentItem, ExternalContentItemId,
-        ImportedContentItem, InstallationIntent, PackageManifest, PlanStep, ProviderId,
-        StorageKind, StorageTarget, StorageTargetId,
+        Action, ApplianceConfiguration, AssetId, Capability, CapabilityId,
+        ContentImportDestination, ContentImportIntent, ContentRepository, ContentRepositoryId,
+        ContentSource, ContentSourceId, DiscoveredContent, DiscoveredStorage, DiscoveredStorageId,
+        ExternalContentItem, ExternalContentItemId, ImportedContentItem, InstallationIntent,
+        PackageManifest, PlanStep, ProviderId, StorageKind, StorageTarget, StorageTargetId,
     };
     use std::path::{Path, PathBuf};
 
+    #[test]
+    fn appliance_configuration_exposes_confirmed_intents() {
+        let content_import = ContentImportIntent::new(vec![ExternalContentItemId::new(
+            "local-models-directory:/media/daia/models/model.gguf",
+        )]);
+
+        let installation =
+            InstallationIntent::new("desktop", DiscoveredStorageId::new("serial:usb-disk"));
+
+        let configuration = ApplianceConfiguration::new(
+            "desktop",
+            ContentRepositoryId::new("local-models"),
+            content_import.clone(),
+            installation.clone(),
+        );
+
+        assert_eq!(configuration.profile_name(), "desktop");
+        assert_eq!(
+            configuration.content_repository_id(),
+            &ContentRepositoryId::new("local-models")
+        );
+        assert_eq!(configuration.content_import(), &content_import);
+        assert_eq!(configuration.installation(), &installation);
+    }
     #[test]
     fn content_import_destination_exposes_path() {
         let destination = ContentImportDestination::new("/var/lib/daia/content");
