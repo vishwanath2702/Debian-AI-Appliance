@@ -659,8 +659,24 @@ fn run_install() -> ExitCode {
         eprintln!("{error}");
         return ExitCode::FAILURE;
     }
-    let inspector = LinuxStorageInspector::new();
 
+    let content_repository =
+        match ContentRepositoryRepository::load_directory(&content_repository_directory()) {
+            Ok(repository) => repository,
+            Err(error) => {
+                eprintln!("Error loading content repositories: {error}");
+                return ExitCode::FAILURE;
+            }
+        };
+
+    state.set_content_repositories(content_repository.repositories().to_vec());
+
+    if let Err(error) = select_content_repository(&mut state) {
+        eprintln!("{error}");
+        return ExitCode::FAILURE;
+    }
+
+    let inspector = LinuxStorageInspector::new();
     let storage = match engine.discover_storage(&inspector) {
         Ok(storage) => storage,
         Err(error) => {
