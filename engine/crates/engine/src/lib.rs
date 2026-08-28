@@ -471,6 +471,29 @@ impl Engine {
     {
         inspector.items(content)
     }
+    /// Discovers all importable items from a content repository.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`ContentInspectError`] if content discovery or enumeration fails.
+    pub fn repository_content_items<I>(
+        &self,
+        repository: &ContentRepository,
+        inspector: &I,
+    ) -> Result<Vec<ExternalContentItem>, ContentInspectError>
+    where
+        I: ContentInspector,
+    {
+        let mut items = Vec::new();
+
+        for source in repository.sources() {
+            for content in self.discover_content(source, inspector)? {
+                items.extend(self.external_content_items(&content, inspector)?);
+            }
+        }
+
+        Ok(items)
+    }
     /// Prepares confirmed external content for later import.
     #[must_use]
     pub fn prepare_content_import(
@@ -617,9 +640,9 @@ mod tests {
     use inspector::{ContentInspectError, ContentInspector, StorageInspectError, StorageInspector};
     use model::{
         Action, ApplianceProfile, Capability, CapabilityId, ContentImportDestination,
-        ContentImportIntent, ContentRepositoryId, ContentSourceId, DiscoveredStorage,
-        DiscoveredStorageId, ExternalContentItem, ExternalContentItemId, InstallationIntent,
-        PlanStep, Provider, ProviderId, StorageKind,
+        ContentImportIntent, ContentRepository, ContentRepositoryId, ContentSourceId,
+        DiscoveredStorage, DiscoveredStorageId, ExternalContentItem, ExternalContentItemId,
+        InstallationIntent, PlanStep, Provider, ProviderId, StorageKind,
     };
     use registry::{PackageRepository, Registry};
 
@@ -830,6 +853,33 @@ mod tests {
         }
     }
 
+    #[test]
+    fn discovers_repository_content_items() {
+        let repository = ContentRepository::with_sources(
+            "local-models",
+            "Models available on local storage",
+            vec![ContentSource::new(
+                "local-models-directory",
+                ContentRepositoryId::new("local-models"),
+                "/media/daia/models",
+            )],
+        );
+
+        let engine = Engine::from_registry(desktop_registry());
+        let inspector = TestContentInspector;
+
+        let items = engine
+            .repository_content_items(&repository, &inspector)
+            .expect("repository content items should be discovered");
+
+        assert_eq!(
+            items,
+            vec![ExternalContentItem::new(
+                ContentSourceId::new("local-models-directory"),
+                "/media/daia/models/model.gguf",
+            )]
+        );
+    }
     #[test]
     fn system_content_import_file_system_copies_item() {
         let directory = tempfile::tempdir().expect("temporary directory should be created");
