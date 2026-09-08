@@ -4,6 +4,7 @@ use std::{io, path::PathBuf, process::Command};
 
 use crate::{
     BootstrapConfig, BuildBackend, MmdebstrapBootstrapper, MmdebstrapError, RootfsBackend,
+    SystemContentImportFileSystem, SystemContentImportOperationExecutor,
 };
 use executor::{ExecuteError, RootfsRunError};
 use registry::PackageRepository;
@@ -242,18 +243,19 @@ pub enum InstallationOperation {
     /// Apply the appliance execution plans.
     ApplyPlans { plans: Vec<Plan> },
 
-    /// Configure persistent filesystem mounts for the installed system.
-
-    /// Configure persistent filesystem mounts for the installed system.
     ConfigureFstab {
         device_path: PathBuf,
         partitions: Vec<InstallationPartition>,
         mounts: Vec<InstallationMount>,
     },
 
+    /// Import selected external content into the installed appliance.
+    ImportContent {
+        content: crate::PreparedContentImport,
+    },
+
     /// Prepares runtime filesystems required by commands executed inside the target root.
     PrepareTargetRuntime { root: PathBuf },
-
     /// Install the bootloader into the installed system.
     InstallBootloader { root: PathBuf, device_path: PathBuf },
     /// Cleans up temporary runtime filesystems mounted inside the target root.
@@ -340,6 +342,7 @@ pub struct SystemInstallationOperationExecutor<R, B, P, W = SystemInstallationFi
     bootstrapper: B,
     plan_executor: P,
     file_writer: W,
+    target_root: PathBuf,
 }
 
 #[cfg(test)]
@@ -349,13 +352,18 @@ where
     B: InstallationBootstrapper,
     P: InstallationPlanExecutor,
 {
-    const fn with_dependencies(runner: R, bootstrapper: B, plan_executor: P) -> Self {
+    fn with_dependencies(runner: R, bootstrapper: B, plan_executor: P) -> Self {
         Self {
             runner,
             bootstrapper,
             plan_executor,
             file_writer: SystemInstallationFileWriter,
+            target_root: PathBuf::from("/target"),
         }
+    }
+    fn with_target_root(mut self, target_root: PathBuf) -> Self {
+        self.target_root = target_root;
+        self
     }
 }
 
@@ -367,17 +375,13 @@ where
     P: InstallationPlanExecutor,
     W: InstallationFileWriter,
 {
-    const fn with_all_dependencies(
-        runner: R,
-        bootstrapper: B,
-        plan_executor: P,
-        file_writer: W,
-    ) -> Self {
+    fn with_all_dependencies(runner: R, bootstrapper: B, plan_executor: P, file_writer: W) -> Self {
         Self {
             runner,
             bootstrapper,
             plan_executor,
             file_writer,
+            target_root: PathBuf::from("/target"),
         }
     }
 }
@@ -402,6 +406,7 @@ impl
                 package_repository,
             ),
             file_writer: SystemInstallationFileWriter,
+            target_root: PathBuf::from("/target"),
         }
     }
 }
@@ -621,6 +626,15 @@ where
 
                 self.file_writer
                     .write(std::path::Path::new("/target/etc/fstab"), fstab.as_bytes())
+            }
+            InstallationOperation::ImportContent { content } => {
+                let mut executor = SystemContentImportOperationExecutor::new(
+                    SystemContentImportFileSystem::with_root(&self.target_root),
+                );
+
+                content.execute(&mut executor)?;
+
+                Ok(())
             }
             InstallationOperation::PrepareTargetRuntime { root } => {
                 let target_dev = root.join("dev");
@@ -1225,6 +1239,41 @@ mod tests {
         }
     }
 
+    #[test]
+    fn system_executor_imports_content_under_target_root() {
+        let temporary_directory =
+            tempfile::tempdir().expect("temporary directory should be created");
+
+        let source = temporary_directory.path().join("model.gguf");
+        std::fs::write(&source, b"model data").expect("source content should be written");
+
+        let item = model::ExternalContentItem::new(model::ContentSourceId::new("local"), source);
+
+        let content = crate::PreparedContentImport::new(
+            model::ContentImportIntent::new(vec![item.id().clone()]),
+            vec![item],
+            model::ContentImportDestination::new("/var/lib/daia/content"),
+        );
+
+        let target_root = temporary_directory.path().join("target");
+
+        let mut executor = SystemInstallationOperationExecutor::with_dependencies(
+            RecordingCommandRunner::default(),
+            RecordingInstallationBootstrapper::default(),
+            RecordingInstallationPlanExecutor::default(),
+        )
+        .with_target_root(target_root.clone());
+
+        executor
+            .execute_operation(&InstallationOperation::ImportContent { content })
+            .expect("content import should succeed");
+
+        assert_eq!(
+            std::fs::read(target_root.join("var/lib/daia/content/model.gguf"))
+                .expect("imported content should exist"),
+            b"model data"
+        );
+    }
     #[test]
     fn system_executor_implements_installation_executor() {
         let intent =
