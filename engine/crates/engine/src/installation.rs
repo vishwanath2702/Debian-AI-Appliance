@@ -858,7 +858,6 @@ impl PreparedInstallation {
             bootstrap,
         }
     }
-
     /// Builds the ordered installation-operation plan.
     #[must_use]
     pub fn installation_plan(&self) -> InstallationPlan {
@@ -943,6 +942,32 @@ impl PreparedInstallation {
         )
     }
 }
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PreparedApplianceInstallation {
+    installation: PreparedInstallation,
+    content: crate::PreparedContentImport,
+}
+
+impl PreparedApplianceInstallation {
+    pub const fn new(
+        installation: PreparedInstallation,
+        content: crate::PreparedContentImport,
+    ) -> Self {
+        Self {
+            installation,
+            content,
+        }
+    }
+
+    pub const fn installation(&self) -> &PreparedInstallation {
+        &self.installation
+    }
+
+    pub const fn content(&self) -> &crate::PreparedContentImport {
+        &self.content
+    }
+}
+
 /// Executes a prepared installation.
 pub trait InstallationExecutor {
     /// Error produced by the executor.

@@ -10,9 +10,10 @@ mod workflow;
 pub use installation::{
     DryRunInstallationExecutor, InstallationCommandRunner, InstallationExecutor,
     InstallationOperation, InstallationOperationExecutor, InstallationPlan,
-    InstallationPlanExecutor, PreparedInstallation, ProcessInstallationCommandRunner,
-    RootfsInstallationPlanExecutor, SystemInstallationOperationExecutor,
-    default_installation_mounts, default_installation_partitions,
+    InstallationPlanExecutor, PreparedApplianceInstallation, PreparedInstallation,
+    ProcessInstallationCommandRunner, RootfsInstallationPlanExecutor,
+    SystemInstallationOperationExecutor, default_installation_mounts,
+    default_installation_partitions,
 };
 
 use std::{
@@ -674,10 +675,10 @@ mod tests {
         DryRunContentImportOperationExecutor, DryRunInstallationExecutor, Engine,
         ImportedContentItem, InstallationExecutor, InstallationOperation,
         InstallationOperationExecutor, InstallationPlan, PrepareContentImportError,
-        PreparedContentImport, PreparedInstallation, RootfsInstallationPlanExecutor,
-        RootfsRunError, SystemContentImportFileSystem, SystemContentImportOperationExecutor,
-        SystemInstallationOperationExecutor, default_installation_mounts,
-        default_installation_partitions,
+        PreparedApplianceInstallation, PreparedContentImport, PreparedInstallation,
+        RootfsInstallationPlanExecutor, RootfsRunError, SystemContentImportFileSystem,
+        SystemContentImportOperationExecutor, SystemInstallationOperationExecutor,
+        default_installation_mounts, default_installation_partitions,
     };
     struct TestContentInspector;
 
@@ -1668,7 +1669,27 @@ mod tests {
             "Profile: desktop\nStorage: serial:usb-disk (removable)\nDevice: /dev/sdb\nPlans: 0"
         );
     }
+    #[test]
+    fn prepared_appliance_installation_exposes_prepared_components() {
+        let intent =
+            InstallationIntent::new("desktop", DiscoveredStorageId::new("serial:usb-disk"));
 
+        let storage = DiscoveredStorage::new("serial:usb-disk", StorageKind::Removable, "/dev/sdb");
+
+        let installation =
+            PreparedInstallation::new(intent, storage, Vec::new(), BootstrapConfig::default());
+
+        let content = PreparedContentImport::new(
+            ContentImportIntent::new(Vec::new()),
+            Vec::new(),
+            ContentImportDestination::new("/var/lib/daia/content"),
+        );
+
+        let prepared = PreparedApplianceInstallation::new(installation.clone(), content.clone());
+
+        assert_eq!(prepared.installation(), &installation);
+        assert_eq!(prepared.content(), &content);
+    }
     #[test]
     fn prepare_installation_rejects_missing_storage() {
         let engine = Engine::from_registry(desktop_registry());
