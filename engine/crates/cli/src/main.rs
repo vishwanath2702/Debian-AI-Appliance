@@ -605,8 +605,10 @@ fn installation_operation_name(operation: &InstallationOperation) -> String {
         InstallationOperation::UnmountFilesystems { mounts } => {
             format!("Unmount {} installation filesystems", mounts.len())
         }
+        InstallationOperation::ImportContent { .. } => "Import content".to_string(),
     }
 }
+
 fn print_content_import_operations(executor: &DryRunContentImportOperationExecutor) {
     if executor.executed_operations().is_empty() {
         return;
@@ -698,13 +700,25 @@ fn run_install() -> ExitCode {
 
     let appliance_configuration = config.appliance_configuration();
 
-    let prepared = match prepare_wizard_installation(&engine, &appliance_configuration) {
+    let prepared_content = match prepare_wizard_content_import(&engine, &appliance_configuration) {
         Ok(prepared) => prepared,
         Err(error) => {
             eprintln!("{error}");
             return ExitCode::FAILURE;
         }
     };
+
+    let prepared_installation = match prepare_wizard_installation(&engine, &appliance_configuration)
+    {
+        Ok(prepared) => prepared,
+        Err(error) => {
+            eprintln!("{error}");
+            return ExitCode::FAILURE;
+        }
+    };
+
+    let prepared =
+        engine::PreparedApplianceInstallation::new(prepared_installation, prepared_content);
     println!();
     println!("WARNING: The selected target disk will be erased.");
 
@@ -733,7 +747,7 @@ fn run_install() -> ExitCode {
     println!();
     println!("Starting installation...");
 
-    match engine.execute_installation(&prepared, &mut executor) {
+    match engine.execute_appliance_installation(&prepared, &mut executor) {
         Ok(()) => {
             println!("Installation complete.");
             ExitCode::SUCCESS
