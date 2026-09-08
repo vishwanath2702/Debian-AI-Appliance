@@ -678,6 +678,63 @@ fn run_install() -> ExitCode {
         return ExitCode::FAILURE;
     }
 
+    let selected_repository_id = state
+        .selected_content_repository()
+        .expect("content repository should be selected")
+        .clone();
+
+    let sources = state
+        .content_repositories()
+        .iter()
+        .find(|repository| repository.id() == &selected_repository_id)
+        .expect("selected content repository should exist")
+        .sources()
+        .to_vec();
+
+    let content_inspector = LocalFilesystemContentInspector::new();
+    let mut discovered_content = Vec::new();
+
+    for source in &sources {
+        let mut discovered = match engine.discover_content(source, &content_inspector) {
+            Ok(discovered) => discovered,
+            Err(error) => {
+                eprintln!(
+                    "Error discovering content from source \"{}\": {error}",
+                    source.id()
+                );
+                return ExitCode::FAILURE;
+            }
+        };
+
+        discovered_content.append(&mut discovered);
+    }
+
+    state.set_discovered_content(discovered_content);
+
+    let mut external_content_items = Vec::new();
+
+    for content in state.discovered_content() {
+        let mut items = match engine.external_content_items(content, &content_inspector) {
+            Ok(items) => items,
+            Err(error) => {
+                eprintln!(
+                    "Error enumerating external content from \"{}\": {error}",
+                    content.path().display()
+                );
+                return ExitCode::FAILURE;
+            }
+        };
+
+        external_content_items.append(&mut items);
+    }
+
+    state.set_external_content_items(external_content_items);
+
+    if let Err(error) = select_external_content(&mut state) {
+        eprintln!("{error}");
+        return ExitCode::FAILURE;
+    }
+
     let inspector = LinuxStorageInspector::new();
     let storage = match engine.discover_storage(&inspector) {
         Ok(storage) => storage,
