@@ -966,6 +966,23 @@ impl PreparedApplianceInstallation {
     pub const fn content(&self) -> &crate::PreparedContentImport {
         &self.content
     }
+    #[must_use]
+    pub fn installation_plan(&self) -> InstallationPlan {
+        let installation_plan = self.installation.installation_plan();
+        let mut operations = Vec::with_capacity(installation_plan.operations().len() + 1);
+
+        for operation in installation_plan.operations() {
+            operations.push(operation.clone());
+
+            if matches!(operation, InstallationOperation::ConfigureFstab { .. }) {
+                operations.push(InstallationOperation::ImportContent {
+                    content: self.content.clone(),
+                });
+            }
+        }
+
+        InstallationPlan::new(operations)
+    }
 }
 
 /// Executes a prepared installation.

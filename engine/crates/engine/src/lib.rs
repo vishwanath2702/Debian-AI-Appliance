@@ -1691,6 +1691,41 @@ mod tests {
         assert_eq!(prepared.content(), &content);
     }
     #[test]
+    fn prepared_appliance_installation_imports_content_between_fstab_and_target_runtime() {
+        let intent =
+            InstallationIntent::new("desktop", DiscoveredStorageId::new("serial:usb-disk"));
+
+        let storage = DiscoveredStorage::new("serial:usb-disk", StorageKind::Removable, "/dev/sdb");
+
+        let installation =
+            PreparedInstallation::new(intent, storage, Vec::new(), BootstrapConfig::default());
+
+        let content = PreparedContentImport::new(
+            ContentImportIntent::new(Vec::new()),
+            Vec::new(),
+            ContentImportDestination::new("/var/lib/daia/content"),
+        );
+
+        let prepared = PreparedApplianceInstallation::new(installation, content.clone());
+        let plan = prepared.installation_plan();
+
+        let configure_fstab_index = plan
+            .operations()
+            .iter()
+            .position(|operation| matches!(operation, InstallationOperation::ConfigureFstab { .. }))
+            .expect("installation plan should configure fstab");
+
+        assert_eq!(
+            plan.operations().get(configure_fstab_index + 1),
+            Some(&InstallationOperation::ImportContent { content })
+        );
+
+        assert!(matches!(
+            plan.operations().get(configure_fstab_index + 2),
+            Some(InstallationOperation::PrepareTargetRuntime { .. })
+        ));
+    }
+    #[test]
     fn prepare_installation_rejects_missing_storage() {
         let engine = Engine::from_registry(desktop_registry());
 
