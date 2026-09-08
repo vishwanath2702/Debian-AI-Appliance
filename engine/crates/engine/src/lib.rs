@@ -623,6 +623,23 @@ impl Engine {
     {
         executor.execute(installation)
     }
+    /// Executes a prepared appliance installation using the supplied operation executor.
+    ///
+    /// # Errors
+    ///
+    /// Returns the first operation error after attempting any remaining cleanup operations.
+    pub fn execute_appliance_installation<E>(
+        &self,
+        installation: &PreparedApplianceInstallation,
+        executor: &mut E,
+    ) -> Result<(), E::Error>
+    where
+        E: InstallationOperationExecutor,
+    {
+        installation
+            .installation_plan()
+            .execute_with_cleanup(executor)
+    }
 
     /// Builds and executes an appliance plan as a bootable ISO image.
     ///
@@ -1725,6 +1742,41 @@ mod tests {
             Some(InstallationOperation::PrepareTargetRuntime { .. })
         ));
     }
+    #[test]
+    fn executes_prepared_appliance_installation_through_operation_executor() {
+        let engine = Engine::from_registry(desktop_registry());
+        let intent =
+            InstallationIntent::new("desktop", DiscoveredStorageId::new("serial:usb-disk"));
+
+        let storage = DiscoveredStorage::new("serial:usb-disk", StorageKind::Removable, "/dev/sdb");
+
+        let installation =
+            PreparedInstallation::new(intent, storage, Vec::new(), BootstrapConfig::default());
+
+        let content = PreparedContentImport::new(
+            ContentImportIntent::new(Vec::new()),
+            Vec::new(),
+            ContentImportDestination::new("/var/lib/daia/content"),
+        );
+
+        let prepared = PreparedApplianceInstallation::new(installation, content.clone());
+
+        let mut executor = RecordingOperationExecutor {
+            operations: Vec::new(),
+        };
+
+        engine
+            .execute_appliance_installation(&prepared, &mut executor)
+            .expect("prepared appliance installation should execute");
+
+        assert!(executor.operations.iter().any(|operation| {
+            operation
+                == &InstallationOperation::ImportContent {
+                    content: content.clone(),
+                }
+        }));
+    }
+
     #[test]
     fn prepare_installation_rejects_missing_storage() {
         let engine = Engine::from_registry(desktop_registry());
