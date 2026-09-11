@@ -341,6 +341,24 @@ fn select_content_repository(state: &mut WizardState) -> Result<(), String> {
 
     Ok(())
 }
+fn parse_external_content_selection(input: &str, item_count: usize) -> Result<Vec<usize>, String> {
+    let selections: Vec<usize> = input
+        .split_whitespace()
+        .map(|value| {
+            value
+                .parse::<usize>()
+                .ok()
+                .filter(|selection| (1..=item_count).contains(selection))
+                .ok_or_else(|| "Error: invalid external content selection".to_owned())
+        })
+        .collect::<Result<_, _>>()?;
+
+    if selections.is_empty() {
+        return Err("Error: invalid external content selection".to_owned());
+    }
+
+    Ok(selections)
+}
 
 fn select_external_content(state: &mut WizardState) -> Result<(), String> {
     let items = state.external_content_items();
@@ -356,8 +374,10 @@ fn select_external_content(state: &mut WizardState) -> Result<(), String> {
         println!("  {}. {}  {}", index + 1, item.id(), item.path().display());
     }
 
-    print!("Select external content [1-{}]: ", items.len());
-
+    print!(
+        "Select external content [1-{}, space-separated]: ",
+        items.len()
+    );
     io::stdout()
         .flush()
         .map_err(|error| format!("Error writing prompt: {error}"))?;
@@ -368,25 +388,23 @@ fn select_external_content(state: &mut WizardState) -> Result<(), String> {
         .read_line(&mut input)
         .map_err(|error| format!("Error reading selection: {error}"))?;
 
-    let selection = input
-        .trim()
-        .parse::<usize>()
-        .ok()
-        .filter(|selection| (1..=items.len()).contains(selection))
-        .ok_or_else(|| "Error: invalid external content selection".to_owned())?;
+    let selections = parse_external_content_selection(&input, items.len())?;
 
-    let selected_id = items[selection - 1].id().clone();
+    let selected_ids = selections
+        .into_iter()
+        .map(|selection| items[selection - 1].id().clone())
+        .collect();
 
-    state.select_external_content(vec![selected_id]);
-
+    state.select_external_content(selected_ids);
     println!(
         "Selected external content: {}",
         state
             .selected_external_content()
-            .first()
-            .expect("validated external content selection should exist")
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join(", ")
     );
-
     Ok(())
 }
 
@@ -1058,6 +1076,32 @@ mod tests {
         std::fs::remove_dir_all(&directory).expect("test directory should be removed");
     }
 
+    #[test]
+    fn parses_multiple_external_content_selections() {
+        let selections = super::parse_external_content_selection("1 3", 3)
+            .expect("valid external content selections should parse");
+
+        assert_eq!(selections, vec![1, 3]);
+    }
+
+    #[test]
+    fn rejects_invalid_external_content_selection() {
+        let result = super::parse_external_content_selection("1 4", 3);
+
+        assert_eq!(
+            result,
+            Err("Error: invalid external content selection".to_owned())
+        );
+    }
+    #[test]
+    fn rejects_empty_external_content_selection() {
+        let result = super::parse_external_content_selection("", 3);
+
+        assert_eq!(
+            result,
+            Err("Error: invalid external content selection".to_owned())
+        );
+    }
     #[test]
     fn plans_repository_appliance_profile() {
         let arguments = vec!["plan-profile".to_owned(), "desktop".to_owned()];
