@@ -858,6 +858,21 @@ where
     Ok(())
 }
 
+fn execute_system_installation(
+    engine: &Engine,
+    prepared: &engine::PreparedApplianceInstallation,
+) -> Result<(), String> {
+    let package_repository = PackageRepository::from_directory(package_manifest_directory())
+        .map_err(|error| format!("Error loading package repository: {error}"))?;
+
+    let mut executor =
+        SystemInstallationOperationExecutor::new(asset_directory(), package_repository);
+
+    engine
+        .execute_appliance_installation(prepared, &mut executor)
+        .map_err(|error| format!("Installation failed: {error}"))
+}
+
 fn run_install() -> ExitCode {
     let Some(engine) = load_engine() else {
         return ExitCode::FAILURE;
@@ -904,27 +919,16 @@ fn run_install() -> ExitCode {
             return ExitCode::FAILURE;
         }
     }
-    let package_repository = match PackageRepository::from_directory(package_manifest_directory()) {
-        Ok(repository) => repository,
-        Err(error) => {
-            eprintln!("Error loading package repository: {error}");
-            return ExitCode::FAILURE;
-        }
-    };
-
-    let mut executor =
-        SystemInstallationOperationExecutor::new(asset_directory(), package_repository);
-
     println!();
     println!("Starting installation...");
 
-    match engine.execute_appliance_installation(&prepared, &mut executor) {
+    match execute_system_installation(&engine, &prepared) {
         Ok(()) => {
             println!("Installation complete.");
             ExitCode::SUCCESS
         }
         Err(error) => {
-            eprintln!("Installation failed: {error}");
+            eprintln!("{error}");
             ExitCode::FAILURE
         }
     }
