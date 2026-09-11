@@ -238,6 +238,15 @@ fn load_engine() -> Option<Engine> {
     }
 }
 
+fn parse_appliance_profile_selection(input: &str, item_count: usize) -> Result<usize, String> {
+    input
+        .trim()
+        .parse::<usize>()
+        .ok()
+        .filter(|selection| (1..=item_count).contains(selection))
+        .ok_or_else(|| "Error: invalid appliance profile selection".to_owned())
+}
+
 fn select_appliance_profile(state: &mut WizardState) -> Result<(), String> {
     let repository = appliance_profile_repository::load()
         .map_err(|error| format!("Error loading appliance profiles: {error}"))?;
@@ -268,13 +277,7 @@ fn select_appliance_profile(state: &mut WizardState) -> Result<(), String> {
         .read_line(&mut input)
         .map_err(|error| format!("Error reading selection: {error}"))?;
 
-    let selection = input
-        .trim()
-        .parse::<usize>()
-        .ok()
-        .filter(|selection| (1..=repository.profiles().len()).contains(selection))
-        .ok_or_else(|| "Error: invalid appliance profile selection".to_owned())?;
-
+    let selection = parse_appliance_profile_selection(&input, repository.profiles().len())?;
     let selected_profile = &repository.profiles()[selection - 1];
 
     state.set_profile_name(selected_profile.name());
@@ -1038,7 +1041,22 @@ mod tests {
 
         std::fs::remove_dir_all(&directory).expect("test directory should be removed");
     }
+    #[test]
+    fn parses_appliance_profile_selection() {
+        let selection = super::parse_appliance_profile_selection("2", 3)
+            .expect("valid appliance profile selection should parse");
 
+        assert_eq!(selection, 2);
+    }
+    #[test]
+    fn rejects_invalid_appliance_profile_selection() {
+        let result = super::parse_appliance_profile_selection("4", 3);
+
+        assert_eq!(
+            result,
+            Err("Error: invalid appliance profile selection".to_owned())
+        );
+    }
     #[test]
     fn parses_storage_selection() {
         let selection =
