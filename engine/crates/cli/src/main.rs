@@ -933,6 +933,24 @@ fn run_install() -> ExitCode {
         }
     }
 }
+fn execute_confirmed_wizard(engine: &Engine, state: WizardState) -> Result<(), String> {
+    let Some(config) = state.into_config() else {
+        return Err("Error: wizard configuration is incomplete".to_owned());
+    };
+
+    let appliance_configuration = config.appliance_configuration();
+
+    let (prepared, prepared_content_import) =
+        prepare_wizard_appliance(engine, &appliance_configuration)?;
+
+    println!("Configuration confirmed.");
+    println!();
+
+    execute_wizard_dry_run(engine, &prepared, &prepared_content_import);
+
+    Ok(())
+}
+
 fn run_wizard() -> ExitCode {
     let Some(engine) = load_engine() else {
         return ExitCode::FAILURE;
@@ -951,29 +969,13 @@ fn run_wizard() -> ExitCode {
     review_wizard_state(&state);
 
     match confirm_wizard_state() {
-        Ok(true) => {
-            let Some(config) = state.into_config() else {
-                eprintln!("Error: wizard configuration is incomplete");
-                return ExitCode::FAILURE;
-            };
-
-            let appliance_configuration = config.appliance_configuration();
-
-            let (prepared, prepared_content_import) =
-                match prepare_wizard_appliance(&engine, &appliance_configuration) {
-                    Ok(prepared) => prepared,
-                    Err(error) => {
-                        eprintln!("{error}");
-                        return ExitCode::FAILURE;
-                    }
-                };
-
-            println!("Configuration confirmed.");
-            println!();
-
-            execute_wizard_dry_run(&engine, &prepared, &prepared_content_import);
-            ExitCode::SUCCESS
-        }
+        Ok(true) => match execute_confirmed_wizard(&engine, state) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(error) => {
+                eprintln!("{error}");
+                ExitCode::FAILURE
+            }
+        },
 
         Ok(false) => {
             println!("Configuration cancelled.");
