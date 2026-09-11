@@ -6,7 +6,7 @@ use engine::{
 };
 use inspector::{
     ContentInspector, DebianIsoInspector, IsoInspector, LinuxStorageInspector,
-    LocalFilesystemContentInspector,
+    LocalFilesystemContentInspector, StorageInspector,
 };
 use model::{Capability, Plan};
 use registry::{ContentRepositoryRepository, PackageRepository};
@@ -749,6 +749,23 @@ fn load_wizard_content_repositories(state: &mut WizardState) -> Result<(), Strin
     Ok(())
 }
 
+fn discover_wizard_storage_with<I>(
+    engine: &Engine,
+    state: &mut WizardState,
+    inspector: &I,
+) -> Result<(), String>
+where
+    I: StorageInspector,
+{
+    let storage = engine
+        .discover_storage(inspector)
+        .map_err(|error| format!("Error discovering storage: {error}"))?;
+
+    state.set_discovered_storage(storage);
+
+    Ok(())
+}
+
 fn run_install() -> ExitCode {
     let Some(engine) = load_engine() else {
         return ExitCode::FAILURE;
@@ -787,15 +804,11 @@ fn run_install() -> ExitCode {
     }
 
     let inspector = LinuxStorageInspector::new();
-    let storage = match engine.discover_storage(&inspector) {
-        Ok(storage) => storage,
-        Err(error) => {
-            eprintln!("Error discovering storage: {error}");
-            return ExitCode::FAILURE;
-        }
-    };
 
-    state.set_discovered_storage(storage);
+    if let Err(error) = discover_wizard_storage_with(&engine, &mut state, &inspector) {
+        eprintln!("{error}");
+        return ExitCode::FAILURE;
+    }
 
     if let Err(error) = select_storage(&mut state) {
         eprintln!("{error}");
@@ -902,15 +915,11 @@ fn run_wizard() -> ExitCode {
     }
 
     let inspector = LinuxStorageInspector::new();
-    let storage = match engine.discover_storage(&inspector) {
-        Ok(storage) => storage,
-        Err(error) => {
-            eprintln!("Error discovering storage: {error}");
-            return ExitCode::FAILURE;
-        }
-    };
 
-    state.set_discovered_storage(storage);
+    if let Err(error) = discover_wizard_storage_with(&engine, &mut state, &inspector) {
+        eprintln!("{error}");
+        return ExitCode::FAILURE;
+    }
 
     if let Err(error) = select_storage(&mut state) {
         eprintln!("{error}");
@@ -1038,6 +1047,30 @@ mod tests {
         assert_eq!(prepared.destination().path(), "/var/lib/daia/content");
 
         std::fs::remove_dir_all(&directory).expect("test directory should be removed");
+    }
+    #[test]
+    fn discovers_wizard_storage_into_state() {
+        struct TestStorageInspector;
+
+        impl inspector::StorageInspector for TestStorageInspector {
+            fn inspect(
+                &self,
+            ) -> Result<Vec<model::DiscoveredStorage>, inspector::StorageInspectError> {
+                Ok(vec![model::DiscoveredStorage::new(
+                    "serial:test-disk",
+                    model::StorageKind::Removable,
+                    "/dev/test-disk",
+                )])
+            }
+        }
+
+        let engine = engine::Engine::from_registry(registry::Registry::new());
+        let mut state = super::WizardState::new();
+
+        super::discover_wizard_storage_with(&engine, &mut state, &TestStorageInspector)
+            .expect("wizard storage discovery should succeed");
+
+        assert_eq!(state.selectable_storage().count(), 1);
     }
     #[test]
     fn loads_wizard_content_repositories() {
