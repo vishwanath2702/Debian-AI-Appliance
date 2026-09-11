@@ -873,6 +873,29 @@ fn execute_system_installation(
         .map_err(|error| format!("Installation failed: {error}"))
 }
 
+fn execute_confirmed_installation(engine: &Engine, state: WizardState) -> Result<(), String> {
+    let Some(config) = state.into_config() else {
+        return Err("Error: installer configuration is incomplete".to_owned());
+    };
+
+    let appliance_configuration = config.appliance_configuration();
+
+    let (prepared_installation, prepared_content) =
+        prepare_wizard_appliance(engine, &appliance_configuration)?;
+
+    let prepared =
+        engine::PreparedApplianceInstallation::new(prepared_installation, prepared_content);
+
+    println!();
+    println!("Starting installation...");
+
+    execute_system_installation(engine, &prepared)?;
+
+    println!("Installation complete.");
+
+    Ok(())
+}
+
 fn run_install() -> ExitCode {
     let Some(engine) = load_engine() else {
         return ExitCode::FAILURE;
@@ -887,44 +910,19 @@ fn run_install() -> ExitCode {
         eprintln!("{error}");
         return ExitCode::FAILURE;
     }
-    let Some(config) = state.into_config() else {
-        eprintln!("Error: installer configuration is incomplete");
-        return ExitCode::FAILURE;
-    };
-
-    let appliance_configuration = config.appliance_configuration();
-
-    let (prepared_installation, prepared_content) =
-        match prepare_wizard_appliance(&engine, &appliance_configuration) {
-            Ok(prepared) => prepared,
-            Err(error) => {
-                eprintln!("{error}");
-                return ExitCode::FAILURE;
-            }
-        };
-
-    let prepared =
-        engine::PreparedApplianceInstallation::new(prepared_installation, prepared_content);
     println!();
     println!("WARNING: The selected target disk will be erased.");
 
     match confirm_wizard_state() {
-        Ok(true) => {}
+        Ok(true) => match execute_confirmed_installation(&engine, state) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(error) => {
+                eprintln!("{error}");
+                ExitCode::FAILURE
+            }
+        },
         Ok(false) => {
             println!("Installation cancelled.");
-            return ExitCode::SUCCESS;
-        }
-        Err(error) => {
-            eprintln!("{error}");
-            return ExitCode::FAILURE;
-        }
-    }
-    println!();
-    println!("Starting installation...");
-
-    match execute_system_installation(&engine, &prepared) {
-        Ok(()) => {
-            println!("Installation complete.");
             ExitCode::SUCCESS
         }
         Err(error) => {
