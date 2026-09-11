@@ -805,6 +805,32 @@ fn print_installation_operations(executor: &DryRunInstallationExecutor) {
         );
     }
 }
+fn execute_wizard_dry_run(
+    engine: &Engine,
+    prepared_installation: &engine::PreparedInstallation,
+    prepared_content_import: &engine::PreparedContentImport,
+) {
+    let mut content_import_executor = DryRunContentImportOperationExecutor::default();
+
+    if let Err(error) = prepared_content_import.execute(&mut content_import_executor) {
+        match error {}
+    }
+
+    let mut installation_executor = DryRunInstallationExecutor::default();
+
+    if let Err(error) =
+        engine.execute_installation(prepared_installation, &mut installation_executor)
+    {
+        match error {}
+    }
+
+    if let Some(summary) = installation_executor.summary() {
+        println!("{summary}");
+    }
+
+    print_content_import_operations(&content_import_executor);
+    print_installation_operations(&installation_executor);
+}
 
 fn load_wizard_content_repositories(state: &mut WizardState) -> Result<(), String> {
     let repository = ContentRepositoryRepository::load_directory(&content_repository_directory())
@@ -938,27 +964,10 @@ fn run_wizard() -> ExitCode {
                     }
                 };
 
-            let mut content_import_executor = DryRunContentImportOperationExecutor::default();
-
-            if let Err(error) = prepared_content_import.execute(&mut content_import_executor) {
-                match error {}
-            }
-
-            let mut executor = DryRunInstallationExecutor::default();
-
-            if let Err(error) = engine.execute_installation(&prepared, &mut executor) {
-                match error {}
-            }
-
             println!("Configuration confirmed.");
             println!();
 
-            if let Some(summary) = executor.summary() {
-                println!("{summary}");
-            }
-
-            print_content_import_operations(&content_import_executor);
-            print_installation_operations(&executor);
+            execute_wizard_dry_run(&engine, &prepared, &prepared_content_import);
             ExitCode::SUCCESS
         }
 
