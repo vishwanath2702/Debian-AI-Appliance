@@ -292,6 +292,14 @@ fn select_appliance_profile(state: &mut WizardState) -> Result<(), String> {
 
     Ok(())
 }
+fn parse_content_repository_selection(input: &str, item_count: usize) -> Result<usize, String> {
+    input
+        .trim()
+        .parse::<usize>()
+        .ok()
+        .filter(|selection| (1..=item_count).contains(selection))
+        .ok_or_else(|| "Error: invalid content repository selection".to_owned())
+}
 
 fn select_content_repository(state: &mut WizardState) -> Result<(), String> {
     let repositories = state.content_repositories();
@@ -324,13 +332,7 @@ fn select_content_repository(state: &mut WizardState) -> Result<(), String> {
         .read_line(&mut input)
         .map_err(|error| format!("Error reading selection: {error}"))?;
 
-    let selection = input
-        .trim()
-        .parse::<usize>()
-        .ok()
-        .filter(|selection| (1..=repositories.len()).contains(selection))
-        .ok_or_else(|| "Error: invalid content repository selection".to_owned())?;
-
+    let selection = parse_content_repository_selection(&input, repositories.len())?;
     let selected_id = repositories[selection - 1].id().clone();
 
     state.select_content_repository(selected_id);
@@ -1040,6 +1042,22 @@ mod tests {
         assert_eq!(prepared.destination().path(), "/var/lib/daia/content");
 
         std::fs::remove_dir_all(&directory).expect("test directory should be removed");
+    }
+    #[test]
+    fn rejects_invalid_content_repository_selection() {
+        let result = super::parse_content_repository_selection("4", 3);
+
+        assert_eq!(
+            result,
+            Err("Error: invalid content repository selection".to_owned())
+        );
+    }
+    #[test]
+    fn parses_content_repository_selection() {
+        let selection = super::parse_content_repository_selection("2", 3)
+            .expect("valid content repository selection should parse");
+
+        assert_eq!(selection, 2);
     }
     #[test]
     fn parses_appliance_profile_selection() {
