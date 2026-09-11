@@ -297,6 +297,13 @@ fn select_appliance_profile(
 
     Ok(())
 }
+
+fn configure_wizard_appliance_profile(state: &mut WizardState) -> Result<(), String> {
+    let repository = load_wizard_appliance_profiles()?;
+
+    select_appliance_profile(state, &repository)
+}
+
 fn parse_content_repository_selection(input: &str, item_count: usize) -> Result<usize, String> {
     input
         .trim()
@@ -781,18 +788,11 @@ fn run_install() -> ExitCode {
     println!("DAIA Installer");
     println!();
 
-    let repository = match load_wizard_appliance_profiles() {
-        Ok(repository) => repository,
-        Err(error) => {
-            eprintln!("{error}");
-            return ExitCode::FAILURE;
-        }
-    };
-
-    if let Err(error) = select_appliance_profile(&mut state, &repository) {
+    if let Err(error) = configure_wizard_appliance_profile(&mut state) {
         eprintln!("{error}");
         return ExitCode::FAILURE;
     }
+
     if let Err(error) = load_wizard_content_repositories(&mut state) {
         eprintln!("{error}");
         return ExitCode::FAILURE;
@@ -901,18 +901,11 @@ fn run_wizard() -> ExitCode {
     println!("DAIA Wizard");
     println!();
 
-    let repository = match load_wizard_appliance_profiles() {
-        Ok(repository) => repository,
-        Err(error) => {
-            eprintln!("{error}");
-            return ExitCode::FAILURE;
-        }
-    };
-
-    if let Err(error) = select_appliance_profile(&mut state, &repository) {
+    if let Err(error) = configure_wizard_appliance_profile(&mut state) {
         eprintln!("{error}");
         return ExitCode::FAILURE;
     }
+
     if let Err(error) = load_wizard_content_repositories(&mut state) {
         eprintln!("{error}");
         return ExitCode::FAILURE;
