@@ -564,6 +564,19 @@ fn select_storage(state: &mut WizardState) -> Result<(), String> {
     Ok(())
 }
 
+fn configure_wizard_storage<I>(
+    engine: &Engine,
+    state: &mut WizardState,
+    inspector: &I,
+) -> Result<(), String>
+where
+    I: StorageInspector,
+{
+    discover_wizard_storage_with(engine, state, inspector)?;
+
+    select_storage(state)
+}
+
 fn review_wizard_state(state: &WizardState) {
     println!();
     println!("Review:");
@@ -823,15 +836,10 @@ fn run_install() -> ExitCode {
     }
     let inspector = LinuxStorageInspector::new();
 
-    if let Err(error) = discover_wizard_storage_with(&engine, &mut state, &inspector) {
+    if let Err(error) = configure_wizard_storage(&engine, &mut state, &inspector) {
         eprintln!("{error}");
         return ExitCode::FAILURE;
     }
-    if let Err(error) = select_storage(&mut state) {
-        eprintln!("{error}");
-        return ExitCode::FAILURE;
-    }
-
     let Some(config) = state.into_config() else {
         eprintln!("Error: installer configuration is incomplete");
         return ExitCode::FAILURE;
@@ -924,12 +932,7 @@ fn run_wizard() -> ExitCode {
     }
     let inspector = LinuxStorageInspector::new();
 
-    if let Err(error) = discover_wizard_storage_with(&engine, &mut state, &inspector) {
-        eprintln!("{error}");
-        return ExitCode::FAILURE;
-    }
-
-    if let Err(error) = select_storage(&mut state) {
+    if let Err(error) = configure_wizard_storage(&engine, &mut state, &inspector) {
         eprintln!("{error}");
         return ExitCode::FAILURE;
     }
