@@ -577,6 +577,19 @@ where
     select_storage(state)
 }
 
+fn configure_wizard_state(engine: &Engine, state: &mut WizardState) -> Result<(), String> {
+    configure_wizard_appliance_profile(state)?;
+    configure_wizard_content_repository(state)?;
+
+    let content_inspector = LocalFilesystemContentInspector::new();
+
+    configure_wizard_external_content(engine, state, &content_inspector)?;
+
+    let storage_inspector = LinuxStorageInspector::new();
+
+    configure_wizard_storage(engine, state, &storage_inspector)
+}
+
 fn review_wizard_state(state: &WizardState) {
     println!();
     println!("Review:");
@@ -819,24 +832,7 @@ fn run_install() -> ExitCode {
     println!("DAIA Installer");
     println!();
 
-    if let Err(error) = configure_wizard_appliance_profile(&mut state) {
-        eprintln!("{error}");
-        return ExitCode::FAILURE;
-    }
-
-    if let Err(error) = configure_wizard_content_repository(&mut state) {
-        eprintln!("{error}");
-        return ExitCode::FAILURE;
-    }
-    let content_inspector = LocalFilesystemContentInspector::new();
-
-    if let Err(error) = configure_wizard_external_content(&engine, &mut state, &content_inspector) {
-        eprintln!("{error}");
-        return ExitCode::FAILURE;
-    }
-    let inspector = LinuxStorageInspector::new();
-
-    if let Err(error) = configure_wizard_storage(&engine, &mut state, &inspector) {
+    if let Err(error) = configure_wizard_state(&engine, &mut state) {
         eprintln!("{error}");
         return ExitCode::FAILURE;
     }
@@ -915,24 +911,7 @@ fn run_wizard() -> ExitCode {
     println!("DAIA Wizard");
     println!();
 
-    if let Err(error) = configure_wizard_appliance_profile(&mut state) {
-        eprintln!("{error}");
-        return ExitCode::FAILURE;
-    }
-
-    if let Err(error) = configure_wizard_content_repository(&mut state) {
-        eprintln!("{error}");
-        return ExitCode::FAILURE;
-    }
-    let content_inspector = LocalFilesystemContentInspector::new();
-
-    if let Err(error) = configure_wizard_external_content(&engine, &mut state, &content_inspector) {
-        eprintln!("{error}");
-        return ExitCode::FAILURE;
-    }
-    let inspector = LinuxStorageInspector::new();
-
-    if let Err(error) = configure_wizard_storage(&engine, &mut state, &inspector) {
+    if let Err(error) = configure_wizard_state(&engine, &mut state) {
         eprintln!("{error}");
         return ExitCode::FAILURE;
     }
