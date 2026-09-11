@@ -357,6 +357,14 @@ fn parse_external_content_selection(input: &str, item_count: usize) -> Result<Ve
         return Err("Error: invalid external content selection".to_owned());
     }
 
+    let mut unique_selections = selections.clone();
+    unique_selections.sort_unstable();
+    unique_selections.dedup();
+
+    if unique_selections.len() != selections.len() {
+        return Err("Error: duplicate external content selection".to_owned());
+    }
+
     Ok(selections)
 }
 
@@ -1100,6 +1108,15 @@ mod tests {
         assert_eq!(
             result,
             Err("Error: invalid external content selection".to_owned())
+        );
+    }
+    #[test]
+    fn rejects_duplicate_external_content_selection() {
+        let result = super::parse_external_content_selection("1 1", 3);
+
+        assert_eq!(
+            result,
+            Err("Error: duplicate external content selection".to_owned())
         );
     }
     #[test]
