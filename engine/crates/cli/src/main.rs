@@ -497,7 +497,18 @@ where
 
     Ok(())
 }
+fn configure_wizard_external_content<I>(
+    engine: &Engine,
+    state: &mut WizardState,
+    inspector: &I,
+) -> Result<(), String>
+where
+    I: ContentInspector,
+{
+    discover_external_content(engine, state, inspector)?;
 
+    select_external_content(state)
+}
 fn parse_storage_selection(input: &str, item_count: usize) -> Result<usize, String> {
     input
         .trim()
@@ -806,27 +817,21 @@ fn run_install() -> ExitCode {
     }
     let content_inspector = LocalFilesystemContentInspector::new();
 
-    if let Err(error) = discover_external_content(&engine, &mut state, &content_inspector) {
+    if let Err(error) = configure_wizard_external_content(&engine, &mut state, &content_inspector) {
         eprintln!("{error}");
         return ExitCode::FAILURE;
     }
-
-    if let Err(error) = select_external_content(&mut state) {
-        eprintln!("{error}");
-        return ExitCode::FAILURE;
-    }
-
     let inspector = LinuxStorageInspector::new();
 
     if let Err(error) = discover_wizard_storage_with(&engine, &mut state, &inspector) {
         eprintln!("{error}");
         return ExitCode::FAILURE;
     }
-
     if let Err(error) = select_storage(&mut state) {
         eprintln!("{error}");
         return ExitCode::FAILURE;
     }
+
     let Some(config) = state.into_config() else {
         eprintln!("Error: installer configuration is incomplete");
         return ExitCode::FAILURE;
@@ -913,15 +918,10 @@ fn run_wizard() -> ExitCode {
     }
     let content_inspector = LocalFilesystemContentInspector::new();
 
-    if let Err(error) = discover_external_content(&engine, &mut state, &content_inspector) {
+    if let Err(error) = configure_wizard_external_content(&engine, &mut state, &content_inspector) {
         eprintln!("{error}");
         return ExitCode::FAILURE;
     }
-    if let Err(error) = select_external_content(&mut state) {
-        eprintln!("{error}");
-        return ExitCode::FAILURE;
-    }
-
     let inspector = LinuxStorageInspector::new();
 
     if let Err(error) = discover_wizard_storage_with(&engine, &mut state, &inspector) {
