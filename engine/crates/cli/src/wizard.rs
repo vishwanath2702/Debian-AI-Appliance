@@ -106,7 +106,12 @@ impl WizardState {
 
     /// Selects storage by its stable DAIA identifier.
     pub fn select_storage(&mut self, storage_id: DiscoveredStorageId) {
-        self.selected_storage = Some(storage_id);
+        if self
+            .selectable_storage()
+            .any(|storage| storage.id() == &storage_id)
+        {
+            self.selected_storage = Some(storage_id);
+        }
     }
 
     /// Returns the selected storage identifier.
@@ -204,6 +209,15 @@ mod tests {
     };
     use registry::{ApplianceProfileRepository, ContentRepositoryRepository};
 
+    fn select_test_storage(state: &mut WizardState) {
+        state.set_discovered_storage(vec![DiscoveredStorage::new(
+            "serial:usb-disk",
+            StorageKind::Removable,
+            "/dev/sdb",
+        )]);
+        state.select_storage(DiscoveredStorageId::new("serial:usb-disk"));
+    }
+
     #[test]
     fn wizard_configuration_builds_appliance_configuration() {
         let item_id =
@@ -213,7 +227,7 @@ mod tests {
         state.set_profile_name("desktop");
         state.select_content_repository(ContentRepositoryId::new("local-models"));
         state.select_external_content(vec![item_id.clone()]);
-        state.select_storage(DiscoveredStorageId::new("serial:usb-disk"));
+        select_test_storage(&mut state);
 
         let config = state
             .into_config()
@@ -246,7 +260,7 @@ mod tests {
         let mut state = WizardState::new();
         state.set_profile_name("desktop");
         state.select_content_repository(ContentRepositoryId::new("local-models"));
-        state.select_storage(DiscoveredStorageId::new("serial:usb-disk"));
+        select_test_storage(&mut state);
 
         let config = state
             .into_config()
@@ -276,7 +290,7 @@ mod tests {
             StorageKind::Removable,
             "/dev/sdb",
         )]);
-        state.select_storage(DiscoveredStorageId::new("serial:usb-disk"));
+        select_test_storage(&mut state);
 
         let config = state
             .into_config()
@@ -300,7 +314,7 @@ mod tests {
             ExternalContentItemId::new("local-models-directory:/media/daia/models/model.gguf"),
             ExternalContentItemId::new("local-models-directory:/media/daia/models/tokenizer.json"),
         ]);
-        state.select_storage(DiscoveredStorageId::new("serial:usb-disk"));
+        select_test_storage(&mut state);
 
         let config = state
             .into_config()
@@ -421,7 +435,7 @@ mod tests {
 
         state.set_profile_name("desktop");
         state.select_content_repository(ContentRepositoryId::new("local-models"));
-        state.select_storage(DiscoveredStorageId::new("serial:usb-disk"));
+        select_test_storage(&mut state);
 
         let config = state
             .into_config()
@@ -448,7 +462,7 @@ mod tests {
         let mut state = WizardState::new();
         state.set_profile_name("desktop");
         state.select_content_repository(ContentRepositoryId::new("local-models"));
-        state.select_storage(DiscoveredStorageId::new("serial:usb-disk"));
+        select_test_storage(&mut state);
 
         let config = state
             .into_config()
@@ -468,7 +482,7 @@ mod tests {
 
         state.set_profile_name("desktop");
         state.select_content_repository(ContentRepositoryId::new("local-models"));
-        state.select_storage(DiscoveredStorageId::new("serial:usb-disk"));
+        select_test_storage(&mut state);
 
         let config = state
             .into_config()
@@ -504,7 +518,7 @@ mod tests {
     fn wizard_state_stores_selected_storage() {
         let mut state = WizardState::new();
 
-        state.select_storage(DiscoveredStorageId::new("serial:usb-disk"));
+        select_test_storage(&mut state);
 
         assert_eq!(
             state.selected_storage(),
@@ -526,6 +540,20 @@ mod tests {
         assert_eq!(selectable.len(), 1);
         assert_eq!(selectable[0].kind(), StorageKind::Removable);
     }
+    #[test]
+    fn system_storage_cannot_be_selected() {
+        let mut state = WizardState::new();
+
+        state.set_discovered_storage(vec![
+            DiscoveredStorage::new("wwn:system-disk", StorageKind::System, "/dev/sda"),
+            DiscoveredStorage::new("serial:usb-disk", StorageKind::Removable, "/dev/sdb"),
+        ]);
+
+        state.select_storage(DiscoveredStorageId::new("wwn:system-disk"));
+
+        assert_eq!(state.selected_storage(), None);
+    }
+
     #[test]
     fn system_storage_is_not_selectable() {
         let mut state = WizardState::new();
