@@ -390,6 +390,64 @@ fn select_external_content(state: &mut WizardState) -> Result<(), String> {
     Ok(())
 }
 
+fn discover_external_content<I>(
+    engine: &Engine,
+    state: &mut WizardState,
+    inspector: &I,
+) -> Result<(), String>
+where
+    I: ContentInspector,
+{
+    let selected_repository_id = state
+        .selected_content_repository()
+        .expect("content repository should be selected")
+        .clone();
+
+    let sources = state
+        .content_repositories()
+        .iter()
+        .find(|repository| repository.id() == &selected_repository_id)
+        .expect("selected content repository should exist")
+        .sources()
+        .to_vec();
+
+    let mut discovered_content = Vec::new();
+
+    for source in &sources {
+        let mut discovered = engine
+            .discover_content(source, inspector)
+            .map_err(|error| {
+                format!(
+                    "Error discovering content from source \"{}\": {error}",
+                    source.id()
+                )
+            })?;
+
+        discovered_content.append(&mut discovered);
+    }
+
+    state.set_discovered_content(discovered_content);
+
+    let mut external_content_items = Vec::new();
+
+    for content in state.discovered_content() {
+        let mut items = engine
+            .external_content_items(content, inspector)
+            .map_err(|error| {
+                format!(
+                    "Error enumerating external content from \"{}\": {error}",
+                    content.path().display()
+                )
+            })?;
+
+        external_content_items.append(&mut items);
+    }
+
+    state.set_external_content_items(external_content_items);
+
+    Ok(())
+}
+
 fn select_storage(state: &mut WizardState) -> Result<(), String> {
     let selectable = state.selectable_storage().collect::<Vec<_>>();
 
@@ -678,57 +736,12 @@ fn run_install() -> ExitCode {
         return ExitCode::FAILURE;
     }
 
-    let selected_repository_id = state
-        .selected_content_repository()
-        .expect("content repository should be selected")
-        .clone();
-
-    let sources = state
-        .content_repositories()
-        .iter()
-        .find(|repository| repository.id() == &selected_repository_id)
-        .expect("selected content repository should exist")
-        .sources()
-        .to_vec();
-
     let content_inspector = LocalFilesystemContentInspector::new();
-    let mut discovered_content = Vec::new();
 
-    for source in &sources {
-        let mut discovered = match engine.discover_content(source, &content_inspector) {
-            Ok(discovered) => discovered,
-            Err(error) => {
-                eprintln!(
-                    "Error discovering content from source \"{}\": {error}",
-                    source.id()
-                );
-                return ExitCode::FAILURE;
-            }
-        };
-
-        discovered_content.append(&mut discovered);
+    if let Err(error) = discover_external_content(&engine, &mut state, &content_inspector) {
+        eprintln!("{error}");
+        return ExitCode::FAILURE;
     }
-
-    state.set_discovered_content(discovered_content);
-
-    let mut external_content_items = Vec::new();
-
-    for content in state.discovered_content() {
-        let mut items = match engine.external_content_items(content, &content_inspector) {
-            Ok(items) => items,
-            Err(error) => {
-                eprintln!(
-                    "Error enumerating external content from \"{}\": {error}",
-                    content.path().display()
-                );
-                return ExitCode::FAILURE;
-            }
-        };
-
-        external_content_items.append(&mut items);
-    }
-
-    state.set_external_content_items(external_content_items);
 
     if let Err(error) = select_external_content(&mut state) {
         eprintln!("{error}");
@@ -846,58 +859,12 @@ fn run_wizard() -> ExitCode {
         return ExitCode::FAILURE;
     }
 
-    let selected_repository_id = state
-        .selected_content_repository()
-        .expect("content repository should be selected")
-        .clone();
-
-    let sources = state
-        .content_repositories()
-        .iter()
-        .find(|repository| repository.id() == &selected_repository_id)
-        .expect("selected content repository should exist")
-        .sources()
-        .to_vec();
-
     let content_inspector = LocalFilesystemContentInspector::new();
-    let mut discovered_content = Vec::new();
 
-    for source in &sources {
-        let mut discovered = match engine.discover_content(source, &content_inspector) {
-            Ok(discovered) => discovered,
-            Err(error) => {
-                eprintln!(
-                    "Error discovering content from source \"{}\": {error}",
-                    source.id()
-                );
-                return ExitCode::FAILURE;
-            }
-        };
-
-        discovered_content.append(&mut discovered);
+    if let Err(error) = discover_external_content(&engine, &mut state, &content_inspector) {
+        eprintln!("{error}");
+        return ExitCode::FAILURE;
     }
-
-    state.set_discovered_content(discovered_content);
-
-    let mut external_content_items = Vec::new();
-
-    for content in state.discovered_content() {
-        let mut items = match engine.external_content_items(content, &content_inspector) {
-            Ok(items) => items,
-            Err(error) => {
-                eprintln!(
-                    "Error enumerating external content from \"{}\": {error}",
-                    content.path().display()
-                );
-                return ExitCode::FAILURE;
-            }
-        };
-
-        external_content_items.append(&mut items);
-    }
-
-    state.set_external_content_items(external_content_items);
-
     if let Err(error) = select_external_content(&mut state) {
         eprintln!("{error}");
         return ExitCode::FAILURE;
@@ -1041,6 +1008,56 @@ mod tests {
 
         std::fs::remove_dir_all(&directory).expect("test directory should be removed");
     }
+
+    #[test]
+    fn discovers_external_content_into_wizard_state() {
+        use model::{ContentRepository, ContentRepositoryId, ContentSource};
+
+        let directory = std::env::temp_dir().join(format!(
+            "daia-external-content-discovery-test-{}",
+            std::process::id()
+        ));
+
+        if directory.exists() {
+            std::fs::remove_dir_all(&directory).expect("existing test directory should be removed");
+        }
+
+        std::fs::create_dir(&directory).expect("temporary directory should be created");
+
+        let model_path = directory.join("model.gguf");
+
+        std::fs::write(&model_path, "model").expect("model content should be written");
+
+        let repository = ContentRepository::with_sources(
+            "local-models",
+            "Models available on local storage",
+            vec![ContentSource::new(
+                "local-models-directory",
+                ContentRepositoryId::new("local-models"),
+                directory.to_string_lossy(),
+            )],
+        );
+
+        let mut state = super::WizardState::new();
+
+        state.set_content_repositories(vec![repository]);
+        state.select_content_repository(ContentRepositoryId::new("local-models"));
+
+        let engine = super::load_engine().expect("engine should load");
+        let inspector = inspector::LocalFilesystemContentInspector::new();
+
+        super::discover_external_content(&engine, &mut state, &inspector)
+            .expect("external content discovery should succeed");
+
+        assert_eq!(state.discovered_content().len(), 1);
+        assert_eq!(state.discovered_content()[0].path(), directory);
+
+        assert_eq!(state.external_content_items().len(), 1);
+        assert_eq!(state.external_content_items()[0].path(), model_path);
+
+        std::fs::remove_dir_all(&directory).expect("test directory should be removed");
+    }
+
     #[test]
     fn plans_repository_appliance_profile() {
         let arguments = vec!["plan-profile".to_owned(), "desktop".to_owned()];
