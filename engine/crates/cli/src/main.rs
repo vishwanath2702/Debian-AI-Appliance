@@ -247,10 +247,15 @@ fn parse_appliance_profile_selection(input: &str, item_count: usize) -> Result<u
         .ok_or_else(|| "Error: invalid appliance profile selection".to_owned())
 }
 
-fn select_appliance_profile(state: &mut WizardState) -> Result<(), String> {
-    let repository = appliance_profile_repository::load()
-        .map_err(|error| format!("Error loading appliance profiles: {error}"))?;
+fn load_wizard_appliance_profiles() -> Result<registry::ApplianceProfileRepository, String> {
+    appliance_profile_repository::load()
+        .map_err(|error| format!("Error loading appliance profiles: {error}"))
+}
 
+fn select_appliance_profile(
+    state: &mut WizardState,
+    repository: &registry::ApplianceProfileRepository,
+) -> Result<(), String> {
     println!("Appliance profiles:");
 
     for (index, profile) in repository.profiles().iter().enumerate() {
@@ -776,11 +781,18 @@ fn run_install() -> ExitCode {
     println!("DAIA Installer");
     println!();
 
-    if let Err(error) = select_appliance_profile(&mut state) {
+    let repository = match load_wizard_appliance_profiles() {
+        Ok(repository) => repository,
+        Err(error) => {
+            eprintln!("{error}");
+            return ExitCode::FAILURE;
+        }
+    };
+
+    if let Err(error) = select_appliance_profile(&mut state, &repository) {
         eprintln!("{error}");
         return ExitCode::FAILURE;
     }
-
     if let Err(error) = load_wizard_content_repositories(&mut state) {
         eprintln!("{error}");
         return ExitCode::FAILURE;
@@ -889,11 +901,18 @@ fn run_wizard() -> ExitCode {
     println!("DAIA Wizard");
     println!();
 
-    if let Err(error) = select_appliance_profile(&mut state) {
+    let repository = match load_wizard_appliance_profiles() {
+        Ok(repository) => repository,
+        Err(error) => {
+            eprintln!("{error}");
+            return ExitCode::FAILURE;
+        }
+    };
+
+    if let Err(error) = select_appliance_profile(&mut state, &repository) {
         eprintln!("{error}");
         return ExitCode::FAILURE;
     }
-
     if let Err(error) = load_wizard_content_repositories(&mut state) {
         eprintln!("{error}");
         return ExitCode::FAILURE;
@@ -1048,6 +1067,14 @@ mod tests {
 
         std::fs::remove_dir_all(&directory).expect("test directory should be removed");
     }
+    #[test]
+    fn loads_wizard_appliance_profiles() {
+        let repository =
+            super::load_wizard_appliance_profiles().expect("wizard appliance profiles should load");
+
+        assert!(!repository.profiles().is_empty());
+    }
+
     #[test]
     fn discovers_wizard_storage_into_state() {
         struct TestStorageInspector;
