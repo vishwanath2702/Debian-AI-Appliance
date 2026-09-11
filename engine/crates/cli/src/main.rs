@@ -566,6 +566,9 @@ fn review_wizard_state(state: &WizardState) {
             .expect("storage should be selected before review")
     );
 }
+fn parse_wizard_confirmation(input: &str) -> bool {
+    matches!(input.trim().to_ascii_lowercase().as_str(), "y" | "yes")
+}
 
 fn confirm_wizard_state() -> Result<bool, String> {
     print!("Continue with this configuration? [y/N]: ");
@@ -580,10 +583,7 @@ fn confirm_wizard_state() -> Result<bool, String> {
         .read_line(&mut input)
         .map_err(|error| format!("Error reading confirmation: {error}"))?;
 
-    Ok(matches!(
-        input.trim().to_ascii_lowercase().as_str(),
-        "y" | "yes"
-    ))
+    Ok(parse_wizard_confirmation(&input))
 }
 
 fn prepare_wizard_content_import_with<I>(
@@ -1042,6 +1042,14 @@ mod tests {
         assert_eq!(prepared.destination().path(), "/var/lib/daia/content");
 
         std::fs::remove_dir_all(&directory).expect("test directory should be removed");
+    }
+    #[test]
+    fn parses_wizard_confirmation() {
+        assert!(super::parse_wizard_confirmation("yes"));
+    }
+    #[test]
+    fn rejects_wizard_confirmation() {
+        assert!(!super::parse_wizard_confirmation("no"));
     }
     #[test]
     fn rejects_invalid_content_repository_selection() {
