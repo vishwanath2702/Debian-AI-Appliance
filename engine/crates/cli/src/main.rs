@@ -358,6 +358,13 @@ fn select_content_repository(state: &mut WizardState) -> Result<(), String> {
 
     Ok(())
 }
+
+fn configure_wizard_content_repository(state: &mut WizardState) -> Result<(), String> {
+    load_wizard_content_repositories(state)?;
+
+    select_content_repository(state)
+}
+
 fn parse_external_content_selection(input: &str, item_count: usize) -> Result<Vec<usize>, String> {
     let selections: Vec<usize> = input
         .split_whitespace()
@@ -793,16 +800,10 @@ fn run_install() -> ExitCode {
         return ExitCode::FAILURE;
     }
 
-    if let Err(error) = load_wizard_content_repositories(&mut state) {
+    if let Err(error) = configure_wizard_content_repository(&mut state) {
         eprintln!("{error}");
         return ExitCode::FAILURE;
     }
-
-    if let Err(error) = select_content_repository(&mut state) {
-        eprintln!("{error}");
-        return ExitCode::FAILURE;
-    }
-
     let content_inspector = LocalFilesystemContentInspector::new();
 
     if let Err(error) = discover_external_content(&engine, &mut state, &content_inspector) {
@@ -906,15 +907,10 @@ fn run_wizard() -> ExitCode {
         return ExitCode::FAILURE;
     }
 
-    if let Err(error) = load_wizard_content_repositories(&mut state) {
+    if let Err(error) = configure_wizard_content_repository(&mut state) {
         eprintln!("{error}");
         return ExitCode::FAILURE;
     }
-    if let Err(error) = select_content_repository(&mut state) {
-        eprintln!("{error}");
-        return ExitCode::FAILURE;
-    }
-
     let content_inspector = LocalFilesystemContentInspector::new();
 
     if let Err(error) = discover_external_content(&engine, &mut state, &content_inspector) {
