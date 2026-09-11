@@ -740,6 +740,15 @@ fn print_installation_operations(executor: &DryRunInstallationExecutor) {
     }
 }
 
+fn load_wizard_content_repositories(state: &mut WizardState) -> Result<(), String> {
+    let repository = ContentRepositoryRepository::load_directory(&content_repository_directory())
+        .map_err(|error| format!("Error loading content repositories: {error}"))?;
+
+    state.set_content_repositories(repository.repositories().to_vec());
+
+    Ok(())
+}
+
 fn run_install() -> ExitCode {
     let Some(engine) = load_engine() else {
         return ExitCode::FAILURE;
@@ -755,16 +764,10 @@ fn run_install() -> ExitCode {
         return ExitCode::FAILURE;
     }
 
-    let content_repository =
-        match ContentRepositoryRepository::load_directory(&content_repository_directory()) {
-            Ok(repository) => repository,
-            Err(error) => {
-                eprintln!("Error loading content repositories: {error}");
-                return ExitCode::FAILURE;
-            }
-        };
-
-    state.set_content_repositories(content_repository.repositories().to_vec());
+    if let Err(error) = load_wizard_content_repositories(&mut state) {
+        eprintln!("{error}");
+        return ExitCode::FAILURE;
+    }
 
     if let Err(error) = select_content_repository(&mut state) {
         eprintln!("{error}");
@@ -878,17 +881,10 @@ fn run_wizard() -> ExitCode {
         return ExitCode::FAILURE;
     }
 
-    let content_repository =
-        match ContentRepositoryRepository::load_directory(&content_repository_directory()) {
-            Ok(repository) => repository,
-            Err(error) => {
-                eprintln!("Error loading content repositories: {error}");
-                return ExitCode::FAILURE;
-            }
-        };
-
-    state.set_content_repositories(content_repository.repositories().to_vec());
-
+    if let Err(error) = load_wizard_content_repositories(&mut state) {
+        eprintln!("{error}");
+        return ExitCode::FAILURE;
+    }
     if let Err(error) = select_content_repository(&mut state) {
         eprintln!("{error}");
         return ExitCode::FAILURE;
@@ -1042,6 +1038,15 @@ mod tests {
         assert_eq!(prepared.destination().path(), "/var/lib/daia/content");
 
         std::fs::remove_dir_all(&directory).expect("test directory should be removed");
+    }
+    #[test]
+    fn loads_wizard_content_repositories() {
+        let mut state = super::WizardState::new();
+
+        super::load_wizard_content_repositories(&mut state)
+            .expect("wizard content repositories should load");
+
+        assert!(!state.content_repositories().is_empty());
     }
     #[test]
     fn parses_wizard_confirmation() {
