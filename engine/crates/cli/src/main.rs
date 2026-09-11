@@ -474,6 +474,15 @@ where
     Ok(())
 }
 
+fn parse_storage_selection(input: &str, item_count: usize) -> Result<usize, String> {
+    input
+        .trim()
+        .parse::<usize>()
+        .ok()
+        .filter(|selection| (1..=item_count).contains(selection))
+        .ok_or_else(|| "Error: invalid storage selection".to_owned())
+}
+
 fn select_storage(state: &mut WizardState) -> Result<(), String> {
     let selectable = state.selectable_storage().collect::<Vec<_>>();
 
@@ -504,12 +513,7 @@ fn select_storage(state: &mut WizardState) -> Result<(), String> {
         .read_line(&mut input)
         .map_err(|error| format!("Error reading selection: {error}"))?;
 
-    let selection = input
-        .trim()
-        .parse::<usize>()
-        .ok()
-        .filter(|selection| (1..=selectable.len()).contains(selection))
-        .ok_or_else(|| "Error: invalid storage selection".to_owned())?;
+    let selection = parse_storage_selection(&input, selectable.len())?;
 
     let selected_id = selectable[selection - 1].id().clone();
 
@@ -1035,6 +1039,19 @@ mod tests {
         std::fs::remove_dir_all(&directory).expect("test directory should be removed");
     }
 
+    #[test]
+    fn parses_storage_selection() {
+        let selection =
+            super::parse_storage_selection("2", 3).expect("valid storage selection should parse");
+
+        assert_eq!(selection, 2);
+    }
+    #[test]
+    fn rejects_invalid_storage_selection() {
+        let result = super::parse_storage_selection("4", 3);
+
+        assert_eq!(result, Err("Error: invalid storage selection".to_owned()));
+    }
     #[test]
     fn discovers_external_content_into_wizard_state() {
         use model::{ContentRepository, ContentRepositoryId, ContentSource};
