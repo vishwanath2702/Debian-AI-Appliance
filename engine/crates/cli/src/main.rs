@@ -707,6 +707,16 @@ fn prepare_wizard_installation(
     engine.prepare_installation(intent, profile, &storage)
 }
 
+fn prepare_wizard_appliance(
+    engine: &Engine,
+    config: &model::ApplianceConfiguration,
+) -> Result<(engine::PreparedInstallation, engine::PreparedContentImport), String> {
+    let prepared_content = prepare_wizard_content_import(engine, config)?;
+    let prepared_installation = prepare_wizard_installation(engine, config)?;
+
+    Ok((prepared_installation, prepared_content))
+}
+
 fn installation_operation_name(operation: &InstallationOperation) -> String {
     match operation {
         InstallationOperation::PrepareDisk { storage_id, .. } => {
@@ -843,22 +853,14 @@ fn run_install() -> ExitCode {
 
     let appliance_configuration = config.appliance_configuration();
 
-    let prepared_content = match prepare_wizard_content_import(&engine, &appliance_configuration) {
-        Ok(prepared) => prepared,
-        Err(error) => {
-            eprintln!("{error}");
-            return ExitCode::FAILURE;
-        }
-    };
-
-    let prepared_installation = match prepare_wizard_installation(&engine, &appliance_configuration)
-    {
-        Ok(prepared) => prepared,
-        Err(error) => {
-            eprintln!("{error}");
-            return ExitCode::FAILURE;
-        }
-    };
+    let (prepared_installation, prepared_content) =
+        match prepare_wizard_appliance(&engine, &appliance_configuration) {
+            Ok(prepared) => prepared,
+            Err(error) => {
+                eprintln!("{error}");
+                return ExitCode::FAILURE;
+            }
+        };
 
     let prepared =
         engine::PreparedApplianceInstallation::new(prepared_installation, prepared_content);
@@ -927,8 +929,8 @@ fn run_wizard() -> ExitCode {
 
             let appliance_configuration = config.appliance_configuration();
 
-            let prepared_content_import =
-                match prepare_wizard_content_import(&engine, &appliance_configuration) {
+            let (prepared, prepared_content_import) =
+                match prepare_wizard_appliance(&engine, &appliance_configuration) {
                     Ok(prepared) => prepared,
                     Err(error) => {
                         eprintln!("{error}");
@@ -941,14 +943,6 @@ fn run_wizard() -> ExitCode {
             if let Err(error) = prepared_content_import.execute(&mut content_import_executor) {
                 match error {}
             }
-
-            let prepared = match prepare_wizard_installation(&engine, &appliance_configuration) {
-                Ok(prepared) => prepared,
-                Err(error) => {
-                    eprintln!("{error}");
-                    return ExitCode::FAILURE;
-                }
-            };
 
             let mut executor = DryRunInstallationExecutor::default();
 
