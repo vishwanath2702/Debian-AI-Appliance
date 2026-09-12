@@ -272,6 +272,10 @@ fn select_appliance_profile(
     state: &mut WizardState,
     repository: &registry::ApplianceProfileRepository,
 ) -> Result<(), String> {
+    if repository.profiles().is_empty() {
+        return Err("No appliance profiles found.".to_owned());
+    }
+
     println!("Appliance profiles:");
 
     for (index, profile) in repository.profiles().iter().enumerate() {
@@ -1179,6 +1183,17 @@ mod tests {
             super::format_appliance_profile(&profile),
             "desktop - Graphical Debian desktop appliance [desktop, remote-access]"
         );
+    }
+
+    #[test]
+    fn rejects_selection_from_empty_appliance_profile_repository() {
+        let mut state = super::WizardState::new();
+        let repository = registry::ApplianceProfileRepository::new();
+
+        let result = super::select_appliance_profile(&mut state, &repository);
+
+        assert_eq!(result, Err("No appliance profiles found.".to_owned()));
+        assert_eq!(state.profile_name(), None);
     }
 
     #[test]
