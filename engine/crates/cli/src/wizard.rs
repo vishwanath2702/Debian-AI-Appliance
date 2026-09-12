@@ -92,6 +92,14 @@ impl WizardState {
     }
     /// Replaces the importable external content items for the current wizard session.
     pub fn set_external_content_items(&mut self, items: Vec<ExternalContentItem>) {
+        if self
+            .selected_external_content
+            .iter()
+            .any(|selected| !items.iter().any(|item| item.id() == selected))
+        {
+            self.selected_external_content.clear();
+        }
+
         self.external_content_items = items;
     }
 
@@ -390,6 +398,26 @@ mod tests {
                 ),
             ]
         );
+    }
+
+    #[test]
+    fn replacing_external_content_items_clears_unavailable_selection() {
+        let mut state = WizardState::new();
+
+        state.set_external_content_items(vec![ExternalContentItem::new(
+            ContentSourceId::new("local-models-directory"),
+            "/media/daia/models/model.gguf",
+        )]);
+        state.select_external_content(vec![ExternalContentItemId::new(
+            "local-models-directory:/media/daia/models/model.gguf",
+        )]);
+
+        state.set_external_content_items(vec![ExternalContentItem::new(
+            ContentSourceId::new("local-models-directory"),
+            "/media/daia/models/tokenizer.json",
+        )]);
+
+        assert!(state.selected_external_content().is_empty());
     }
 
     #[test]
