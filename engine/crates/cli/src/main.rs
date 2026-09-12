@@ -939,12 +939,6 @@ fn run_install() -> ExitCode {
 
     review_wizard_state(&state);
 
-    let selected_storage = format_selected_storage(
-        state
-            .selected_storage_device()
-            .expect("storage should be selected before installation"),
-    );
-
     let Some(config) = state.into_config() else {
         eprintln!("Error: installer configuration is incomplete");
         return ExitCode::FAILURE;
@@ -962,6 +956,7 @@ fn run_install() -> ExitCode {
         };
 
     let installation_plan = prepared_installation.installation_plan();
+    let selected_storage = format_selected_storage(prepared_installation.storage());
 
     let prepared =
         engine::PreparedApplianceInstallation::new(prepared_installation, prepared_content);
