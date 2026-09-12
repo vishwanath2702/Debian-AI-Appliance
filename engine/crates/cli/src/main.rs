@@ -820,11 +820,7 @@ fn print_content_import_operations(executor: &DryRunContentImportOperationExecut
         }
     }
 }
-fn print_installation_operations(executor: &DryRunInstallationExecutor) {
-    let Some(plan) = executor.plan() else {
-        return;
-    };
-
+fn print_installation_plan(plan: &engine::InstallationPlan) {
     println!();
     println!("Planned installation operations:");
 
@@ -835,6 +831,14 @@ fn print_installation_operations(executor: &DryRunInstallationExecutor) {
             installation_operation_name(operation)
         );
     }
+}
+
+fn print_installation_operations(executor: &DryRunInstallationExecutor) {
+    let Some(plan) = executor.plan() else {
+        return;
+    };
+
+    print_installation_plan(plan);
 }
 fn execute_wizard_dry_run(
     engine: &Engine,
@@ -957,8 +961,12 @@ fn run_install() -> ExitCode {
             }
         };
 
+    let installation_plan = prepared_installation.installation_plan();
+
     let prepared =
         engine::PreparedApplianceInstallation::new(prepared_installation, prepared_content);
+
+    print_installation_plan(&installation_plan);
 
     println!();
     println!("WARNING: The selected target disk will be erased:");
