@@ -661,8 +661,8 @@ fn parse_wizard_confirmation(input: &str) -> bool {
     matches!(input.trim().to_ascii_lowercase().as_str(), "y" | "yes")
 }
 
-fn confirm_wizard_state() -> Result<bool, String> {
-    print!("Continue with this configuration? [y/N]: ");
+fn confirm_wizard_state(prompt: &str) -> Result<bool, String> {
+    print!("{prompt}");
 
     io::stdout()
         .flush()
@@ -971,7 +971,7 @@ fn run_install() -> ExitCode {
     println!("WARNING: The selected target disk will be erased:");
     println!("  {selected_storage}");
 
-    match confirm_wizard_state() {
+    match confirm_wizard_state("Erase this disk and start installation? [y/N]: ") {
         Ok(true) => match execute_confirmed_installation(&engine, &prepared) {
             Ok(()) => ExitCode::SUCCESS,
             Err(error) => {
@@ -1024,7 +1024,7 @@ fn run_wizard() -> ExitCode {
 
     review_wizard_state(&state);
 
-    match confirm_wizard_state() {
+    match confirm_wizard_state("Continue with this configuration? [y/N]: ") {
         Ok(true) => match execute_confirmed_wizard(&engine, state) {
             Ok(()) => ExitCode::SUCCESS,
             Err(error) => {
