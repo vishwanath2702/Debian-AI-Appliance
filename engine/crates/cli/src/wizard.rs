@@ -44,6 +44,18 @@ impl WizardState {
     }
     /// Replaces the content repositories available to the wizard.
     pub fn set_content_repositories(&mut self, repositories: Vec<ContentRepository>) {
+        if self
+            .selected_content_repository
+            .as_ref()
+            .is_some_and(|selected| {
+                !repositories
+                    .iter()
+                    .any(|repository| repository.id() == selected)
+            })
+        {
+            self.selected_content_repository = None;
+        }
+
         self.content_repositories = repositories;
     }
 
@@ -478,6 +490,24 @@ mod tests {
         assert_eq!(repositories.len(), 2);
         assert_eq!(repositories[0].id().as_str(), "local-models");
         assert_eq!(repositories[1].id().as_str(), "offline-docs");
+    }
+
+    #[test]
+    fn replacing_content_repositories_clears_unavailable_selection() {
+        let mut state = WizardState::new();
+
+        state.set_content_repositories(vec![ContentRepository::new(
+            "local-models",
+            "Models available on local storage",
+        )]);
+        state.select_content_repository(ContentRepositoryId::new("local-models"));
+
+        state.set_content_repositories(vec![ContentRepository::new(
+            "offline-docs",
+            "Offline documentation",
+        )]);
+
+        assert_eq!(state.selected_content_repository(), None);
     }
 
     #[test]
