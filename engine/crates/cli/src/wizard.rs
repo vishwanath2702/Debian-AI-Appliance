@@ -54,7 +54,13 @@ impl WizardState {
     }
     /// Selects a content repository available to the wizard.
     pub fn select_content_repository(&mut self, repository_id: ContentRepositoryId) {
-        self.selected_content_repository = Some(repository_id);
+        if self
+            .content_repositories
+            .iter()
+            .any(|repository| repository.id() == &repository_id)
+        {
+            self.selected_content_repository = Some(repository_id);
+        }
     }
 
     /// Returns the selected content repository identifier.
@@ -218,6 +224,14 @@ mod tests {
         state.select_storage(DiscoveredStorageId::new("serial:usb-disk"));
     }
 
+    fn select_test_content_repository(state: &mut WizardState) {
+        state.set_content_repositories(vec![ContentRepository::new(
+            "local-models",
+            "Models available on local storage",
+        )]);
+        state.select_content_repository(ContentRepositoryId::new("local-models"));
+    }
+
     #[test]
     fn wizard_configuration_builds_appliance_configuration() {
         let item_id =
@@ -225,7 +239,7 @@ mod tests {
 
         let mut state = WizardState::new();
         state.set_profile_name("desktop");
-        state.select_content_repository(ContentRepositoryId::new("local-models"));
+        select_test_content_repository(&mut state);
         state.select_external_content(vec![item_id.clone()]);
         select_test_storage(&mut state);
 
@@ -259,7 +273,7 @@ mod tests {
 
         let mut state = WizardState::new();
         state.set_profile_name("desktop");
-        state.select_content_repository(ContentRepositoryId::new("local-models"));
+        select_test_content_repository(&mut state);
         select_test_storage(&mut state);
 
         let config = state
@@ -281,7 +295,7 @@ mod tests {
         let mut state = WizardState::new();
 
         state.set_profile_name("desktop");
-        state.select_content_repository(ContentRepositoryId::new("local-models"));
+        select_test_content_repository(&mut state);
         state.select_external_content(vec![ExternalContentItemId::new(
             "local-models-directory:/media/daia/models/model.gguf",
         )]);
@@ -309,7 +323,7 @@ mod tests {
         let mut state = WizardState::new();
 
         state.set_profile_name("desktop");
-        state.select_content_repository(ContentRepositoryId::new("local-models"));
+        select_test_content_repository(&mut state);
         state.select_external_content(vec![
             ExternalContentItemId::new("local-models-directory:/media/daia/models/model.gguf"),
             ExternalContentItemId::new("local-models-directory:/media/daia/models/tokenizer.json"),
@@ -415,10 +429,24 @@ mod tests {
     }
 
     #[test]
+    fn unknown_content_repository_cannot_be_selected() {
+        let mut state = WizardState::new();
+
+        state.set_content_repositories(vec![ContentRepository::new(
+            "local-models",
+            "Models available on local storage",
+        )]);
+
+        state.select_content_repository(ContentRepositoryId::new("does-not-exist"));
+
+        assert_eq!(state.selected_content_repository(), None);
+    }
+
+    #[test]
     fn wizard_state_stores_selected_content_repository() {
         let mut state = WizardState::new();
 
-        state.select_content_repository(ContentRepositoryId::new("local-models"));
+        select_test_content_repository(&mut state);
 
         assert_eq!(
             state
@@ -434,7 +462,7 @@ mod tests {
         let mut state = WizardState::new();
 
         state.set_profile_name("desktop");
-        state.select_content_repository(ContentRepositoryId::new("local-models"));
+        select_test_content_repository(&mut state);
         select_test_storage(&mut state);
 
         let config = state
@@ -461,7 +489,7 @@ mod tests {
 
         let mut state = WizardState::new();
         state.set_profile_name("desktop");
-        state.select_content_repository(ContentRepositoryId::new("local-models"));
+        select_test_content_repository(&mut state);
         select_test_storage(&mut state);
 
         let config = state
@@ -481,7 +509,7 @@ mod tests {
         let mut state = WizardState::new();
 
         state.set_profile_name("desktop");
-        state.select_content_repository(ContentRepositoryId::new("local-models"));
+        select_test_content_repository(&mut state);
         select_test_storage(&mut state);
 
         let config = state
