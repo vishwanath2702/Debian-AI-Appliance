@@ -897,13 +897,16 @@ where
     Ok(())
 }
 
+fn load_package_repository() -> Result<PackageRepository, String> {
+    PackageRepository::from_directory(package_manifest_directory())
+        .map_err(|error| format!("Error loading package repository: {error}"))
+}
+
 fn execute_system_installation(
     engine: &Engine,
     prepared: &engine::PreparedApplianceInstallation,
+    package_repository: PackageRepository,
 ) -> Result<(), String> {
-    let package_repository = PackageRepository::from_directory(package_manifest_directory())
-        .map_err(|error| format!("Error loading package repository: {error}"))?;
-
     let mut executor =
         SystemInstallationOperationExecutor::new(asset_directory(), package_repository);
 
@@ -915,11 +918,12 @@ fn execute_system_installation(
 fn execute_confirmed_installation(
     engine: &Engine,
     prepared: &engine::PreparedApplianceInstallation,
+    package_repository: PackageRepository,
 ) -> Result<(), String> {
     println!();
     println!("Starting installation...");
 
-    execute_system_installation(engine, prepared)?;
+    execute_system_installation(engine, prepared, package_repository)?;
 
     println!("Installation complete.");
 
@@ -967,12 +971,20 @@ fn run_install() -> ExitCode {
 
     print_installation_plan(&installation_plan);
 
+    let package_repository = match load_package_repository() {
+        Ok(repository) => repository,
+        Err(error) => {
+            eprintln!("{error}");
+            return ExitCode::FAILURE;
+        }
+    };
+
     println!();
     println!("WARNING: The selected target disk will be erased:");
     println!("  {selected_storage}");
 
     match confirm_wizard_state("Erase this disk and start installation? [y/N]: ") {
-        Ok(true) => match execute_confirmed_installation(&engine, &prepared) {
+        Ok(true) => match execute_confirmed_installation(&engine, &prepared, package_repository) {
             Ok(()) => ExitCode::SUCCESS,
             Err(error) => {
                 eprintln!("{error}");
@@ -1103,6 +1115,13 @@ mod tests {
 
         std::fs::remove_dir_all(&directory).expect("test directory should be removed");
     }
+    #[test]
+    fn loads_package_repository_for_installer_preflight() {
+        let repository = super::load_package_repository().expect("package repository should load");
+
+        assert!(!repository.manifests().is_empty());
+    }
+
     #[test]
     fn loads_wizard_appliance_profiles() {
         let repository =
