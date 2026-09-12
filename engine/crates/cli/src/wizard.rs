@@ -90,7 +90,13 @@ impl WizardState {
     }
     /// Replaces the external content selected for import.
     pub fn select_external_content(&mut self, items: Vec<ExternalContentItemId>) {
-        self.selected_external_content = items;
+        if items.iter().all(|item_id| {
+            self.external_content_items
+                .iter()
+                .any(|item| item.id() == item_id)
+        }) {
+            self.selected_external_content = items;
+        }
     }
 
     /// Returns the external content selected for import.
@@ -232,6 +238,28 @@ mod tests {
         state.select_content_repository(ContentRepositoryId::new("local-models"));
     }
 
+    fn select_test_external_content(
+        state: &mut WizardState,
+        paths: &[&str],
+    ) -> Vec<ExternalContentItemId> {
+        let source_id = ContentSourceId::new("local-models-directory");
+
+        let items = paths
+            .iter()
+            .map(|path| ExternalContentItem::new(source_id.clone(), *path))
+            .collect::<Vec<_>>();
+
+        let selected_ids = items
+            .iter()
+            .map(|item| item.id().clone())
+            .collect::<Vec<_>>();
+
+        state.set_external_content_items(items);
+        state.select_external_content(selected_ids.clone());
+
+        selected_ids
+    }
+
     #[test]
     fn wizard_configuration_builds_appliance_configuration() {
         let item_id =
@@ -240,6 +268,10 @@ mod tests {
         let mut state = WizardState::new();
         state.set_profile_name("desktop");
         select_test_content_repository(&mut state);
+        state.set_external_content_items(vec![ExternalContentItem::new(
+            ContentSourceId::new("local-models-directory"),
+            "/media/daia/models/model.gguf",
+        )]);
         state.select_external_content(vec![item_id.clone()]);
         select_test_storage(&mut state);
 
@@ -296,9 +328,7 @@ mod tests {
 
         state.set_profile_name("desktop");
         select_test_content_repository(&mut state);
-        state.select_external_content(vec![ExternalContentItemId::new(
-            "local-models-directory:/media/daia/models/model.gguf",
-        )]);
+        select_test_external_content(&mut state, &["/media/daia/models/model.gguf"]);
         state.set_discovered_storage(vec![DiscoveredStorage::new(
             "serial:usb-disk",
             StorageKind::Removable,
@@ -324,10 +354,13 @@ mod tests {
 
         state.set_profile_name("desktop");
         select_test_content_repository(&mut state);
-        state.select_external_content(vec![
-            ExternalContentItemId::new("local-models-directory:/media/daia/models/model.gguf"),
-            ExternalContentItemId::new("local-models-directory:/media/daia/models/tokenizer.json"),
-        ]);
+        select_test_external_content(
+            &mut state,
+            &[
+                "/media/daia/models/model.gguf",
+                "/media/daia/models/tokenizer.json",
+            ],
+        );
         select_test_storage(&mut state);
 
         let config = state
@@ -348,13 +381,32 @@ mod tests {
     }
 
     #[test]
+    fn unknown_external_content_cannot_be_selected() {
+        let mut state = WizardState::new();
+
+        state.set_external_content_items(vec![ExternalContentItem::new(
+            ContentSourceId::new("local-models-directory"),
+            "/media/daia/models/model.gguf",
+        )]);
+
+        state.select_external_content(vec![ExternalContentItemId::new(
+            "local-models-directory:/media/daia/models/does-not-exist.gguf",
+        )]);
+
+        assert!(state.selected_external_content().is_empty());
+    }
+
+    #[test]
     fn wizard_state_stores_selected_external_content() {
         let mut state = WizardState::new();
 
-        state.select_external_content(vec![
-            ExternalContentItemId::new("local-models-directory:/media/daia/models/model.gguf"),
-            ExternalContentItemId::new("local-models-directory:/media/daia/models/tokenizer.json"),
-        ]);
+        select_test_external_content(
+            &mut state,
+            &[
+                "/media/daia/models/model.gguf",
+                "/media/daia/models/tokenizer.json",
+            ],
+        );
 
         let selected = state.selected_external_content();
 
