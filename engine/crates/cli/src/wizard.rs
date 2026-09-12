@@ -126,11 +126,11 @@ impl WizardState {
     }
     /// Replaces the storage discovered for the current system.
     pub fn set_discovered_storage(&mut self, storage: Vec<DiscoveredStorage>) {
-        if self
-            .selected_storage
-            .as_ref()
-            .is_some_and(|selected| !storage.iter().any(|device| device.id() == selected))
-        {
+        if self.selected_storage.as_ref().is_some_and(|selected| {
+            !storage
+                .iter()
+                .any(|device| device.id() == selected && device.kind() != StorageKind::System)
+        }) {
             self.selected_storage = None;
         }
 
@@ -701,6 +701,26 @@ mod tests {
             "serial:other-disk",
             StorageKind::Removable,
             "/dev/sdc",
+        )]);
+
+        assert_eq!(state.selected_storage(), None);
+    }
+
+    #[test]
+    fn replacing_discovered_storage_clears_unselectable_selection() {
+        let mut state = WizardState::new();
+
+        state.set_discovered_storage(vec![DiscoveredStorage::new(
+            "serial:usb-disk",
+            StorageKind::Removable,
+            "/dev/sdb",
+        )]);
+        state.select_storage(DiscoveredStorageId::new("serial:usb-disk"));
+
+        state.set_discovered_storage(vec![DiscoveredStorage::new(
+            "serial:usb-disk",
+            StorageKind::System,
+            "/dev/sdb",
         )]);
 
         assert_eq!(state.selected_storage(), None);
