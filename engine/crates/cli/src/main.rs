@@ -407,6 +407,7 @@ fn select_external_content(state: &mut WizardState) -> Result<(), String> {
     let items = state.external_content_items();
 
     if items.is_empty() {
+        println!("No external content discovered.");
         return Ok(());
     }
 
