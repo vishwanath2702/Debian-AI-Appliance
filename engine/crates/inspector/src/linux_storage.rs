@@ -26,8 +26,9 @@ impl StorageInspector for LinuxStorageInspector {
         let output = Command::new(&self.command)
             .arg("--json")
             .arg("--paths")
+            .arg("--bytes")
             .arg("--output")
-            .arg("PATH,TYPE,RM,WWN,SERIAL")
+            .arg("PATH,TYPE,RM,WWN,SERIAL,SIZE")
             .output()?;
 
         if !output.status.success() {
@@ -55,6 +56,7 @@ impl StorageInspector for LinuxStorageInspector {
                 };
 
                 DiscoveredStorage::new(storage_identity(&device), kind, device.path)
+                    .with_size_bytes(device.size)
             })
             .collect())
     }
@@ -281,6 +283,7 @@ echo '/dev/nvme0n1p2'
             rm: false,
             wwn: Some("eui.2c3ebffff000220b".to_owned()),
             serial: Some("AA000000000000008715".to_owned()),
+            size: 0,
         };
 
         assert_eq!(storage_identity(&device), "wwn:eui.2c3ebffff000220b");
@@ -294,6 +297,7 @@ echo '/dev/nvme0n1p2'
             rm: true,
             wwn: None,
             serial: Some("E0D55E6B6466E78088300791".to_owned()),
+            size: 0,
         };
 
         assert_eq!(storage_identity(&device), "serial:E0D55E6B6466E78088300791");
@@ -307,6 +311,7 @@ echo '/dev/nvme0n1p2'
             rm: false,
             wwn: None,
             serial: None,
+            size: 0,
         };
 
         assert_eq!(storage_identity(&device), "path:/dev/sdz");
@@ -336,21 +341,24 @@ case "$*" in
       "type": "disk",
       "rm": false,
       "wwn": "0x5001b448bd521e4b",
-      "serial": "223020803525"
+      "serial": "223020803525",
+      "size": 500107862016
     },
     {
       "path": "/dev/sdb",
       "type": "disk",
       "rm": false,
       "wwn": "0x5001b448bd999999",
-      "serial": "SECONDARY001"
+      "serial": "SECONDARY001",
+      "size": 1000204886016
     },
     {
       "path": "/dev/sdc",
       "type": "disk",
       "rm": true,
       "wwn": null,
-      "serial": "USB001"
+      "serial": "USB001",
+      "size": 32010928128
     }
   ]
 }
@@ -373,6 +381,7 @@ esac
 
         assert_eq!(storage[1].device_path(), std::path::Path::new("/dev/sdb"));
         assert_eq!(storage[1].kind(), StorageKind::Secondary);
+        assert_eq!(storage[1].size_bytes(), Some(1_000_204_886_016));
 
         assert_eq!(storage[2].device_path(), std::path::Path::new("/dev/sdc"));
         assert_eq!(storage[2].kind(), StorageKind::Removable);

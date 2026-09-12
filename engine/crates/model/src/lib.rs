@@ -336,6 +336,7 @@ pub struct DiscoveredStorage {
     id: DiscoveredStorageId,
     kind: StorageKind,
     device_path: PathBuf,
+    size_bytes: Option<u64>,
 }
 
 impl DiscoveredStorage {
@@ -346,7 +347,21 @@ impl DiscoveredStorage {
             id: DiscoveredStorageId::new(id),
             kind,
             device_path: device_path.into(),
+            size_bytes: None,
         }
+    }
+
+    /// Sets the discovered storage capacity in bytes.
+    #[must_use]
+    pub const fn with_size_bytes(mut self, size_bytes: u64) -> Self {
+        self.size_bytes = Some(size_bytes);
+        self
+    }
+
+    /// Returns the discovered storage capacity in bytes, when known.
+    #[must_use]
+    pub const fn size_bytes(&self) -> Option<u64> {
+        self.size_bytes
     }
 
     /// Returns the current Linux device path.
@@ -926,6 +941,14 @@ mod tests {
         assert_eq!(storage.id(), &DiscoveredStorageId::new("disk-1"));
         assert_eq!(storage.kind(), StorageKind::Secondary);
         assert_eq!(storage.device_path(), "/dev/sdb");
+    }
+
+    #[test]
+    fn discovered_storage_exposes_size_bytes() {
+        let storage = DiscoveredStorage::new("disk-1", StorageKind::Secondary, "/dev/sdb")
+            .with_size_bytes(1_000_204_886_016);
+
+        assert_eq!(storage.size_bytes(), Some(1_000_204_886_016));
     }
 
     #[test]

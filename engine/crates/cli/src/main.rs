@@ -517,6 +517,16 @@ where
 
     select_external_content(state)
 }
+fn format_storage_size(size_bytes: Option<u64>) -> String {
+    match size_bytes {
+        Some(size_bytes) => {
+            let gib = size_bytes as f64 / 1024.0 / 1024.0 / 1024.0;
+            format!("{gib:.1} GiB")
+        }
+        None => "unknown size".to_owned(),
+    }
+}
+
 fn parse_storage_selection(input: &str, item_count: usize) -> Result<usize, String> {
     input
         .trim()
@@ -536,9 +546,10 @@ fn select_storage(state: &mut WizardState) -> Result<(), String> {
     }
     for (index, storage) in selectable.iter().enumerate() {
         println!(
-            "  {}. {}  {}  {}",
+            "  {}. {}  {}  {}  {}",
             index + 1,
             storage.kind(),
+            format_storage_size(storage.size_bytes()),
             storage.id(),
             storage.device_path().display()
         );
@@ -1164,6 +1175,15 @@ mod tests {
             Err("Error: invalid appliance profile selection".to_owned())
         );
     }
+    #[test]
+    fn formats_storage_size() {
+        assert_eq!(
+            super::format_storage_size(Some(1_000_204_886_016)),
+            "931.5 GiB"
+        );
+        assert_eq!(super::format_storage_size(None), "unknown size");
+    }
+
     #[test]
     fn parses_storage_selection() {
         let selection =

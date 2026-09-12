@@ -17,6 +17,7 @@ pub struct LsblkDevice {
     pub rm: bool,
     pub wwn: Option<String>,
     pub serial: Option<String>,
+    pub size: u64,
 }
 
 #[cfg(test)]
@@ -33,14 +34,16 @@ mod tests {
                 "type": "disk",
                 "rm": false,
                 "wwn": "eui.2c3ebffff000220b",
-                "serial": "AA000000000000008715"
+                "serial": "AA000000000000008715",
+                "size": 1000204886016
             },
             {
                 "path": "/dev/sda",
                 "type": "disk",
                 "rm": true,
                 "wwn": null,
-                "serial": "E0D55E6B6466E78088300791"
+                "serial": "E0D55E6B6466E78088300791",
+                "size": 32010928128
             }
         ]
     }"#,
@@ -59,6 +62,7 @@ mod tests {
             output.blockdevices[0].serial.as_deref(),
             Some("AA000000000000008715")
         );
+        assert_eq!(output.blockdevices[0].size, 1_000_204_886_016);
 
         assert_eq!(output.blockdevices[1].path, "/dev/sda");
         assert_eq!(output.blockdevices[1].device_type, "disk");
