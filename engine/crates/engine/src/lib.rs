@@ -1708,7 +1708,7 @@ mod tests {
         assert_eq!(prepared.content(), &content);
     }
     #[test]
-    fn prepared_appliance_installation_imports_content_between_fstab_and_target_runtime() {
+    fn prepared_appliance_installation_omits_empty_content_import() {
         let intent =
             InstallationIntent::new("desktop", DiscoveredStorageId::new("serial:usb-disk"));
 
@@ -1723,24 +1723,15 @@ mod tests {
             ContentImportDestination::new("/var/lib/daia/content"),
         );
 
-        let prepared = PreparedApplianceInstallation::new(installation, content.clone());
+        let prepared = PreparedApplianceInstallation::new(installation, content);
         let plan = prepared.installation_plan();
 
-        let configure_fstab_index = plan
-            .operations()
-            .iter()
-            .position(|operation| matches!(operation, InstallationOperation::ConfigureFstab { .. }))
-            .expect("installation plan should configure fstab");
-
-        assert_eq!(
-            plan.operations().get(configure_fstab_index + 1),
-            Some(&InstallationOperation::ImportContent { content })
+        assert!(
+            !plan
+                .operations()
+                .iter()
+                .any(|operation| matches!(operation, InstallationOperation::ImportContent { .. }))
         );
-
-        assert!(matches!(
-            plan.operations().get(configure_fstab_index + 2),
-            Some(InstallationOperation::PrepareTargetRuntime { .. })
-        ));
     }
     #[test]
     fn executes_prepared_appliance_installation_through_operation_executor() {
@@ -1753,9 +1744,14 @@ mod tests {
         let installation =
             PreparedInstallation::new(intent, storage, Vec::new(), BootstrapConfig::default());
 
+        let item = ExternalContentItem::new(
+            ContentSourceId::new("local-models-directory"),
+            "/media/daia/models/model.gguf",
+        );
+
         let content = PreparedContentImport::new(
-            ContentImportIntent::new(Vec::new()),
-            Vec::new(),
+            ContentImportIntent::new(vec![item.id().clone()]),
+            vec![item],
             ContentImportDestination::new("/var/lib/daia/content"),
         );
 

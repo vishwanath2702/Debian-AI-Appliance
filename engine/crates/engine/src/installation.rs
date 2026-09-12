@@ -974,7 +974,9 @@ impl PreparedApplianceInstallation {
         for operation in installation_plan.operations() {
             operations.push(operation.clone());
 
-            if matches!(operation, InstallationOperation::ConfigureFstab { .. }) {
+            if matches!(operation, InstallationOperation::ConfigureFstab { .. })
+                && !self.content.intent().items().is_empty()
+            {
                 operations.push(InstallationOperation::ImportContent {
                     content: self.content.clone(),
                 });
