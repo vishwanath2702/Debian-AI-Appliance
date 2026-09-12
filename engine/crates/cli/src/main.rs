@@ -910,6 +910,9 @@ fn run_install() -> ExitCode {
         eprintln!("{error}");
         return ExitCode::FAILURE;
     }
+
+    review_wizard_state(&state);
+
     println!();
     println!("WARNING: The selected target disk will be erased.");
 
