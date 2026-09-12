@@ -1369,6 +1369,87 @@ mod tests {
     }
 
     #[test]
+    fn installation_plan_continues_cleanup_after_cleanup_failure() {
+        #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+        enum TestError {
+            Installation,
+            Cleanup,
+        }
+
+        struct CleanupFailingExecutor {
+            operations: Vec<InstallationOperation>,
+            call_index: usize,
+        }
+
+        impl InstallationOperationExecutor for CleanupFailingExecutor {
+            type Error = TestError;
+
+            fn execute_operation(
+                &mut self,
+                operation: &InstallationOperation,
+            ) -> Result<(), Self::Error> {
+                self.operations.push(operation.clone());
+
+                let result = match self.call_index {
+                    1 => Err(TestError::Installation),
+                    2 => Err(TestError::Cleanup),
+                    _ => Ok(()),
+                };
+
+                self.call_index += 1;
+                result
+            }
+        }
+
+        let plan = InstallationPlan::new(vec![
+            InstallationOperation::PrepareDisk {
+                storage_id: DiscoveredStorageId::new("serial:usb-disk"),
+                device_path: "/dev/sdb".into(),
+            },
+            InstallationOperation::InstallBootloader {
+                root: "/target".into(),
+                device_path: "/dev/sdb".into(),
+            },
+            InstallationOperation::CleanupTargetRuntime {
+                root: "/target".into(),
+            },
+            InstallationOperation::UnmountFilesystems {
+                mounts: default_installation_mounts(),
+            },
+        ]);
+
+        let mut executor = CleanupFailingExecutor {
+            operations: Vec::new(),
+            call_index: 0,
+        };
+
+        let error = plan
+            .execute_with_cleanup(&mut executor)
+            .expect_err("installation failure should still return an error");
+
+        assert_eq!(error, TestError::Installation);
+        assert_eq!(
+            executor.operations,
+            vec![
+                InstallationOperation::PrepareDisk {
+                    storage_id: DiscoveredStorageId::new("serial:usb-disk"),
+                    device_path: "/dev/sdb".into(),
+                },
+                InstallationOperation::InstallBootloader {
+                    root: "/target".into(),
+                    device_path: "/dev/sdb".into(),
+                },
+                InstallationOperation::CleanupTargetRuntime {
+                    root: "/target".into(),
+                },
+                InstallationOperation::UnmountFilesystems {
+                    mounts: default_installation_mounts(),
+                },
+            ]
+        );
+    }
+
+    #[test]
     fn creates_system_executor_with_production_dependencies() {
         let _executor = SystemInstallationOperationExecutor::new(
             "/tmp/daia-assets".into(),
