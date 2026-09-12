@@ -527,6 +527,16 @@ fn format_storage_size(size_bytes: Option<u64>) -> String {
     }
 }
 
+fn format_selected_storage(storage: &model::DiscoveredStorage) -> String {
+    format!(
+        "{}  {}  {}  {}",
+        storage.kind(),
+        format_storage_size(storage.size_bytes()),
+        storage.id(),
+        storage.device_path().display()
+    )
+}
+
 fn parse_storage_selection(input: &str, item_count: usize) -> Result<usize, String> {
     input
         .trim()
@@ -636,9 +646,11 @@ fn review_wizard_state(state: &WizardState) {
 
     println!(
         "  Storage            : {}",
-        state
-            .selected_storage()
-            .expect("storage should be selected before review")
+        format_selected_storage(
+            state
+                .selected_storage_device()
+                .expect("storage should be selected before review"),
+        )
     );
 }
 fn parse_wizard_confirmation(input: &str) -> bool {
@@ -923,6 +935,12 @@ fn run_install() -> ExitCode {
 
     review_wizard_state(&state);
 
+    let selected_storage = format_selected_storage(
+        state
+            .selected_storage_device()
+            .expect("storage should be selected before installation"),
+    );
+
     let Some(config) = state.into_config() else {
         eprintln!("Error: installer configuration is incomplete");
         return ExitCode::FAILURE;
@@ -943,7 +961,8 @@ fn run_install() -> ExitCode {
         engine::PreparedApplianceInstallation::new(prepared_installation, prepared_content);
 
     println!();
-    println!("WARNING: The selected target disk will be erased.");
+    println!("WARNING: The selected target disk will be erased:");
+    println!("  {selected_storage}");
 
     match confirm_wizard_state() {
         Ok(true) => match execute_confirmed_installation(&engine, &prepared) {
@@ -1175,6 +1194,21 @@ mod tests {
             Err("Error: invalid appliance profile selection".to_owned())
         );
     }
+    #[test]
+    fn formats_selected_storage_for_review() {
+        let storage = model::DiscoveredStorage::new(
+            "serial:usb-disk",
+            model::StorageKind::Removable,
+            "/dev/sdb",
+        )
+        .with_size_bytes(32_010_928_128);
+
+        assert_eq!(
+            super::format_selected_storage(&storage),
+            "removable  29.8 GiB  serial:usb-disk  /dev/sdb"
+        );
+    }
+
     #[test]
     fn formats_storage_size() {
         assert_eq!(

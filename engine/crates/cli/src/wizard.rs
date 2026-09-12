@@ -159,6 +159,16 @@ impl WizardState {
     pub const fn selected_storage(&self) -> Option<&DiscoveredStorageId> {
         self.selected_storage.as_ref()
     }
+
+    /// Resolves the selected storage device.
+    #[must_use]
+    pub fn selected_storage_device(&self) -> Option<&DiscoveredStorage> {
+        let selected = self.selected_storage.as_ref()?;
+
+        self.discovered_storage
+            .iter()
+            .find(|storage| storage.id() == selected)
+    }
     /// Converts the completed wizard state into a confirmed configuration.
 
     pub fn into_config(self) -> Option<WizardConfig> {
@@ -670,6 +680,26 @@ mod tests {
             state.selected_storage(),
             Some(&DiscoveredStorageId::new("serial:usb-disk"))
         );
+    }
+
+    #[test]
+    fn wizard_state_resolves_selected_storage_device() {
+        let mut state = WizardState::new();
+
+        state.set_discovered_storage(vec![
+            DiscoveredStorage::new("wwn:system-disk", StorageKind::System, "/dev/sda"),
+            DiscoveredStorage::new("serial:usb-disk", StorageKind::Removable, "/dev/sdb")
+                .with_size_bytes(32_010_928_128),
+        ]);
+        state.select_storage(DiscoveredStorageId::new("serial:usb-disk"));
+
+        let selected = state
+            .selected_storage_device()
+            .expect("selected storage device should resolve");
+
+        assert_eq!(selected.id(), &DiscoveredStorageId::new("serial:usb-disk"));
+        assert_eq!(selected.device_path(), std::path::Path::new("/dev/sdb"));
+        assert_eq!(selected.size_bytes(), Some(32_010_928_128));
     }
 
     #[test]
