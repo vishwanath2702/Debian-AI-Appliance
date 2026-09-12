@@ -388,10 +388,6 @@ fn parse_external_content_selection(input: &str, item_count: usize) -> Result<Ve
         })
         .collect::<Result<_, _>>()?;
 
-    if selections.is_empty() {
-        return Err("Error: invalid external content selection".to_owned());
-    }
-
     let mut unique_selections = selections.clone();
     unique_selections.sort_unstable();
     unique_selections.dedup();
@@ -419,7 +415,7 @@ fn select_external_content(state: &mut WizardState) -> Result<(), String> {
     }
 
     print!(
-        "Select external content [1-{}, space-separated]: ",
+        "Select external content [1-{}, space-separated; Enter for none]: ",
         items.len()
     );
     io::stdout()
@@ -1248,13 +1244,11 @@ mod tests {
         );
     }
     #[test]
-    fn rejects_empty_external_content_selection() {
-        let result = super::parse_external_content_selection("", 3);
+    fn accepts_empty_external_content_selection() {
+        let selections = super::parse_external_content_selection("", 3)
+            .expect("empty external content selection should be valid");
 
-        assert_eq!(
-            result,
-            Err("Error: invalid external content selection".to_owned())
-        );
+        assert!(selections.is_empty());
     }
     #[test]
     fn rejects_duplicate_external_content_selection() {
