@@ -1153,6 +1153,16 @@ mod tests {
         assert!(!super::parse_wizard_confirmation("no"));
     }
     #[test]
+    fn rejects_selection_from_empty_content_repository_list() {
+        let mut state = super::WizardState::new();
+
+        let result = super::select_content_repository(&mut state);
+
+        assert_eq!(result, Err("No content repositories found.".to_owned()));
+        assert_eq!(state.selected_content_repository(), None);
+    }
+
+    #[test]
     fn rejects_invalid_content_repository_selection() {
         let result = super::parse_content_repository_selection("4", 3);
 
