@@ -963,11 +963,11 @@ fn run_install() -> ExitCode {
             }
         };
 
-    let installation_plan = prepared_installation.installation_plan();
     let selected_storage = format_selected_storage(prepared_installation.storage());
 
     let prepared =
         engine::PreparedApplianceInstallation::new(prepared_installation, prepared_content);
+    let installation_plan = prepared.installation_plan();
 
     print_installation_plan(&installation_plan);
 
