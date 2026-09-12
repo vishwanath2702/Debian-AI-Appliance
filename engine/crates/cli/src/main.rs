@@ -252,6 +252,22 @@ fn load_wizard_appliance_profiles() -> Result<registry::ApplianceProfileReposito
         .map_err(|error| format!("Error loading appliance profiles: {error}"))
 }
 
+fn format_appliance_profile(profile: &model::ApplianceProfile) -> String {
+    let capabilities = profile
+        .capabilities()
+        .iter()
+        .map(model::Capability::as_str)
+        .collect::<Vec<_>>()
+        .join(", ");
+
+    format!(
+        "{} - {} [{}]",
+        profile.name(),
+        profile.description(),
+        capabilities
+    )
+}
+
 fn select_appliance_profile(
     state: &mut WizardState,
     repository: &registry::ApplianceProfileRepository,
@@ -259,12 +275,7 @@ fn select_appliance_profile(
     println!("Appliance profiles:");
 
     for (index, profile) in repository.profiles().iter().enumerate() {
-        println!(
-            "  {}. {} - {}",
-            index + 1,
-            profile.name(),
-            profile.description()
-        );
+        println!("  {}. {}", index + 1, format_appliance_profile(profile));
     }
 
     print!(
@@ -1123,6 +1134,23 @@ mod tests {
 
         assert_eq!(selection, 2);
     }
+    #[test]
+    fn formats_appliance_profile_with_capabilities() {
+        let profile = model::ApplianceProfile::new(
+            "desktop",
+            "Graphical Debian desktop appliance",
+            vec![
+                model::Capability::new("desktop"),
+                model::Capability::new("remote-access"),
+            ],
+        );
+
+        assert_eq!(
+            super::format_appliance_profile(&profile),
+            "desktop - Graphical Debian desktop appliance [desktop, remote-access]"
+        );
+    }
+
     #[test]
     fn parses_appliance_profile_selection() {
         let selection = super::parse_appliance_profile_selection("2", 3)
