@@ -234,11 +234,6 @@ impl WizardConfig {
     pub fn external_content(&self) -> &[ExternalContentItemId] {
         &self.external_content
     }
-    /// Builds the confirmed external content import intent.
-    #[must_use]
-    pub fn content_import_intent(&self) -> ContentImportIntent {
-        ContentImportIntent::new(self.external_content.clone())
-    }
     /// Returns the selected storage identifier.
     #[must_use]
     pub const fn storage_id(&self) -> &DiscoveredStorageId {
@@ -251,11 +246,6 @@ impl WizardConfig {
         repository: &'a ApplianceProfileRepository,
     ) -> Option<&'a model::ApplianceProfile> {
         repository.profile(&self.profile_name)
-    }
-    /// Converts the confirmed wizard configuration into installation intent.
-    #[must_use]
-    pub fn installation_intent(&self) -> InstallationIntent {
-        InstallationIntent::new(self.profile_name.clone(), self.storage_id().clone())
     }
     /// Builds the confirmed appliance configuration.
     #[must_use]
@@ -403,38 +393,6 @@ mod tests {
             &[ExternalContentItemId::new(
                 "local-models-directory:/media/daia/models/model.gguf"
             )]
-        );
-    }
-
-    #[test]
-    fn wizard_configuration_builds_content_import_intent() {
-        let mut state = WizardState::new();
-
-        state.set_profile_name("desktop");
-        select_test_content_repository(&mut state);
-        select_test_external_content(
-            &mut state,
-            &[
-                "/media/daia/models/model.gguf",
-                "/media/daia/models/tokenizer.json",
-            ],
-        );
-        select_test_storage(&mut state);
-
-        let config = state
-            .into_config()
-            .expect("completed wizard state should produce configuration");
-
-        let intent = config.content_import_intent();
-
-        assert_eq!(
-            intent.items(),
-            &[
-                ExternalContentItemId::new("local-models-directory:/media/daia/models/model.gguf"),
-                ExternalContentItemId::new(
-                    "local-models-directory:/media/daia/models/tokenizer.json"
-                ),
-            ]
         );
     }
 
@@ -748,27 +706,6 @@ mod tests {
                 .expect("selected content repository should exist")
                 .as_str(),
             "local-models"
-        );
-    }
-
-    #[test]
-    fn wizard_configuration_builds_installation_intent() {
-        let mut state = WizardState::new();
-
-        state.set_profile_name("desktop");
-        select_test_content_repository(&mut state);
-        select_test_storage(&mut state);
-
-        let config = state
-            .into_config()
-            .expect("completed wizard state should build configuration");
-
-        let intent = config.installation_intent();
-
-        assert_eq!(intent.profile_name(), "desktop");
-        assert_eq!(
-            intent.storage_id(),
-            &DiscoveredStorageId::new("serial:usb-disk")
         );
     }
 
