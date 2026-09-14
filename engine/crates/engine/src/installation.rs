@@ -2325,6 +2325,36 @@ mod tests {
     }
 
     #[test]
+    fn installation_plan_unmounts_filesystems_after_apply_plans_failure() {
+        let mut executor = SystemInstallationOperationExecutor::with_dependencies(
+            RecordingCommandRunner::default(),
+            RecordingInstallationBootstrapper::default(),
+            FailingInstallationPlanExecutor,
+        );
+
+        let plan = InstallationPlan::new(vec![
+            InstallationOperation::ApplyPlans { plans: Vec::new() },
+            InstallationOperation::UnmountFilesystems {
+                mounts: default_installation_mounts(),
+            },
+        ]);
+
+        let error = plan
+            .execute_with_cleanup(&mut executor)
+            .expect_err("plan execution failure should be reported");
+
+        assert_eq!(error.to_string(), "installation plan execution failed");
+
+        assert_eq!(
+            executor.runner.commands,
+            vec![
+                vec!["umount".to_owned(), "/target/boot/efi".to_owned()],
+                vec!["umount".to_owned(), "/target".to_owned()],
+            ]
+        );
+    }
+
+    #[test]
     fn system_executor_returns_apply_plans_failure() {
         let mut executor = SystemInstallationOperationExecutor::with_dependencies(
             RecordingCommandRunner::default(),
