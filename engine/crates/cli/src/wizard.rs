@@ -44,19 +44,25 @@ impl WizardState {
     }
     /// Replaces the content repositories available to the wizard.
     pub fn set_content_repositories(&mut self, repositories: Vec<ContentRepository>) {
-        if self
-            .selected_content_repository
-            .as_ref()
-            .is_some_and(|selected| {
-                !repositories
-                    .iter()
-                    .any(|repository| repository.id() == selected)
-            })
-        {
-            self.selected_content_repository = None;
-            self.discovered_content.clear();
-            self.external_content_items.clear();
-            self.selected_external_content.clear();
+        if let Some(selected) = self.selected_content_repository.as_ref() {
+            let previous_repository = self
+                .content_repositories
+                .iter()
+                .find(|repository| repository.id() == selected);
+
+            let replacement_repository = repositories
+                .iter()
+                .find(|repository| repository.id() == selected);
+
+            if previous_repository != replacement_repository {
+                self.discovered_content.clear();
+                self.external_content_items.clear();
+                self.selected_external_content.clear();
+            }
+
+            if replacement_repository.is_none() {
+                self.selected_content_repository = None;
+            }
         }
 
         self.content_repositories = repositories;
@@ -545,6 +551,59 @@ mod tests {
         assert_eq!(repositories.len(), 2);
         assert_eq!(repositories[0].id().as_str(), "local-models");
         assert_eq!(repositories[1].id().as_str(), "offline-docs");
+    }
+
+    #[test]
+    fn changing_selected_repository_definition_clears_derived_content() {
+        let mut state = WizardState::new();
+
+        let repository_id = ContentRepositoryId::new("local-models");
+
+        state.set_content_repositories(vec![ContentRepository::with_sources(
+            "local-models",
+            "Models available on local storage",
+            vec![model::ContentSource::new(
+                "local-models-directory",
+                repository_id.clone(),
+                "/media/models",
+            )],
+        )]);
+        state.select_content_repository(repository_id.clone());
+
+        state.set_discovered_content(vec![DiscoveredContent::new(
+            ContentSourceId::new("local-models-directory"),
+            "/media/models",
+        )]);
+
+        state.set_external_content_items(vec![ExternalContentItem::new(
+            ContentSourceId::new("local-models-directory"),
+            "/media/models/model.gguf",
+        )]);
+
+        state.select_external_content(vec![ExternalContentItemId::new(
+            "local-models-directory:/media/models/model.gguf",
+        )]);
+
+        state.set_content_repositories(vec![ContentRepository::with_sources(
+            "local-models",
+            "Models available on local storage",
+            vec![model::ContentSource::new(
+                "local-models-directory",
+                repository_id,
+                "/mnt/models",
+            )],
+        )]);
+
+        assert_eq!(
+            state
+                .selected_content_repository()
+                .expect("selected repository should remain available")
+                .as_str(),
+            "local-models"
+        );
+        assert!(state.discovered_content().is_empty());
+        assert!(state.external_content_items().is_empty());
+        assert!(state.selected_external_content().is_empty());
     }
 
     #[test]
