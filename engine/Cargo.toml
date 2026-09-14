@@ -8,6 +8,7 @@ members = [
     "crates/planner",
     "crates/executor",
     "crates/inspector",
+    "crates/facts",
     "crates/engine",
     "crates/cli",
 
