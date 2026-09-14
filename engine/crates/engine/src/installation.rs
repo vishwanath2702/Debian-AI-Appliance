@@ -2085,6 +2085,47 @@ mod tests {
     }
 
     #[test]
+    fn installation_plan_unmounts_filesystems_after_fstab_failure() {
+        let mut executor = SystemInstallationOperationExecutor::with_all_dependencies(
+            RecordingCommandRunner::default(),
+            RecordingInstallationBootstrapper::default(),
+            RecordingInstallationPlanExecutor::default(),
+            RecordingInstallationFileWriter::default(),
+        );
+
+        let plan = InstallationPlan::new(vec![
+            InstallationOperation::ConfigureFstab {
+                device_path: "/dev/sdb".into(),
+                partitions: vec![InstallationPartition::new(
+                    InstallationPartitionRole::EfiSystem,
+                    "fat32",
+                    Some(512),
+                )],
+                mounts: default_installation_mounts(),
+            },
+            InstallationOperation::UnmountFilesystems {
+                mounts: default_installation_mounts(),
+            },
+        ]);
+
+        let error = plan
+            .execute_with_cleanup(&mut executor)
+            .expect_err("fstab failure should be reported");
+
+        assert_eq!(error.to_string(), "root partition is missing");
+
+        assert_eq!(
+            executor.runner.commands,
+            vec![
+                vec!["umount".to_owned(), "/target/boot/efi".to_owned()],
+                vec!["umount".to_owned(), "/target".to_owned()],
+            ]
+        );
+
+        assert!(executor.file_writer.writes.is_empty());
+    }
+
+    #[test]
     fn system_executor_does_not_write_fstab_for_missing_root_partition() {
         let mut executor = SystemInstallationOperationExecutor::with_all_dependencies(
             RecordingCommandRunner::default(),
