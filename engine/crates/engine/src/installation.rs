@@ -1192,12 +1192,13 @@ mod tests {
         BootstrapConfig, InstallationBootstrapper, InstallationCommandRunner, InstallationExecutor,
         InstallationFileWriter, InstallationMount, InstallationOperation,
         InstallationOperationExecutor, InstallationPartition, InstallationPartitionRole,
-        InstallationPlanExecutor, PathBuf, PreparedInstallation, ProcessInstallationCommandRunner,
-        REQUIRED_INSTALLATION_COMMANDS, SystemInstallationOperationExecutor, command_in_root,
-        default_installation_mounts, default_installation_partitions, filesystem_uuid,
-        installation_command_exists, installation_command_exists_in_path,
-        installation_command_path_is_executable, installation_fstab, installed_mount_point,
-        partition_device_path, validate_installation_commands,
+        InstallationPlan, InstallationPlanExecutor, PathBuf, PreparedInstallation,
+        ProcessInstallationCommandRunner, REQUIRED_INSTALLATION_COMMANDS,
+        SystemInstallationOperationExecutor, command_in_root, default_installation_mounts,
+        default_installation_partitions, filesystem_uuid, installation_command_exists,
+        installation_command_exists_in_path, installation_command_path_is_executable,
+        installation_fstab, installed_mount_point, partition_device_path,
+        validate_installation_commands,
     };
     use model::{
         Capability, DiscoveredStorage, DiscoveredStorageId, InstallationIntent, Plan, ProviderId,
@@ -1433,6 +1434,54 @@ mod tests {
                 device_path: "/dev/sdb".into(),
             }
             .is_cleanup()
+        );
+    }
+
+    #[test]
+    fn installation_plan_unmounts_filesystems_after_mount_failure() {
+        let mut executor = SystemInstallationOperationExecutor::with_dependencies(
+            FailingAtCommandRunner {
+                commands: Vec::new(),
+                fail_at: 3,
+            },
+            RecordingInstallationBootstrapper::default(),
+            RecordingInstallationPlanExecutor::default(),
+        );
+
+        let plan = InstallationPlan::new(vec![
+            InstallationOperation::MountFilesystems {
+                device_path: "/dev/sdb".into(),
+                partitions: default_installation_partitions(),
+                mounts: default_installation_mounts(),
+            },
+            InstallationOperation::UnmountFilesystems {
+                mounts: default_installation_mounts(),
+            },
+        ]);
+
+        let error = plan
+            .execute_with_cleanup(&mut executor)
+            .expect_err("mount failure should be reported");
+
+        assert_eq!(error.to_string(), "command failed");
+
+        assert_eq!(
+            executor.runner.commands,
+            vec![
+                vec!["mkdir".to_owned(), "-p".to_owned(), "/target".to_owned()],
+                vec![
+                    "mount".to_owned(),
+                    "/dev/sdb2".to_owned(),
+                    "/target".to_owned(),
+                ],
+                vec![
+                    "mkdir".to_owned(),
+                    "-p".to_owned(),
+                    "/target/boot/efi".to_owned(),
+                ],
+                vec!["umount".to_owned(), "/target/boot/efi".to_owned()],
+                vec!["umount".to_owned(), "/target".to_owned()],
+            ]
         );
     }
 
