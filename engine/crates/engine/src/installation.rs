@@ -1582,6 +1582,87 @@ mod tests {
         );
     }
     #[test]
+    fn installation_plan_cleans_up_after_target_runtime_preparation_failure() {
+        let mut executor = SystemInstallationOperationExecutor::with_dependencies(
+            FailingAtCommandRunner {
+                commands: Vec::new(),
+                fail_at: 5,
+            },
+            RecordingInstallationBootstrapper::default(),
+            RecordingInstallationPlanExecutor::default(),
+        );
+
+        let plan = InstallationPlan::new(vec![
+            InstallationOperation::PrepareTargetRuntime {
+                root: "/target".into(),
+            },
+            InstallationOperation::CleanupTargetRuntime {
+                root: "/target".into(),
+            },
+        ]);
+
+        let error = plan
+            .execute_with_cleanup(&mut executor)
+            .expect_err("target runtime preparation failure should be reported");
+
+        assert_eq!(error.to_string(), "command failed");
+
+        assert_eq!(
+            executor.runner.commands,
+            vec![
+                vec![
+                    "mkdir".to_owned(),
+                    "-p".to_owned(),
+                    "/target/dev".to_owned(),
+                ],
+                vec![
+                    "mount".to_owned(),
+                    "--rbind".to_owned(),
+                    "/dev".to_owned(),
+                    "/target/dev".to_owned(),
+                ],
+                vec![
+                    "mkdir".to_owned(),
+                    "-p".to_owned(),
+                    "/target/proc".to_owned(),
+                ],
+                vec![
+                    "mount".to_owned(),
+                    "-t".to_owned(),
+                    "proc".to_owned(),
+                    "proc".to_owned(),
+                    "/target/proc".to_owned(),
+                ],
+                vec![
+                    "mkdir".to_owned(),
+                    "-p".to_owned(),
+                    "/target/sys".to_owned(),
+                ],
+                vec![
+                    "umount".to_owned(),
+                    "-R".to_owned(),
+                    "/target/run".to_owned(),
+                ],
+                vec![
+                    "umount".to_owned(),
+                    "-R".to_owned(),
+                    "/target/sys".to_owned(),
+                ],
+                vec![
+                    "umount".to_owned(),
+                    "-R".to_owned(),
+                    "/target/proc".to_owned(),
+                ],
+                vec![
+                    "umount".to_owned(),
+                    "-R".to_owned(),
+                    "/target/dev".to_owned(),
+                ],
+            ]
+        );
+    }
+
+    #[test]
     fn system_executor_continues_target_runtime_cleanup_after_command_failure() {
         let mut executor = SystemInstallationOperationExecutor::with_dependencies(
             FailingAtCommandRunner {
