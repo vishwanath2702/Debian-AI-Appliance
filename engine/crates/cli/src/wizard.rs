@@ -97,6 +97,11 @@ impl WizardState {
     }
     /// Replaces the external content discovered for the current wizard session.
     pub fn set_discovered_content(&mut self, content: Vec<DiscoveredContent>) {
+        if self.discovered_content != content {
+            self.external_content_items.clear();
+            self.selected_external_content.clear();
+        }
+
         self.discovered_content = content;
     }
 
@@ -515,6 +520,33 @@ mod tests {
             std::path::Path::new("/media/daia/models/model.gguf")
         );
     }
+    #[test]
+    fn replacing_discovered_content_clears_derived_external_content() {
+        let mut state = WizardState::new();
+
+        state.set_discovered_content(vec![DiscoveredContent::new(
+            ContentSourceId::new("local-models-directory"),
+            "/media/daia/models",
+        )]);
+
+        state.set_external_content_items(vec![ExternalContentItem::new(
+            ContentSourceId::new("local-models-directory"),
+            "/media/daia/models/model.gguf",
+        )]);
+
+        state.select_external_content(vec![ExternalContentItemId::new(
+            "local-models-directory:/media/daia/models/model.gguf",
+        )]);
+
+        state.set_discovered_content(vec![DiscoveredContent::new(
+            ContentSourceId::new("offline-docs-directory"),
+            "/media/daia/docs",
+        )]);
+
+        assert!(state.external_content_items().is_empty());
+        assert!(state.selected_external_content().is_empty());
+    }
+
     #[test]
     fn wizard_state_stores_discovered_content() {
         let mut state = WizardState::new();
