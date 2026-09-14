@@ -3048,6 +3048,66 @@ mod tests {
         assert!(error.to_string().contains("unsupported root filesystem"));
     }
     #[test]
+    fn system_executor_returns_efi_filesystem_command_failure() {
+        let mut executor = SystemInstallationOperationExecutor::with_dependencies(
+            FailingCommandRunner,
+            RecordingInstallationBootstrapper::default(),
+            RecordingInstallationPlanExecutor::default(),
+        );
+
+        let operation = InstallationOperation::CreateFilesystems {
+            device_path: "/dev/sdb".into(),
+            partitions: default_installation_partitions(),
+        };
+
+        let error = executor
+            .execute_operation(&operation)
+            .expect_err("EFI filesystem creation should return command failure");
+
+        assert_eq!(error.kind(), io::ErrorKind::Other);
+    }
+
+    #[test]
+    fn system_executor_returns_root_filesystem_command_failure() {
+        let mut executor = SystemInstallationOperationExecutor::with_dependencies(
+            FailingAtCommandRunner {
+                commands: Vec::new(),
+                fail_at: 2,
+            },
+            RecordingInstallationBootstrapper::default(),
+            RecordingInstallationPlanExecutor::default(),
+        );
+
+        let operation = InstallationOperation::CreateFilesystems {
+            device_path: "/dev/sdb".into(),
+            partitions: default_installation_partitions(),
+        };
+
+        let error = executor
+            .execute_operation(&operation)
+            .expect_err("root filesystem creation should return command failure");
+
+        assert_eq!(error.to_string(), "command failed");
+
+        assert_eq!(
+            executor.runner.commands,
+            vec![
+                vec![
+                    "mkfs.fat".to_owned(),
+                    "-F".to_owned(),
+                    "32".to_owned(),
+                    "/dev/sdb1".to_owned(),
+                ],
+                vec![
+                    "mkfs.ext4".to_owned(),
+                    "-F".to_owned(),
+                    "/dev/sdb2".to_owned(),
+                ],
+            ]
+        );
+    }
+
+    #[test]
     fn system_executor_creates_efi_and_root_filesystems() {
         let mut executor = SystemInstallationOperationExecutor::with_dependencies(
             RecordingCommandRunner::default(),
