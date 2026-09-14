@@ -608,6 +608,42 @@ impl Engine {
         ))
     }
 
+    /// Prepares a confirmed appliance configuration from resolved environment inputs.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if content discovery, content preparation, or installation
+    /// preparation fails.
+    pub fn prepare_appliance_configuration<I>(
+        &self,
+        configuration: &model::ApplianceConfiguration,
+        profile: &ApplianceProfile,
+        content_repository: &ContentRepository,
+        content_inspector: &I,
+        storage: &[DiscoveredStorage],
+        content_destination: ContentImportDestination,
+    ) -> Result<PreparedApplianceInstallation, String>
+    where
+        I: ContentInspector,
+    {
+        let items = self
+            .repository_content_items(content_repository, content_inspector)
+            .map_err(|error| format!("Error discovering content: {error}"))?;
+
+        let content = self
+            .prepare_content_import(
+                configuration.content_import().clone(),
+                items,
+                content_destination,
+            )
+            .map_err(|error| format!("Error preparing content import: {error:?}"))?;
+
+        let installation =
+            self.prepare_installation(configuration.installation().clone(), profile, storage)?;
+
+        Ok(self.prepare_appliance_installation(installation, content))
+    }
+
     /// Combines prepared installation and content into a prepared appliance installation.
     #[must_use]
     pub const fn prepare_appliance_installation(
@@ -689,10 +725,10 @@ mod tests {
 
     use inspector::{ContentInspectError, ContentInspector, StorageInspectError, StorageInspector};
     use model::{
-        Action, ApplianceProfile, Capability, CapabilityId, ContentImportDestination,
-        ContentImportIntent, ContentRepository, ContentRepositoryId, ContentSourceId,
-        DiscoveredStorage, DiscoveredStorageId, ExternalContentItem, ExternalContentItemId,
-        InstallationIntent, PlanStep, Provider, ProviderId, StorageKind,
+        Action, ApplianceConfiguration, ApplianceProfile, Capability, CapabilityId,
+        ContentImportDestination, ContentImportIntent, ContentRepository, ContentRepositoryId,
+        ContentSourceId, DiscoveredStorage, DiscoveredStorageId, ExternalContentItem,
+        ExternalContentItemId, InstallationIntent, PlanStep, Provider, ProviderId, StorageKind,
     };
     use registry::{PackageRepository, Registry};
 
@@ -1544,6 +1580,55 @@ mod tests {
         let expected = prepared.installation_plan();
 
         assert_eq!(executor.executed_operations(), expected.operations());
+    }
+
+    #[test]
+    fn prepares_appliance_configuration_from_resolved_inputs() {
+        let engine = Engine::from_registry(desktop_registry());
+
+        let profile = ApplianceProfile::new(
+            "desktop",
+            "Desktop appliance",
+            vec![Capability::new("desktop")],
+        );
+
+        let content_repository = ContentRepository::new("local-models", "Local models");
+
+        let configuration = ApplianceConfiguration::from_selections(
+            "desktop",
+            ContentRepositoryId::new("local-models"),
+            Vec::new(),
+            DiscoveredStorageId::new("serial:usb-disk"),
+        );
+
+        let storage = vec![DiscoveredStorage::new(
+            "serial:usb-disk",
+            StorageKind::Removable,
+            "/dev/sdb",
+        )];
+
+        let inspector = TestContentInspector;
+
+        let prepared = engine
+            .prepare_appliance_configuration(
+                &configuration,
+                &profile,
+                &content_repository,
+                &inspector,
+                &storage,
+                ContentImportDestination::new("/var/lib/daia/content"),
+            )
+            .expect("appliance configuration should prepare");
+
+        assert_eq!(
+            prepared.installation().intent(),
+            configuration.installation()
+        );
+        assert_eq!(prepared.content().intent(), configuration.content_import());
+        assert_eq!(
+            prepared.installation().storage().id(),
+            configuration.installation().storage_id()
+        );
     }
 
     #[test]
