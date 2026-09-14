@@ -260,11 +260,11 @@ impl WizardConfig {
     /// Builds the confirmed appliance configuration.
     #[must_use]
     pub fn appliance_configuration(&self) -> ApplianceConfiguration {
-        ApplianceConfiguration::new(
+        ApplianceConfiguration::from_selections(
             self.profile_name.clone(),
             self.content_repository_id.clone(),
-            self.content_import_intent(),
-            self.installation_intent(),
+            self.external_content.clone(),
+            self.storage_id.clone(),
         )
     }
 }

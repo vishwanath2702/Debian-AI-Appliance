@@ -729,6 +729,24 @@ impl ApplianceConfiguration {
         }
     }
 
+    /// Creates a confirmed appliance configuration from selected wizard values.
+    #[must_use]
+    pub fn from_selections(
+        profile_name: impl Into<String>,
+        content_repository_id: ContentRepositoryId,
+        external_content: Vec<ExternalContentItemId>,
+        storage_id: DiscoveredStorageId,
+    ) -> Self {
+        let profile_name = profile_name.into();
+
+        Self::new(
+            profile_name.clone(),
+            content_repository_id,
+            ContentImportIntent::new(external_content),
+            InstallationIntent::new(profile_name, storage_id),
+        )
+    }
+
     /// Returns the selected appliance profile name.
     #[must_use]
     pub fn profile_name(&self) -> &str {
@@ -813,6 +831,31 @@ mod tests {
         PackageManifest, PlanStep, ProviderId, StorageKind, StorageTarget, StorageTargetId,
     };
     use std::path::{Path, PathBuf};
+
+    #[test]
+    fn appliance_configuration_builds_confirmed_intents_from_selections() {
+        let item_id =
+            ExternalContentItemId::new("local-models-directory:/media/daia/models/model.gguf");
+
+        let configuration = ApplianceConfiguration::from_selections(
+            "desktop",
+            ContentRepositoryId::new("local-models"),
+            vec![item_id.clone()],
+            DiscoveredStorageId::new("serial:usb-disk"),
+        );
+
+        assert_eq!(configuration.profile_name(), "desktop");
+        assert_eq!(
+            configuration.content_repository_id(),
+            &ContentRepositoryId::new("local-models")
+        );
+        assert_eq!(configuration.content_import().items(), &[item_id]);
+        assert_eq!(configuration.installation().profile_name(), "desktop");
+        assert_eq!(
+            configuration.installation().storage_id(),
+            &DiscoveredStorageId::new("serial:usb-disk")
+        );
+    }
 
     #[test]
     fn appliance_configuration_exposes_confirmed_intents() {
