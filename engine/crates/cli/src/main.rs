@@ -979,6 +979,11 @@ fn run_install() -> ExitCode {
         }
     };
 
+    if let Err(error) = engine::validate_installation_commands() {
+        eprintln!("Error validating installation commands: {error}");
+        return ExitCode::FAILURE;
+    }
+
     println!();
     println!("WARNING: The selected target disk will be erased:");
     println!("  {selected_storage}");

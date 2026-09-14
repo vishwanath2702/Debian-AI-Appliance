@@ -13,7 +13,7 @@ pub use installation::{
     InstallationPlanExecutor, PreparedApplianceInstallation, PreparedInstallation,
     ProcessInstallationCommandRunner, RootfsInstallationPlanExecutor,
     SystemInstallationOperationExecutor, default_installation_mounts,
-    default_installation_partitions,
+    default_installation_partitions, validate_installation_commands,
 };
 
 use std::{

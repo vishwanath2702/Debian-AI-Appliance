@@ -110,6 +110,65 @@ where
 
     Ok(uuid.to_owned())
 }
+const REQUIRED_INSTALLATION_COMMANDS: &[&str] = &[
+    "wipefs",
+    "parted",
+    "mkfs.fat",
+    "mkfs.ext4",
+    "mkdir",
+    "mount",
+    "umount",
+    "blkid",
+    "sudo",
+    "mmdebstrap",
+];
+
+fn installation_command_path_is_executable(path: &std::path::Path) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+
+    path.metadata()
+        .is_ok_and(|metadata| metadata.is_file() && metadata.permissions().mode() & 0o111 != 0)
+}
+
+fn installation_command_exists_in_path(command: &str, path: &std::ffi::OsStr) -> bool {
+    std::env::split_paths(path)
+        .any(|directory| installation_command_path_is_executable(&directory.join(command)))
+}
+
+fn installation_command_exists(command: &str) -> bool {
+    std::env::var_os("PATH").is_some_and(|path| installation_command_exists_in_path(command, &path))
+}
+
+/// Validates that the commands required for system installation are available.
+///
+/// # Errors
+///
+/// Returns an error when a required installation command is unavailable.
+pub fn validate_installation_commands() -> io::Result<()> {
+    for command in REQUIRED_INSTALLATION_COMMANDS {
+        if !installation_command_exists(command) {
+            return Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                format!("required installation command not found: {command}"),
+            ));
+        }
+    }
+
+    let chroot = std::path::Path::new("/usr/sbin/chroot");
+
+    if !installation_command_path_is_executable(chroot) {
+        return Err(io::Error::new(
+            io::ErrorKind::NotFound,
+            format!(
+                "required installation command not found: {}",
+                chroot.display()
+            ),
+        ));
+    }
+
+    Ok(())
+}
+
 fn command_in_root(root: &std::path::Path, program: &str, args: &[&str]) -> Command {
     let mut command = Command::new("sudo");
 
@@ -1124,9 +1183,11 @@ mod tests {
         InstallationFileWriter, InstallationMount, InstallationOperation,
         InstallationOperationExecutor, InstallationPartition, InstallationPartitionRole,
         InstallationPlanExecutor, PathBuf, PreparedInstallation, ProcessInstallationCommandRunner,
-        SystemInstallationOperationExecutor, command_in_root, default_installation_mounts,
-        default_installation_partitions, filesystem_uuid, installation_fstab,
-        installed_mount_point, partition_device_path,
+        REQUIRED_INSTALLATION_COMMANDS, SystemInstallationOperationExecutor, command_in_root,
+        default_installation_mounts, default_installation_partitions, filesystem_uuid,
+        installation_command_exists, installation_command_exists_in_path,
+        installation_command_path_is_executable, installation_fstab, installed_mount_point,
+        partition_device_path, validate_installation_commands,
     };
     use model::{
         Capability, DiscoveredStorage, DiscoveredStorageId, InstallationIntent, Plan, ProviderId,
@@ -1570,6 +1631,91 @@ mod tests {
                 ],
             ]
         );
+    }
+
+    #[test]
+    fn finds_existing_installation_command() {
+        assert!(installation_command_exists("sh"));
+    }
+
+    #[test]
+    fn rejects_missing_installation_command() {
+        assert!(!installation_command_exists(
+            "daia-command-that-should-not-exist"
+        ));
+    }
+
+    #[test]
+    fn rejects_non_executable_installation_command() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let directory = std::env::temp_dir().join(format!(
+            "daia-installation-command-test-{}",
+            std::process::id()
+        ));
+
+        if directory.exists() {
+            std::fs::remove_dir_all(&directory).expect("existing test directory should be removed");
+        }
+
+        std::fs::create_dir(&directory).expect("test directory should be created");
+
+        let command = directory.join("not-executable");
+
+        std::fs::write(&command, "#!/bin/sh\nexit 0\n").expect("test command should be written");
+
+        let mut permissions = std::fs::metadata(&command)
+            .expect("test command metadata should be available")
+            .permissions();
+
+        permissions.set_mode(0o644);
+
+        std::fs::set_permissions(&command, permissions)
+            .expect("test command permissions should be set");
+
+        assert!(!installation_command_exists_in_path(
+            "not-executable",
+            directory.as_os_str()
+        ));
+
+        std::fs::remove_dir_all(&directory).expect("test directory should be removed");
+    }
+
+    #[test]
+    fn required_installation_commands_include_executor_dependencies() {
+        assert_eq!(
+            REQUIRED_INSTALLATION_COMMANDS,
+            &[
+                "wipefs",
+                "parted",
+                "mkfs.fat",
+                "mkfs.ext4",
+                "mkdir",
+                "mount",
+                "umount",
+                "blkid",
+                "sudo",
+                "mmdebstrap",
+            ]
+        );
+    }
+
+    #[test]
+    fn installation_chroot_path_is_executable() {
+        assert!(installation_command_path_is_executable(
+            std::path::Path::new("/usr/sbin/chroot")
+        ));
+    }
+
+    #[test]
+    fn validates_available_installation_commands() {
+        if REQUIRED_INSTALLATION_COMMANDS
+            .iter()
+            .all(|command| installation_command_exists(command))
+        {
+            validate_installation_commands()
+                .expect("available installation commands should validate");
+        }
     }
 
     #[test]
