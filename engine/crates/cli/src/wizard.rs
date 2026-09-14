@@ -54,6 +54,9 @@ impl WizardState {
             })
         {
             self.selected_content_repository = None;
+            self.discovered_content.clear();
+            self.external_content_items.clear();
+            self.selected_external_content.clear();
         }
 
         self.content_repositories = repositories;
@@ -542,6 +545,41 @@ mod tests {
         assert_eq!(repositories.len(), 2);
         assert_eq!(repositories[0].id().as_str(), "local-models");
         assert_eq!(repositories[1].id().as_str(), "offline-docs");
+    }
+
+    #[test]
+    fn replacing_content_repositories_clears_derived_content() {
+        let mut state = WizardState::new();
+
+        state.set_content_repositories(vec![ContentRepository::new(
+            "local-models",
+            "Models available on local storage",
+        )]);
+        state.select_content_repository(ContentRepositoryId::new("local-models"));
+
+        state.set_discovered_content(vec![DiscoveredContent::new(
+            ContentSourceId::new("local-models-directory"),
+            "/media/daia/models",
+        )]);
+
+        state.set_external_content_items(vec![ExternalContentItem::new(
+            ContentSourceId::new("local-models-directory"),
+            "/media/daia/models/model.gguf",
+        )]);
+
+        state.select_external_content(vec![ExternalContentItemId::new(
+            "local-models-directory:/media/daia/models/model.gguf",
+        )]);
+
+        state.set_content_repositories(vec![ContentRepository::new(
+            "offline-docs",
+            "Offline documentation",
+        )]);
+
+        assert_eq!(state.selected_content_repository(), None);
+        assert!(state.discovered_content().is_empty());
+        assert!(state.external_content_items().is_empty());
+        assert!(state.selected_external_content().is_empty());
     }
 
     #[test]
