@@ -760,33 +760,28 @@ where
                 self.runner.status(&mut update_grub)
             }
             InstallationOperation::CleanupTargetRuntime { root } => {
-                let target_run = root.join("run");
+                let mut first_error = None;
 
-                let mut unmount = Command::new("umount");
-                unmount.arg("-R").arg(&target_run);
+                for target in [
+                    root.join("run"),
+                    root.join("sys"),
+                    root.join("proc"),
+                    root.join("dev"),
+                ] {
+                    let mut unmount = Command::new("umount");
+                    unmount.arg("-R").arg(target);
 
-                self.runner.status(&mut unmount)?;
+                    if let Err(error) = self.runner.status(&mut unmount) {
+                        if first_error.is_none() {
+                            first_error = Some(error);
+                        }
+                    }
+                }
 
-                let target_sys = root.join("sys");
-
-                let mut unmount = Command::new("umount");
-                unmount.arg("-R").arg(&target_sys);
-
-                self.runner.status(&mut unmount)?;
-
-                let target_proc = root.join("proc");
-
-                let mut unmount = Command::new("umount");
-                unmount.arg("-R").arg(&target_proc);
-
-                self.runner.status(&mut unmount)?;
-
-                let target_dev = root.join("dev");
-
-                let mut unmount = Command::new("umount");
-                unmount.arg("-R").arg(&target_dev);
-
-                self.runner.status(&mut unmount)
+                match first_error {
+                    Some(error) => Err(error),
+                    None => Ok(()),
+                }
             }
 
             InstallationOperation::UnmountFilesystems { mounts } => {
@@ -795,20 +790,35 @@ where
                     .find(|mount| mount.role() == InstallationPartitionRole::EfiSystem)
                     .ok_or_else(|| io::Error::other("EFI mount is missing"))?;
 
+                let mut first_error = None;
+
                 let mut unmount = Command::new("umount");
                 unmount.arg(efi_mount.mount_point());
 
-                self.runner.status(&mut unmount)?;
+                if let Err(error) = self.runner.status(&mut unmount) {
+                    first_error = Some(error);
+                }
 
-                let root_mount = mounts
+                if let Some(root_mount) = mounts
                     .iter()
                     .find(|mount| mount.role() == InstallationPartitionRole::Root)
-                    .ok_or_else(|| io::Error::other("root mount is missing"))?;
+                {
+                    let mut unmount = Command::new("umount");
+                    unmount.arg(root_mount.mount_point());
 
-                let mut unmount = Command::new("umount");
-                unmount.arg(root_mount.mount_point());
+                    if let Err(error) = self.runner.status(&mut unmount) {
+                        if first_error.is_none() {
+                            first_error = Some(error);
+                        }
+                    }
+                } else if first_error.is_none() {
+                    first_error = Some(io::Error::other("root mount is missing"));
+                }
 
-                self.runner.status(&mut unmount)
+                match first_error {
+                    Some(error) => Err(error),
+                    None => Ok(()),
+                }
             }
         }
     }
@@ -1451,6 +1461,36 @@ mod tests {
         );
     }
     #[test]
+    fn system_executor_continues_filesystem_unmount_after_command_failure() {
+        let mut executor = SystemInstallationOperationExecutor::with_dependencies(
+            FailingAtCommandRunner {
+                commands: Vec::new(),
+                fail_at: 1,
+            },
+            RecordingInstallationBootstrapper::default(),
+            RecordingInstallationPlanExecutor::default(),
+        );
+
+        let operation = InstallationOperation::UnmountFilesystems {
+            mounts: default_installation_mounts(),
+        };
+
+        let error = executor
+            .execute_operation(&operation)
+            .expect_err("filesystem unmount should report command failure");
+
+        assert_eq!(error.to_string(), "command failed");
+
+        assert_eq!(
+            executor.runner.commands,
+            vec![
+                vec!["umount".to_owned(), "/target/boot/efi".to_owned(),],
+                vec!["umount".to_owned(), "/target".to_owned(),],
+            ]
+        );
+    }
+
+    #[test]
     fn system_executor_cleans_up_target_run_runtime_mount() {
         let mut executor = SystemInstallationOperationExecutor::with_dependencies(
             RecordingCommandRunner::default(),
@@ -1492,6 +1532,54 @@ mod tests {
             ]
         );
     }
+    #[test]
+    fn system_executor_continues_target_runtime_cleanup_after_command_failure() {
+        let mut executor = SystemInstallationOperationExecutor::with_dependencies(
+            FailingAtCommandRunner {
+                commands: Vec::new(),
+                fail_at: 1,
+            },
+            RecordingInstallationBootstrapper::default(),
+            RecordingInstallationPlanExecutor::default(),
+        );
+
+        let operation = InstallationOperation::CleanupTargetRuntime {
+            root: "/target".into(),
+        };
+
+        let error = executor
+            .execute_operation(&operation)
+            .expect_err("target runtime cleanup should report command failure");
+
+        assert_eq!(error.to_string(), "command failed");
+
+        assert_eq!(
+            executor.runner.commands,
+            vec![
+                vec![
+                    "umount".to_owned(),
+                    "-R".to_owned(),
+                    "/target/run".to_owned(),
+                ],
+                vec![
+                    "umount".to_owned(),
+                    "-R".to_owned(),
+                    "/target/sys".to_owned(),
+                ],
+                vec![
+                    "umount".to_owned(),
+                    "-R".to_owned(),
+                    "/target/proc".to_owned(),
+                ],
+                vec![
+                    "umount".to_owned(),
+                    "-R".to_owned(),
+                    "/target/dev".to_owned(),
+                ],
+            ]
+        );
+    }
+
     #[test]
     fn system_executor_prepares_target_runtime_mounts() {
         let mut executor = SystemInstallationOperationExecutor::with_dependencies(
