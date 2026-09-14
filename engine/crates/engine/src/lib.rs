@@ -608,6 +608,16 @@ impl Engine {
         ))
     }
 
+    /// Combines prepared installation and content into a prepared appliance installation.
+    #[must_use]
+    pub const fn prepare_appliance_installation(
+        &self,
+        installation: PreparedInstallation,
+        content: PreparedContentImport,
+    ) -> PreparedApplianceInstallation {
+        PreparedApplianceInstallation::new(installation, content)
+    }
+
     /// Executes a prepared installation using the supplied executor.
     ///
     /// # Errors
@@ -1534,6 +1544,41 @@ mod tests {
         let expected = prepared.installation_plan();
 
         assert_eq!(executor.executed_operations(), expected.operations());
+    }
+
+    #[test]
+    fn prepares_appliance_installation_from_prepared_components() {
+        let engine = Engine::from_registry(desktop_registry());
+
+        let intent =
+            InstallationIntent::new("desktop", DiscoveredStorageId::new("serial:usb-disk"));
+
+        let storage = DiscoveredStorage::new("serial:usb-disk", StorageKind::Removable, "/dev/sdb");
+
+        let installation = engine
+            .prepare_installation(
+                intent,
+                &ApplianceProfile::new(
+                    "desktop",
+                    "Desktop appliance",
+                    vec![Capability::new("desktop")],
+                ),
+                &[storage],
+            )
+            .expect("installation should prepare");
+
+        let content = engine
+            .prepare_content_import(
+                ContentImportIntent::new(Vec::new()),
+                Vec::new(),
+                ContentImportDestination::new("/var/lib/daia/content"),
+            )
+            .expect("content import should prepare");
+
+        let prepared = engine.prepare_appliance_installation(installation.clone(), content.clone());
+
+        assert_eq!(prepared.installation(), &installation);
+        assert_eq!(prepared.content(), &content);
     }
 
     #[test]
