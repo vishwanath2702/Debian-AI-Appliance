@@ -1366,6 +1366,52 @@ mod tests {
     }
 
     #[test]
+    fn installation_plan_unmounts_filesystems_after_content_import_failure() {
+        let temporary_directory =
+            tempfile::tempdir().expect("temporary directory should be created");
+
+        let source = temporary_directory.path().join("missing-model.gguf");
+
+        let item = model::ExternalContentItem::new(model::ContentSourceId::new("local"), source);
+
+        let content = crate::PreparedContentImport::new(
+            model::ContentImportIntent::new(vec![item.id().clone()]),
+            vec![item],
+            model::ContentImportDestination::new("/var/lib/daia/content"),
+        );
+
+        let target_root = temporary_directory.path().join("target");
+
+        let mut executor = SystemInstallationOperationExecutor::with_dependencies(
+            RecordingCommandRunner::default(),
+            RecordingInstallationBootstrapper::default(),
+            RecordingInstallationPlanExecutor::default(),
+        )
+        .with_target_root(target_root);
+
+        let plan = InstallationPlan::new(vec![
+            InstallationOperation::ImportContent { content },
+            InstallationOperation::UnmountFilesystems {
+                mounts: default_installation_mounts(),
+            },
+        ]);
+
+        let error = plan
+            .execute_with_cleanup(&mut executor)
+            .expect_err("content import failure should be reported");
+
+        assert_eq!(error.kind(), io::ErrorKind::NotFound);
+
+        assert_eq!(
+            executor.runner.commands,
+            vec![
+                vec!["umount".to_owned(), "/target/boot/efi".to_owned()],
+                vec!["umount".to_owned(), "/target".to_owned()],
+            ]
+        );
+    }
+
+    #[test]
     fn system_executor_imports_content_under_target_root() {
         let temporary_directory =
             tempfile::tempdir().expect("temporary directory should be created");
