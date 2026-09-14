@@ -3203,6 +3203,26 @@ mod tests {
         assert_eq!(error.kind(), io::ErrorKind::Other);
     }
     #[test]
+    fn system_executor_returns_partition_disk_command_failure() {
+        let mut executor = SystemInstallationOperationExecutor::with_dependencies(
+            FailingCommandRunner,
+            RecordingInstallationBootstrapper::default(),
+            RecordingInstallationPlanExecutor::default(),
+        );
+
+        let operation = InstallationOperation::PartitionDisk {
+            device_path: "/dev/sdb".into(),
+            partitions: default_installation_partitions(),
+        };
+
+        let error = executor
+            .execute_operation(&operation)
+            .expect_err("partition disk should return command failure");
+
+        assert_eq!(error.kind(), io::ErrorKind::Other);
+    }
+
+    #[test]
     fn system_executor_sends_parted_command_for_partition_disk() {
         let mut executor = SystemInstallationOperationExecutor::with_dependencies(
             RecordingCommandRunner::default(),
