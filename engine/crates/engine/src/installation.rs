@@ -1813,6 +1813,50 @@ mod tests {
     }
 
     #[test]
+    fn system_executor_returns_update_grub_failure() {
+        let mut executor = SystemInstallationOperationExecutor::with_dependencies(
+            FailingAtCommandRunner {
+                commands: Vec::new(),
+                fail_at: 2,
+            },
+            RecordingInstallationBootstrapper::default(),
+            RecordingInstallationPlanExecutor::default(),
+        );
+
+        let operation = InstallationOperation::InstallBootloader {
+            root: "/target".into(),
+            device_path: "/dev/sdb".into(),
+        };
+
+        let error = executor
+            .execute_operation(&operation)
+            .expect_err("update-grub failure should fail bootloader installation");
+
+        assert_eq!(error.to_string(), "command failed");
+
+        assert_eq!(
+            executor.runner.commands,
+            vec![
+                vec![
+                    "sudo".to_owned(),
+                    "/usr/sbin/chroot".to_owned(),
+                    "/target".to_owned(),
+                    "grub-install".to_owned(),
+                    "--target=x86_64-efi".to_owned(),
+                    "--efi-directory=/boot/efi".to_owned(),
+                    "--bootloader-id=DAIA".to_owned(),
+                ],
+                vec![
+                    "sudo".to_owned(),
+                    "/usr/sbin/chroot".to_owned(),
+                    "/target".to_owned(),
+                    "update-grub".to_owned(),
+                ],
+            ]
+        );
+    }
+
+    #[test]
     fn system_executor_runs_grub_install_in_target_root() {
         let mut executor = SystemInstallationOperationExecutor::with_dependencies(
             RecordingCommandRunner::default(),
