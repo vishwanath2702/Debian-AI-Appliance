@@ -538,6 +538,15 @@ impl Engine {
     /// # Errors
     ///
     /// Returns a [`StorageInspectError`] if storage discovery fails.
+    /// Discovers memory facts for the current system.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when system memory facts cannot be discovered.
+    pub fn discover_memory(&self) -> std::io::Result<facts::MemoryFacts> {
+        facts::discover_memory()
+    }
+
     pub fn discover_storage<I>(
         &self,
         inspector: &I,
@@ -2142,6 +2151,15 @@ mod tests {
             discovered[0].path(),
             std::path::Path::new("/media/daia/models")
         );
+    }
+
+    #[test]
+    fn discovers_memory_facts() {
+        let engine = Engine::from_registry(desktop_registry());
+
+        let memory = engine.discover_memory().expect("discover memory facts");
+
+        assert!(memory.total_bytes() > 0);
     }
 
     #[test]
