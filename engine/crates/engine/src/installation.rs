@@ -1308,6 +1308,16 @@ mod tests {
         plans: Vec<Plan>,
     }
 
+    struct FailingInstallationPlanExecutor;
+
+    impl InstallationPlanExecutor for FailingInstallationPlanExecutor {
+        type Error = io::Error;
+
+        fn apply_plans(&mut self, _plans: &[Plan]) -> Result<(), Self::Error> {
+            Err(io::Error::other("plan execution failed"))
+        }
+    }
+
     impl InstallationPlanExecutor for RecordingInstallationPlanExecutor {
         type Error = std::convert::Infallible;
 
@@ -2312,6 +2322,23 @@ mod tests {
                 "/dev/sdb2".to_owned(),
             ]]
         );
+    }
+
+    #[test]
+    fn system_executor_returns_apply_plans_failure() {
+        let mut executor = SystemInstallationOperationExecutor::with_dependencies(
+            RecordingCommandRunner::default(),
+            RecordingInstallationBootstrapper::default(),
+            FailingInstallationPlanExecutor,
+        );
+
+        let operation = InstallationOperation::ApplyPlans { plans: Vec::new() };
+
+        let error = executor
+            .execute_operation(&operation)
+            .expect_err("plan execution failure should be returned");
+
+        assert_eq!(error.to_string(), "installation plan execution failed");
     }
 
     #[test]
