@@ -41,9 +41,19 @@ fn read_linux_meminfo(path: &std::path::Path) -> std::io::Result<MemoryFacts> {
     })
 }
 
+/// Discovers memory facts for the current Linux system.
+///
+/// # Errors
+///
+/// Returns an error when `/proc/meminfo` cannot be read or does not contain
+/// a valid `MemTotal` entry.
+pub fn discover_memory() -> std::io::Result<MemoryFacts> {
+    read_linux_meminfo(std::path::Path::new("/proc/meminfo"))
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{MemoryFacts, parse_linux_meminfo, read_linux_meminfo};
+    use super::{MemoryFacts, discover_memory, parse_linux_meminfo, read_linux_meminfo};
     use std::fs;
 
     #[test]
@@ -72,5 +82,12 @@ mod tests {
         fs::remove_file(&path).expect("remove meminfo");
 
         assert_eq!(facts.total_bytes(), 8_388_608);
+    }
+
+    #[test]
+    fn discovers_current_system_memory() {
+        let facts = discover_memory().expect("discover memory facts");
+
+        assert!(facts.total_bytes() > 0);
     }
 }
