@@ -745,11 +745,11 @@ fn prepare_wizard_installation(
 fn prepare_wizard_appliance(
     engine: &Engine,
     config: &model::ApplianceConfiguration,
-) -> Result<(engine::PreparedInstallation, engine::PreparedContentImport), String> {
+) -> Result<engine::PreparedApplianceInstallation, String> {
     let prepared_content = prepare_wizard_content_import(engine, config)?;
     let prepared_installation = prepare_wizard_installation(engine, config)?;
 
-    Ok((prepared_installation, prepared_content))
+    Ok(engine.prepare_appliance_installation(prepared_installation, prepared_content))
 }
 
 fn installation_operation_name(operation: &InstallationOperation) -> String {
@@ -954,18 +954,15 @@ fn run_install() -> ExitCode {
 
     let appliance_configuration = config.appliance_configuration();
 
-    let (prepared_installation, prepared_content) =
-        match prepare_wizard_appliance(&engine, &appliance_configuration) {
-            Ok(prepared) => prepared,
-            Err(error) => {
-                eprintln!("{error}");
-                return ExitCode::FAILURE;
-            }
-        };
+    let prepared = match prepare_wizard_appliance(&engine, &appliance_configuration) {
+        Ok(prepared) => prepared,
+        Err(error) => {
+            eprintln!("{error}");
+            return ExitCode::FAILURE;
+        }
+    };
 
-    let selected_storage = format_selected_storage(prepared_installation.storage());
-
-    let prepared = engine.prepare_appliance_installation(prepared_installation, prepared_content);
+    let selected_storage = format_selected_storage(prepared.installation().storage());
     let installation_plan = prepared.installation_plan();
 
     print_installation_plan(&installation_plan);
@@ -1012,13 +1009,12 @@ fn execute_confirmed_wizard(engine: &Engine, state: WizardState) -> Result<(), S
 
     let appliance_configuration = config.appliance_configuration();
 
-    let (prepared, prepared_content_import) =
-        prepare_wizard_appliance(engine, &appliance_configuration)?;
+    let prepared = prepare_wizard_appliance(engine, &appliance_configuration)?;
 
     println!("Configuration confirmed.");
     println!();
 
-    execute_wizard_dry_run(engine, &prepared, &prepared_content_import);
+    execute_wizard_dry_run(engine, prepared.installation(), prepared.content());
 
     Ok(())
 }
