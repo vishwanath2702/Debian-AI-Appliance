@@ -30,9 +30,21 @@ fn parse_linux_meminfo(meminfo: &str) -> Option<MemoryFacts> {
     Some(MemoryFacts::new(total_kib * 1024))
 }
 
+fn read_linux_meminfo(path: &std::path::Path) -> std::io::Result<MemoryFacts> {
+    let meminfo = std::fs::read_to_string(path)?;
+
+    parse_linux_meminfo(&meminfo).ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "MemTotal missing from Linux meminfo",
+        )
+    })
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{MemoryFacts, parse_linux_meminfo};
+    use super::{MemoryFacts, parse_linux_meminfo, read_linux_meminfo};
+    use std::fs;
 
     #[test]
     fn memory_facts_exposes_total_bytes() {
@@ -48,5 +60,17 @@ mod tests {
         let facts = parse_linux_meminfo(meminfo).expect("memory facts");
 
         assert_eq!(facts.total_bytes(), 16_777_478_144);
+    }
+
+    #[test]
+    fn reads_linux_meminfo_from_path() {
+        let path = std::env::temp_dir().join("daia-facts-meminfo-test");
+        fs::write(&path, "MemTotal:       8192 kB\n").expect("write meminfo");
+
+        let facts = read_linux_meminfo(&path).expect("read memory facts");
+
+        fs::remove_file(&path).expect("remove meminfo");
+
+        assert_eq!(facts.total_bytes(), 8_388_608);
     }
 }
