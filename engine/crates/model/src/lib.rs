@@ -29,6 +29,66 @@ impl fmt::Display for ResourceId {
     }
 }
 
+/// Evidence collected from or about a DAIA managed resource.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Observation<T> {
+    resource_id: ResourceId,
+    source_id: ObservationSourceId,
+    collected_at: ObservationTimestamp,
+    schema_version: SchemaVersion,
+    observed: T,
+}
+
+impl<T> Observation<T> {
+    /// Creates an observation for a managed resource.
+    #[must_use]
+    pub fn new(
+        resource_id: ResourceId,
+        source_id: ObservationSourceId,
+        collected_at: ObservationTimestamp,
+        schema_version: SchemaVersion,
+        observed: T,
+    ) -> Self {
+        Self {
+            resource_id,
+            source_id,
+            collected_at,
+            schema_version,
+            observed,
+        }
+    }
+
+    /// Returns the observed managed resource identifier.
+    #[must_use]
+    pub fn resource_id(&self) -> &ResourceId {
+        &self.resource_id
+    }
+
+    /// Returns the observation source identifier.
+    #[must_use]
+    pub fn source_id(&self) -> &ObservationSourceId {
+        &self.source_id
+    }
+
+    /// Returns when the observation was collected.
+    #[must_use]
+    pub fn collected_at(&self) -> &ObservationTimestamp {
+        &self.collected_at
+    }
+
+    /// Returns the schema version used by the collected values.
+    #[must_use]
+    pub const fn schema_version(&self) -> SchemaVersion {
+        self.schema_version
+    }
+
+    /// Returns the collected values.
+    #[must_use]
+    pub fn observed(&self) -> &T {
+        &self.observed
+    }
+}
+
 /// Stable identifier for a DAIA observation source.
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub struct ObservationSourceId(String);
@@ -924,8 +984,8 @@ mod tests {
         ContentImportDestination, ContentImportIntent, ContentRepository, ContentRepositoryId,
         ContentSource, ContentSourceId, DiscoveredContent, DiscoveredStorage, DiscoveredStorageId,
         ExternalContentItem, ExternalContentItemId, ImportedContentItem, InstallationIntent,
-        ObservationSourceId, ObservationTimestamp, PackageManifest, PlanStep, ProviderId,
-        ResourceId, SchemaVersion, StorageKind, StorageTarget, StorageTargetId,
+        Observation, ObservationSourceId, ObservationTimestamp, PackageManifest, PlanStep,
+        ProviderId, ResourceId, SchemaVersion, StorageKind, StorageTarget, StorageTargetId,
     };
     use std::path::{Path, PathBuf};
 
@@ -1160,6 +1220,38 @@ mod tests {
 
         assert_eq!(repository_id.as_str(), "documents");
         assert_eq!(repository_id.to_string(), "documents");
+    }
+
+    #[test]
+    fn observation_exposes_collected_resource_evidence() {
+        #[derive(Debug, Eq, PartialEq)]
+        struct ServiceObservation {
+            present: bool,
+            enabled: bool,
+        }
+
+        let observation = Observation::new(
+            ResourceId::new("service/ollama"),
+            ObservationSourceId::new("system-service-observer"),
+            ObservationTimestamp::new("2026-07-23T09:00:00Z"),
+            SchemaVersion::new(1),
+            ServiceObservation {
+                present: true,
+                enabled: true,
+            },
+        );
+
+        assert_eq!(observation.resource_id().as_str(), "service/ollama");
+        assert_eq!(observation.source_id().as_str(), "system-service-observer");
+        assert_eq!(observation.collected_at().as_str(), "2026-07-23T09:00:00Z");
+        assert_eq!(observation.schema_version(), SchemaVersion::new(1));
+        assert_eq!(
+            observation.observed(),
+            &ServiceObservation {
+                present: true,
+                enabled: true,
+            }
+        );
     }
 
     #[test]
