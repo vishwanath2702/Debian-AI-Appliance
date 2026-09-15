@@ -909,8 +909,6 @@ fn execute_confirmed_installation(
     let appliance_state =
         execute_system_installation(engine, prepared, profile_name, package_repository)?;
 
-    persist_appliance_state(&appliance_state, "/target")?;
-
     println!("Installation complete.");
 
     Ok(appliance_state)
