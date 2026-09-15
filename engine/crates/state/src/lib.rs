@@ -87,6 +87,17 @@ impl ApplianceState {
 
         std::fs::write(path, json)
     }
+
+    /// Writes the persisted appliance state beneath the supplied appliance root.
+    pub fn write_to_root(&self, root: impl AsRef<std::path::Path>) -> Result<(), std::io::Error> {
+        let path = appliance_state_path(root);
+
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+
+        self.write_json(path)
+    }
 }
 
 #[cfg(test)]
@@ -122,6 +133,35 @@ mod tests {
                 "      \"path\": \"/var/lib/daia/content/model.gguf\"\n",
                 "    }\n",
                 "  ]\n",
+                "}"
+            )
+        );
+    }
+
+    #[test]
+    fn writes_appliance_state_beneath_root() {
+        let state = ApplianceState::new("ai-workstation");
+        let root = std::env::temp_dir().join(format!(
+            "daia-appliance-state-root-{}-{}",
+            std::process::id(),
+            std::thread::current().name().unwrap_or("test")
+        ));
+
+        state
+            .write_to_root(&root)
+            .expect("appliance state should be written beneath root");
+
+        let path = super::appliance_state_path(&root);
+        let json = std::fs::read_to_string(&path).expect("appliance state should be readable");
+
+        std::fs::remove_dir_all(&root).expect("temporary appliance root should be removed");
+
+        assert_eq!(
+            json,
+            concat!(
+                "{\n",
+                "  \"profile_name\": \"ai-workstation\",\n",
+                "  \"imported_content\": []\n",
                 "}"
             )
         );
