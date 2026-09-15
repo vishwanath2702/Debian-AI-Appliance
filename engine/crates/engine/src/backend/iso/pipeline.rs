@@ -5,9 +5,9 @@ use std::io;
 use inspector::IsoInspector;
 
 use super::{
-    BootArtifactsStage, GrubConfigStage, GrubRescueStage, InitramfsStage, InspectionStage,
-    IsoContext, KernelStage, MetadataValidationStage, SourceIsoStage, SquashFsStage,
-    ToolValidationStage, WorkspaceStage,
+    BootArtifactsStage, DaiaPayloadStage, GrubConfigStage, GrubRescueStage, InitramfsStage,
+    InspectionStage, IsoContext, KernelStage, MetadataValidationStage, SourceIsoStage,
+    SquashFsStage, ToolValidationStage, WorkspaceStage,
 };
 /// Coordinates the ISO build process.
 pub struct IsoPipeline;
@@ -25,6 +25,7 @@ impl IsoPipeline {
         MetadataValidationStage::run(context)?;
         ToolValidationStage::run(context)?;
         WorkspaceStage::run(context)?;
+        DaiaPayloadStage::run(context)?;
 
         let kernel = KernelStage::run(context)?;
         let initramfs = InitramfsStage::run(context)?;
@@ -142,6 +143,7 @@ exit 1
                 rootfs,
                 source_iso,
                 output_iso,
+                daia_payload_directory: None,
                 mksquashfs_command: mksquashfs,
                 xorriso_command: xorriso,
                 grub_mkrescue_command: PathBuf::from("grub-mkrescue"),

@@ -190,6 +190,16 @@ fn create_build_context(
     .into());
     }
 
+    let daia_payload_directory =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../installer/files");
+    if !daia_payload_directory.is_dir() {
+        return Err(format!(
+            "DAIA installer payload directory not found at {}",
+            daia_payload_directory.display()
+        )
+        .into());
+    }
+
     Ok(BuildContext::new(
         options.rootfs.clone(),
         options.source_iso.clone(),
@@ -198,7 +208,8 @@ fn create_build_context(
         asset_directory(),
         bootstrap,
     )
-    .with_daia_binary(daia_binary))
+    .with_daia_binary(daia_binary)
+    .with_daia_payload_directory(daia_payload_directory))
 }
 
 fn print_plan(plan: &Plan) {

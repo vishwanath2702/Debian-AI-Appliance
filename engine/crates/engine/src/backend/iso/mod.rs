@@ -9,9 +9,9 @@ pub use context::{GrubConfig, IsoConfig, IsoContext, IsoState, SquashFsConfig};
 pub use layout::Layout;
 pub use pipeline::IsoPipeline;
 pub use stage::{
-    BootArtifactsStage, GrubConfigStage, GrubRescueStage, InitramfsStage, InspectionStage,
-    KernelStage, MetadataValidationStage, SourceIsoStage, SquashFsStage, ToolValidationStage,
-    WorkspaceStage,
+    BootArtifactsStage, DaiaPayloadStage, GrubConfigStage, GrubRescueStage, InitramfsStage,
+    InspectionStage, KernelStage, MetadataValidationStage, SourceIsoStage, SquashFsStage,
+    ToolValidationStage, WorkspaceStage,
 };
 use std::path::{Path, PathBuf};
 
@@ -27,6 +27,7 @@ pub struct IsoBackend {
     source_iso: PathBuf,
     work_directory: PathBuf,
     output_path: PathBuf,
+    daia_payload_directory: Option<PathBuf>,
     mksquashfs_command: PathBuf,
     xorriso_command: PathBuf,
     grub_mkrescue_command: PathBuf,
@@ -48,6 +49,7 @@ impl IsoBackend {
             source_iso: source_iso.into(),
             work_directory: work_directory.into(),
             output_path: output_path.into(),
+            daia_payload_directory: None,
             mksquashfs_command: PathBuf::from("mksquashfs"),
             xorriso_command: PathBuf::from("xorriso"),
             grub_mkrescue_command: PathBuf::from("grub-mkrescue"),
@@ -68,12 +70,16 @@ kernel_command_line:
     /// Creates an ISO backend from a shared build context.
     #[must_use]
     pub fn from_context(context: &BuildContext) -> Self {
-        Self::new(
+        let mut backend = Self::new(
             context.rootfs(),
             context.source_iso(),
             context.work_directory(),
             context.output_iso(),
-        )
+        );
+
+        backend.daia_payload_directory = context.daia_payload_directory().map(Path::to_path_buf);
+
+        backend
     }
     /// Returns the prepared root filesystem path.
     #[must_use]
@@ -91,6 +97,12 @@ kernel_command_line:
     #[must_use]
     pub fn work_directory(&self) -> &Path {
         &self.work_directory
+    }
+
+    /// Returns the DAIA installer payload directory to include in the ISO.
+    #[must_use]
+    pub fn daia_payload_directory(&self) -> Option<&Path> {
+        self.daia_payload_directory.as_deref()
     }
 
     /// Returns the final ISO output path.
@@ -148,6 +160,7 @@ impl BuildBackend for IsoBackend {
                 rootfs: self.rootfs.clone(),
                 source_iso: self.source_iso.clone(),
                 output_iso: self.output_path.clone(),
+                daia_payload_directory: self.daia_payload_directory.clone(),
                 mksquashfs_command: self.mksquashfs_command.clone(),
                 xorriso_command: self.xorriso_command.clone(),
                 grub_mkrescue_command: self.grub_mkrescue_command.clone(),
@@ -297,13 +310,18 @@ mod tests {
             "build/output.iso",
             "registry/assets",
             bootstrap,
-        );
+        )
+        .with_daia_payload_directory("installer/files");
         let backend = IsoBackend::from_context(&context);
 
         assert_eq!(backend.rootfs(), context.rootfs());
         assert_eq!(backend.source_iso(), context.source_iso());
         assert_eq!(backend.work_directory(), context.work_directory());
         assert_eq!(backend.output_path(), context.output_iso());
+        assert_eq!(
+            backend.daia_payload_directory(),
+            context.daia_payload_directory()
+        );
     }
     #[test]
     fn build_creates_bootable_iso_workspace_and_output_image() {
@@ -335,6 +353,43 @@ mod tests {
 ));
         assert!(grub_contents.contains("initrd /live/initrd.img"));
     }
+    #[test]
+    fn build_publishes_daia_payload_into_iso_workspace() {
+        let (temp, backend) = create_test_backend();
+
+        let payload = temp.path().join("payload");
+        let runtime = payload.join("opt/daia");
+
+        fs::create_dir_all(&runtime).expect("payload directory should be created");
+        fs::write(runtime.join("install.sh"), b"installer")
+            .expect("payload file should be written");
+
+        let context = BuildContext::new(
+            backend.rootfs(),
+            backend.source_iso(),
+            backend.work_directory(),
+            backend.output_path(),
+            temp.path().join("assets"),
+            BootstrapConfig::default(),
+        )
+        .with_daia_payload_directory(&payload);
+
+        let mut backend = IsoBackend::from_context(&context)
+            .with_mksquashfs_command(temp.path().join("mksquashfs"))
+            .with_xorriso_command(temp.path().join("xorriso"))
+            .with_iso_inspector(TestIsoInspector);
+
+        backend
+            .build(&test_plan())
+            .expect("ISO build should publish DAIA payload");
+
+        assert_eq!(
+            fs::read(backend.layout().daia_payload().join("opt/daia/install.sh"))
+                .expect("published DAIA payload should be readable"),
+            b"installer"
+        );
+    }
+
     #[test]
     fn build_uses_custom_squashfs_configuration() {
         let (temp, backend) = create_test_backend();

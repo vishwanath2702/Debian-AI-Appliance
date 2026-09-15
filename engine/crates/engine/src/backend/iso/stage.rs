@@ -155,6 +155,42 @@ impl WorkspaceStage {
     }
 }
 
+/// Publishes the DAIA installer payload into the ISO workspace.
+pub struct DaiaPayloadStage;
+
+impl DaiaPayloadStage {
+    /// Copies the configured DAIA installer payload into the ISO `/daia` directory.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the payload directory cannot be read or copied.
+    pub fn run(context: &IsoContext) -> io::Result<()> {
+        let Some(source) = context.config.daia_payload_directory.as_deref() else {
+            return Ok(());
+        };
+
+        copy_directory_contents(source, &context.config.layout.daia_payload())
+    }
+}
+
+fn copy_directory_contents(source: &Path, destination: &Path) -> io::Result<()> {
+    fs::create_dir_all(destination)?;
+
+    for entry in fs::read_dir(source)? {
+        let entry = entry?;
+        let source_path = entry.path();
+        let destination_path = destination.join(entry.file_name());
+
+        if source_path.is_dir() {
+            copy_directory_contents(&source_path, &destination_path)?;
+        } else {
+            fs::copy(&source_path, &destination_path)?;
+        }
+    }
+
+    Ok(())
+}
+
 /// Discovers the Linux kernel in the prepared root filesystem.
 pub struct KernelStage;
 
@@ -367,9 +403,9 @@ mod tests {
     };
 
     use super::{
-        BootArtifactsStage, GrubConfigStage, GrubRescueStage, InitramfsStage, InspectionStage,
-        KernelStage, MetadataValidationStage, SourceIsoStage, SquashFsStage, ToolValidationStage,
-        WorkspaceStage, find_initramfs, find_kernel, validate_tool,
+        BootArtifactsStage, DaiaPayloadStage, GrubConfigStage, GrubRescueStage, InitramfsStage,
+        InspectionStage, KernelStage, MetadataValidationStage, SourceIsoStage, SquashFsStage,
+        ToolValidationStage, WorkspaceStage, find_initramfs, find_kernel, validate_tool,
     };
     use crate::backend::iso::{
         GrubConfig, IsoConfig, IsoContext, IsoState, Layout, SquashFsConfig,
@@ -439,6 +475,7 @@ mod tests {
                 rootfs: PathBuf::from("build/rootfs"),
                 source_iso: source_iso.to_path_buf(),
                 output_iso: PathBuf::from("build/output.iso"),
+                daia_payload_directory: None,
                 mksquashfs_command: PathBuf::from("mksquashfs"),
                 xorriso_command: PathBuf::from("xorriso"),
 
@@ -477,6 +514,40 @@ mod tests {
         assert!(directory.path().join("live").exists());
         assert!(directory.path().join("boot").exists());
     }
+    #[test]
+    fn copies_daia_payload_into_iso_workspace() {
+        let directory = TestDirectory::create();
+        let source = directory.path().join("payload");
+        let nested = source.join("opt/daia");
+
+        fs::create_dir_all(&nested).expect("payload directory should be created");
+        fs::write(nested.join("install.sh"), b"installer").expect("payload file should be written");
+
+        let context = IsoContext {
+            config: IsoConfig {
+                daia_payload_directory: Some(source),
+                layout: Layout::new(directory.path().join("iso")),
+                ..iso_context(Path::new("debian.iso"), None).config
+            },
+            state: IsoState::default(),
+        };
+
+        WorkspaceStage::run(&context).expect("workspace should be created");
+        DaiaPayloadStage::run(&context).expect("DAIA payload should be copied");
+
+        assert_eq!(
+            fs::read(
+                context
+                    .config
+                    .layout
+                    .daia_payload()
+                    .join("opt/daia/install.sh")
+            )
+            .expect("published payload should be readable"),
+            b"installer"
+        );
+    }
+
     #[test]
     fn finds_single_kernel() {
         let boot_directory = TestDirectory::create();

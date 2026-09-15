@@ -53,6 +53,11 @@ impl Layout {
     pub fn staging(&self) -> PathBuf {
         self.root.join("staging")
     }
+
+    #[must_use]
+    pub fn daia_payload(&self) -> PathBuf {
+        self.root.join("daia")
+    }
     #[must_use]
     pub fn filesystem_squashfs(&self) -> PathBuf {
         self.live().join("filesystem.squashfs")
@@ -92,6 +97,10 @@ mod tests {
         assert_eq!(
             layout.staging(),
             std::path::Path::new("/tmp/work/iso/staging")
+        );
+        assert_eq!(
+            layout.daia_payload(),
+            std::path::Path::new("/tmp/work/iso/daia")
         );
         assert_eq!(
             layout.filesystem_squashfs(),

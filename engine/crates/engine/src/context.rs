@@ -14,6 +14,7 @@ pub struct BuildContext {
     asset_directory: PathBuf,
     bootstrap: BootstrapConfig,
     daia_binary: Option<PathBuf>,
+    daia_payload_directory: Option<PathBuf>,
 }
 
 impl BuildContext {
@@ -35,6 +36,7 @@ impl BuildContext {
             asset_directory: asset_directory.into(),
             bootstrap,
             daia_binary: None,
+            daia_payload_directory: None,
         }
     }
 
@@ -85,6 +87,22 @@ impl BuildContext {
     pub fn daia_binary(&self) -> Option<&Path> {
         self.daia_binary.as_deref()
     }
+
+    /// Sets the DAIA installer payload directory to include in the ISO.
+    #[must_use]
+    pub fn with_daia_payload_directory(
+        mut self,
+        daia_payload_directory: impl Into<PathBuf>,
+    ) -> Self {
+        self.daia_payload_directory = Some(daia_payload_directory.into());
+        self
+    }
+
+    /// Returns the DAIA installer payload directory to include in the ISO.
+    #[must_use]
+    pub fn daia_payload_directory(&self) -> Option<&Path> {
+        self.daia_payload_directory.as_deref()
+    }
 }
 
 #[cfg(test)]
@@ -93,6 +111,24 @@ mod tests {
 
     use super::BuildContext;
     use crate::BootstrapConfig;
+
+    #[test]
+    fn stores_daia_payload_directory() {
+        let context = BuildContext::new(
+            "build/rootfs",
+            "images/source.iso",
+            "build/work",
+            "build/output.iso",
+            "registry/assets",
+            BootstrapConfig::default(),
+        )
+        .with_daia_payload_directory("installer/files");
+
+        assert_eq!(
+            context.daia_payload_directory(),
+            Some(Path::new("installer/files"))
+        );
+    }
 
     #[test]
     fn stores_daia_binary_path() {

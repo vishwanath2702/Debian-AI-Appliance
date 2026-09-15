@@ -24,6 +24,7 @@ pub struct IsoConfig {
     pub rootfs: PathBuf,
     pub source_iso: PathBuf,
     pub output_iso: PathBuf,
+    pub daia_payload_directory: Option<PathBuf>,
     pub mksquashfs_command: PathBuf,
     pub xorriso_command: PathBuf,
     pub grub_mkrescue_command: PathBuf,
