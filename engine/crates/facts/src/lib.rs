@@ -86,6 +86,16 @@ fn read_linux_meminfo(path: &std::path::Path) -> std::io::Result<MemoryFacts> {
     })
 }
 
+/// Discovers CPU facts for the current Linux system.
+///
+/// # Errors
+///
+/// Returns an error when `/proc/cpuinfo` cannot be read or does not contain
+/// any processor entries.
+pub fn discover_cpu() -> std::io::Result<CpuFacts> {
+    read_linux_cpuinfo(std::path::Path::new("/proc/cpuinfo"))
+}
+
 /// Discovers memory facts for the current Linux system.
 ///
 /// # Errors
@@ -99,8 +109,8 @@ pub fn discover_memory() -> std::io::Result<MemoryFacts> {
 #[cfg(test)]
 mod tests {
     use super::{
-        CpuFacts, MemoryFacts, discover_memory, parse_linux_cpuinfo, parse_linux_meminfo,
-        read_linux_cpuinfo, read_linux_meminfo,
+        CpuFacts, MemoryFacts, discover_cpu, discover_memory, parse_linux_cpuinfo,
+        parse_linux_meminfo, read_linux_cpuinfo, read_linux_meminfo,
     };
     use std::fs;
 
@@ -163,6 +173,13 @@ mod tests {
         fs::remove_file(&path).expect("remove meminfo");
 
         assert_eq!(facts.total_bytes(), 8_388_608);
+    }
+
+    #[test]
+    fn discovers_current_system_cpu() {
+        let facts = discover_cpu().expect("discover CPU facts");
+
+        assert!(facts.logical_processor_count() > 0);
     }
 
     #[test]
