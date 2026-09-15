@@ -426,8 +426,12 @@ where
         self.target_root = target_root;
         self
     }
+}
 
-    fn imported_content(&self) -> &[model::ImportedContentItem] {
+impl<R, B, P, W> SystemInstallationOperationExecutor<R, B, P, W> {
+    /// Returns content realized during successful installation operations.
+    #[must_use]
+    pub fn imported_content(&self) -> &[model::ImportedContentItem] {
         &self.imported_content
     }
 }
