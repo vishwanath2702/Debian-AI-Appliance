@@ -53,6 +53,30 @@ impl fmt::Display for ObservationSourceId {
     }
 }
 
+/// Timestamp associated with a DAIA observation.
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub struct ObservationTimestamp(String);
+
+impl ObservationTimestamp {
+    /// Creates an observation timestamp from its textual representation.
+    #[must_use]
+    pub fn new(value: impl Into<String>) -> Self {
+        Self(value.into())
+    }
+
+    /// Returns the observation timestamp as a string slice.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl fmt::Display for ObservationTimestamp {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.as_str())
+    }
+}
+
 /// Version of a DAIA schema.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub struct SchemaVersion(u32);
@@ -900,8 +924,8 @@ mod tests {
         ContentImportDestination, ContentImportIntent, ContentRepository, ContentRepositoryId,
         ContentSource, ContentSourceId, DiscoveredContent, DiscoveredStorage, DiscoveredStorageId,
         ExternalContentItem, ExternalContentItemId, ImportedContentItem, InstallationIntent,
-        ObservationSourceId, PackageManifest, PlanStep, ProviderId, ResourceId, SchemaVersion,
-        StorageKind, StorageTarget, StorageTargetId,
+        ObservationSourceId, ObservationTimestamp, PackageManifest, PlanStep, ProviderId,
+        ResourceId, SchemaVersion, StorageKind, StorageTarget, StorageTargetId,
     };
     use std::path::{Path, PathBuf};
 
@@ -1136,6 +1160,14 @@ mod tests {
 
         assert_eq!(repository_id.as_str(), "documents");
         assert_eq!(repository_id.to_string(), "documents");
+    }
+
+    #[test]
+    fn observation_timestamp_exposes_its_representation() {
+        let timestamp = ObservationTimestamp::new("2026-07-23T09:00:00Z");
+
+        assert_eq!(timestamp.as_str(), "2026-07-23T09:00:00Z");
+        assert_eq!(timestamp.to_string(), "2026-07-23T09:00:00Z");
     }
 
     #[test]
