@@ -1,8 +1,8 @@
 //! Wizard state for interactive DAIA appliance configuration.
 use model::{
     ApplianceConfiguration, ContentImportIntent, ContentRepository, ContentRepositoryId,
-    DiscoveredContent, DiscoveredStorage, DiscoveredStorageId, ExternalContentItem,
-    ExternalContentItemId, InstallationIntent, StorageKind,
+    DiscoveredStorage, DiscoveredStorageId, ExternalContentItem, ExternalContentItemId,
+    InstallationIntent, StorageKind,
 };
 use registry::{ApplianceProfileRepository, ContentRepositoryRepository};
 /// State accumulated while configuring an appliance through the wizard.
@@ -11,7 +11,6 @@ pub struct WizardState {
     profile_name: Option<String>,
     content_repositories: Vec<ContentRepository>,
     selected_content_repository: Option<ContentRepositoryId>,
-    discovered_content: Vec<DiscoveredContent>,
     external_content_items: Vec<ExternalContentItem>,
     selected_external_content: Vec<ExternalContentItemId>,
     discovered_storage: Vec<DiscoveredStorage>,
@@ -25,7 +24,6 @@ impl WizardState {
             profile_name: None,
             content_repositories: Vec::new(),
             selected_content_repository: None,
-            discovered_content: Vec::new(),
             external_content_items: Vec::new(),
             selected_external_content: Vec::new(),
             discovered_storage: Vec::new(),
@@ -55,7 +53,6 @@ impl WizardState {
                 .find(|repository| repository.id() == selected);
 
             if previous_repository != replacement_repository {
-                self.discovered_content.clear();
                 self.external_content_items.clear();
                 self.selected_external_content.clear();
             }
@@ -81,7 +78,6 @@ impl WizardState {
             .any(|repository| repository.id() == &repository_id)
         {
             if self.selected_content_repository.as_ref() != Some(&repository_id) {
-                self.discovered_content.clear();
                 self.external_content_items.clear();
                 self.selected_external_content.clear();
             }
@@ -94,21 +90,6 @@ impl WizardState {
     #[must_use]
     pub fn selected_content_repository(&self) -> Option<&ContentRepositoryId> {
         self.selected_content_repository.as_ref()
-    }
-    /// Replaces the external content discovered for the current wizard session.
-    pub fn set_discovered_content(&mut self, content: Vec<DiscoveredContent>) {
-        if self.discovered_content != content {
-            self.external_content_items.clear();
-            self.selected_external_content.clear();
-        }
-
-        self.discovered_content = content;
-    }
-
-    /// Returns external content discovered for the current wizard session.
-    #[must_use]
-    pub fn discovered_content(&self) -> &[DiscoveredContent] {
-        &self.discovered_content
     }
     /// Replaces the importable external content items for the current wizard session.
     pub fn set_external_content_items(&mut self, items: Vec<ExternalContentItem>) {
@@ -264,8 +245,8 @@ mod tests {
     use super::WizardState;
     use model::{
         ApplianceProfile, Capability, ContentRepository, ContentRepositoryId, ContentSourceId,
-        DiscoveredContent, DiscoveredStorage, DiscoveredStorageId, ExternalContentItem,
-        ExternalContentItemId, StorageKind,
+        DiscoveredStorage, DiscoveredStorageId, ExternalContentItem, ExternalContentItemId,
+        StorageKind,
     };
     use registry::{ApplianceProfileRepository, ContentRepositoryRepository};
 
@@ -479,55 +460,6 @@ mod tests {
         );
     }
     #[test]
-    fn replacing_discovered_content_clears_derived_external_content() {
-        let mut state = WizardState::new();
-
-        state.set_discovered_content(vec![DiscoveredContent::new(
-            ContentSourceId::new("local-models-directory"),
-            "/media/daia/models",
-        )]);
-
-        state.set_external_content_items(vec![ExternalContentItem::new(
-            ContentSourceId::new("local-models-directory"),
-            "/media/daia/models/model.gguf",
-        )]);
-
-        state.select_external_content(vec![ExternalContentItemId::new(
-            "local-models-directory:/media/daia/models/model.gguf",
-        )]);
-
-        state.set_discovered_content(vec![DiscoveredContent::new(
-            ContentSourceId::new("offline-docs-directory"),
-            "/media/daia/docs",
-        )]);
-
-        assert!(state.external_content_items().is_empty());
-        assert!(state.selected_external_content().is_empty());
-    }
-
-    #[test]
-    fn wizard_state_stores_discovered_content() {
-        let mut state = WizardState::new();
-
-        state.set_discovered_content(vec![DiscoveredContent::new(
-            ContentSourceId::new("local-models-directory"),
-            "/media/daia/models",
-        )]);
-
-        let discovered = state.discovered_content();
-
-        assert_eq!(discovered.len(), 1);
-        assert_eq!(
-            discovered[0].source_id(),
-            &ContentSourceId::new("local-models-directory")
-        );
-        assert_eq!(
-            discovered[0].path(),
-            std::path::Path::new("/media/daia/models")
-        );
-    }
-
-    #[test]
     fn wizard_state_stores_content_repositories() {
         let mut state = WizardState::new();
 
@@ -560,11 +492,6 @@ mod tests {
         )]);
         state.select_content_repository(repository_id.clone());
 
-        state.set_discovered_content(vec![DiscoveredContent::new(
-            ContentSourceId::new("local-models-directory"),
-            "/media/models",
-        )]);
-
         state.set_external_content_items(vec![ExternalContentItem::new(
             ContentSourceId::new("local-models-directory"),
             "/media/models/model.gguf",
@@ -591,7 +518,6 @@ mod tests {
                 .as_str(),
             "local-models"
         );
-        assert!(state.discovered_content().is_empty());
         assert!(state.external_content_items().is_empty());
         assert!(state.selected_external_content().is_empty());
     }
@@ -605,11 +531,6 @@ mod tests {
             "Models available on local storage",
         )]);
         state.select_content_repository(ContentRepositoryId::new("local-models"));
-
-        state.set_discovered_content(vec![DiscoveredContent::new(
-            ContentSourceId::new("local-models-directory"),
-            "/media/daia/models",
-        )]);
 
         state.set_external_content_items(vec![ExternalContentItem::new(
             ContentSourceId::new("local-models-directory"),
@@ -626,7 +547,6 @@ mod tests {
         )]);
 
         assert_eq!(state.selected_content_repository(), None);
-        assert!(state.discovered_content().is_empty());
         assert!(state.external_content_items().is_empty());
         assert!(state.selected_external_content().is_empty());
     }
@@ -673,11 +593,6 @@ mod tests {
         ]);
         state.select_content_repository(ContentRepositoryId::new("local-models"));
 
-        state.set_discovered_content(vec![DiscoveredContent::new(
-            ContentSourceId::new("local-models-directory"),
-            "/media/daia/models",
-        )]);
-
         state.set_external_content_items(vec![ExternalContentItem::new(
             ContentSourceId::new("local-models-directory"),
             "/media/daia/models/model.gguf",
@@ -689,7 +604,6 @@ mod tests {
 
         state.select_content_repository(ContentRepositoryId::new("offline-docs"));
 
-        assert!(state.discovered_content().is_empty());
         assert!(state.external_content_items().is_empty());
         assert!(state.selected_external_content().is_empty());
     }
