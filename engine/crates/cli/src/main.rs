@@ -860,49 +860,32 @@ fn load_package_repository() -> Result<PackageRepository, String> {
         .map_err(|error| format!("Error loading package repository: {error}"))
 }
 
-fn appliance_state_from_execution(
-    profile_name: &str,
-    imported_content: &[model::ImportedContentItem],
-) -> state::ApplianceState {
-    let mut appliance_state = state::ApplianceState::new(profile_name);
-    appliance_state.record_imported_contents(imported_content.iter().cloned());
-    appliance_state
-}
-
 fn execute_system_installation(
     engine: &Engine,
     prepared: &engine::PreparedApplianceInstallation,
-    profile_name: &str,
     package_repository: PackageRepository,
-) -> Result<state::ApplianceState, String> {
+) -> Result<(), String> {
     let mut executor =
         SystemInstallationOperationExecutor::new(asset_directory(), package_repository);
 
     engine
         .execute_appliance_installation(prepared, &mut executor)
-        .map_err(|error| format!("Installation failed: {error}"))?;
-
-    Ok(appliance_state_from_execution(
-        profile_name,
-        executor.imported_content(),
-    ))
+        .map_err(|error| format!("Installation failed: {error}"))
 }
 
 fn execute_confirmed_installation(
     engine: &Engine,
     prepared: &engine::PreparedApplianceInstallation,
-    profile_name: &str,
     package_repository: PackageRepository,
-) -> Result<state::ApplianceState, String> {
+) -> Result<(), String> {
     println!();
     println!("Starting installation...");
 
-    let appliance_state =
-        execute_system_installation(engine, prepared, profile_name, package_repository)?;
+    execute_system_installation(engine, prepared, package_repository)?;
 
     println!("Installation complete.");
 
-    Ok(appliance_state)
+    Ok(())
 }
 
 fn run_install() -> ExitCode {
@@ -968,12 +951,7 @@ fn run_install() -> ExitCode {
     println!("  {selected_storage}");
 
     match confirm_wizard_state("Erase this disk and start installation? [y/N]: ") {
-        Ok(true) => match execute_confirmed_installation(
-            &engine,
-            &prepared,
-            appliance_configuration.profile_name(),
-            package_repository,
-        ) {
+        Ok(true) => match execute_confirmed_installation(&engine, &prepared, package_repository) {
             Ok(_) => ExitCode::SUCCESS,
             Err(error) => {
                 eprintln!("{error}");
@@ -1057,20 +1035,6 @@ mod tests {
     use super::{BuildOptions, run};
     use std::path::PathBuf;
     use std::process::ExitCode;
-    #[test]
-    fn builds_appliance_state_from_execution_outcomes() {
-        let imported_item = model::ImportedContentItem::new(
-            model::ExternalContentItemId::new("model"),
-            "/var/lib/daia/content/model.gguf",
-        );
-
-        let appliance_state =
-            super::appliance_state_from_execution("ai-workstation", &[imported_item.clone()]);
-
-        assert_eq!(appliance_state.profile_name(), "ai-workstation");
-        assert_eq!(appliance_state.imported_content(), &[imported_item]);
-    }
-
     #[test]
     fn discovers_wizard_hardware() {
         let engine = engine::Engine::from_registry(registry::Registry::new());
