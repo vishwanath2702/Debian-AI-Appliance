@@ -5,6 +5,39 @@ use std::{
     path::{Path, PathBuf},
 };
 
+/// State coordinates against which a DAIA decision is evaluated.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub struct StateBasis {
+    desired_generation: DesiredGeneration,
+    current_revision: CurrentRevision,
+}
+
+impl StateBasis {
+    /// Creates a State Basis from Desired and Current State coordinates.
+    #[must_use]
+    pub const fn new(
+        desired_generation: DesiredGeneration,
+        current_revision: CurrentRevision,
+    ) -> Self {
+        Self {
+            desired_generation,
+            current_revision,
+        }
+    }
+
+    /// Returns the Desired State generation in this basis.
+    #[must_use]
+    pub const fn desired_generation(&self) -> DesiredGeneration {
+        self.desired_generation
+    }
+
+    /// Returns the Current State revision in this basis.
+    #[must_use]
+    pub const fn current_revision(&self) -> CurrentRevision {
+        self.current_revision
+    }
+}
+
 /// Revision of accepted DAIA Current State.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct CurrentRevision(u64);
@@ -1057,9 +1090,17 @@ mod tests {
         DiscoveredStorage, DiscoveredStorageId, ExternalContentItem, ExternalContentItemId,
         ImportedContentItem, InstallationIntent, Observation, ObservationSourceId,
         ObservationTimestamp, PackageManifest, PlanStep, ProviderId, ResourceId, SchemaVersion,
-        StorageKind, StorageTarget, StorageTargetId, VerificationPurpose,
+        StateBasis, StorageKind, StorageTarget, StorageTargetId, VerificationPurpose,
     };
     use std::path::{Path, PathBuf};
+
+    #[test]
+    fn state_basis_preserves_state_coordinates() {
+        let basis = StateBasis::new(DesiredGeneration::new(12), CurrentRevision::new(41));
+
+        assert_eq!(basis.desired_generation(), DesiredGeneration::new(12));
+        assert_eq!(basis.current_revision(), CurrentRevision::new(41));
+    }
 
     #[test]
     fn current_revision_exposes_and_orders_revision() {
