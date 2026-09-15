@@ -1,5 +1,13 @@
 //! Desired, current, and persisted system state.
 
+const APPLIANCE_STATE_PATH: &str = "var/lib/daia/state.json";
+
+/// Returns the persisted appliance state path beneath an appliance root.
+#[must_use]
+pub fn appliance_state_path(root: impl AsRef<std::path::Path>) -> std::path::PathBuf {
+    root.as_ref().join(APPLIANCE_STATE_PATH)
+}
+
 #[derive(serde::Serialize)]
 struct PersistedImportedContentItem<'a> {
     source_item_id: &'a str,
@@ -84,6 +92,14 @@ impl ApplianceState {
 #[cfg(test)]
 mod tests {
     use super::ApplianceState;
+
+    #[test]
+    fn appliance_state_path_is_beneath_appliance_root() {
+        assert_eq!(
+            super::appliance_state_path("/target"),
+            std::path::PathBuf::from("/target/var/lib/daia/state.json")
+        );
+    }
 
     #[test]
     fn serializes_appliance_state_as_json() {
