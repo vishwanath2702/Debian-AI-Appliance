@@ -313,6 +313,12 @@ pub enum InstallationOperation {
         content: crate::PreparedContentImport,
     },
 
+    /// Deploys the DAIA runtime into the installed system.
+    DeployRuntime { root: PathBuf },
+
+    /// Enables DAIA first-boot initialization in the installed system.
+    EnableFirstBoot { root: PathBuf },
+
     /// Prepares runtime filesystems required by commands executed inside the target root.
     PrepareTargetRuntime { root: PathBuf },
     /// Install the bootloader into the installed system.
@@ -345,6 +351,27 @@ pub trait InstallationOperationExecutor {
     /// Returns an executor-specific error if the operation fails.
     fn execute_operation(&mut self, operation: &InstallationOperation) -> Result<(), Self::Error>;
 }
+fn copy_directory_contents(
+    source: &std::path::Path,
+    destination: &std::path::Path,
+) -> io::Result<()> {
+    std::fs::create_dir_all(destination)?;
+
+    for entry in std::fs::read_dir(source)? {
+        let entry = entry?;
+        let source_path = entry.path();
+        let destination_path = destination.join(entry.file_name());
+
+        if source_path.is_dir() {
+            copy_directory_contents(&source_path, &destination_path)?;
+        } else if source_path.is_file() {
+            std::fs::copy(&source_path, &destination_path)?;
+        }
+    }
+
+    Ok(())
+}
+
 /// Executes installation operations against the host system.
 pub trait InstallationCommandRunner {
     fn status(&mut self, command: &mut Command) -> io::Result<()>;
@@ -402,6 +429,7 @@ pub struct SystemInstallationOperationExecutor<R, B, P, W = SystemInstallationFi
     plan_executor: P,
     file_writer: W,
     target_root: PathBuf,
+    runtime_payload_directory: PathBuf,
     imported_content: Vec<model::ImportedContentItem>,
 }
 
@@ -419,11 +447,17 @@ where
             plan_executor,
             file_writer: SystemInstallationFileWriter,
             target_root: PathBuf::from("/target"),
+            runtime_payload_directory: PathBuf::from("/cdrom/daia"),
             imported_content: Vec::new(),
         }
     }
     fn with_target_root(mut self, target_root: PathBuf) -> Self {
         self.target_root = target_root;
+        self
+    }
+
+    fn with_runtime_payload_directory(mut self, runtime_payload_directory: PathBuf) -> Self {
+        self.runtime_payload_directory = runtime_payload_directory;
         self
     }
 }
@@ -451,6 +485,7 @@ where
             plan_executor,
             file_writer,
             target_root: PathBuf::from("/target"),
+            runtime_payload_directory: PathBuf::from("/cdrom/daia"),
             imported_content: Vec::new(),
         }
     }
@@ -477,6 +512,7 @@ impl
             ),
             file_writer: SystemInstallationFileWriter,
             target_root: PathBuf::from("/target"),
+            runtime_payload_directory: PathBuf::from("/cdrom/daia"),
             imported_content: Vec::new(),
         }
     }
@@ -705,6 +741,28 @@ where
 
                 let imported_content = content.execute(&mut executor)?;
                 self.imported_content.extend(imported_content);
+
+                Ok(())
+            }
+            InstallationOperation::DeployRuntime { root } => {
+                copy_directory_contents(&self.runtime_payload_directory, root)
+            }
+            InstallationOperation::EnableFirstBoot { root } => {
+                let wants_directory = root.join("etc/systemd/system/multi-user.target.wants");
+                let service_link = wants_directory.join("daia-firstboot.service");
+
+                std::fs::create_dir_all(&wants_directory)?;
+
+                match std::fs::symlink_metadata(&service_link) {
+                    Ok(_) => std::fs::remove_file(&service_link)?,
+                    Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+                    Err(error) => return Err(error),
+                }
+
+                std::os::unix::fs::symlink(
+                    "/etc/systemd/system/daia-firstboot.service",
+                    service_link,
+                )?;
 
                 Ok(())
             }
@@ -972,6 +1030,12 @@ impl PreparedInstallation {
                 device_path: self.storage.device_path().to_path_buf(),
                 partitions: default_installation_partitions(),
                 mounts: default_installation_mounts(),
+            },
+            InstallationOperation::DeployRuntime {
+                root: "/target".into(),
+            },
+            InstallationOperation::EnableFirstBoot {
+                root: "/target".into(),
             },
             InstallationOperation::PrepareTargetRuntime {
                 root: "/target".into(),
@@ -1421,6 +1485,217 @@ mod tests {
                 vec!["umount".to_owned(), "/target/boot/efi".to_owned()],
                 vec!["umount".to_owned(), "/target".to_owned()],
             ]
+        );
+    }
+
+    #[test]
+    fn system_executor_deploys_runtime_file_under_target_root() {
+        let temporary_directory =
+            tempfile::tempdir().expect("temporary directory should be created");
+
+        let runtime_payload_directory = temporary_directory.path().join("payload");
+        std::fs::create_dir_all(&runtime_payload_directory)
+            .expect("runtime payload directory should be created");
+
+        std::fs::write(
+            runtime_payload_directory.join("runtime.txt"),
+            b"runtime data",
+        )
+        .expect("runtime payload file should be written");
+
+        let target_root = temporary_directory.path().join("target");
+        std::fs::create_dir_all(&target_root).expect("target root should be created");
+
+        let mut executor = SystemInstallationOperationExecutor::with_dependencies(
+            RecordingCommandRunner::default(),
+            RecordingInstallationBootstrapper::default(),
+            RecordingInstallationPlanExecutor::default(),
+        )
+        .with_runtime_payload_directory(runtime_payload_directory);
+
+        executor
+            .execute_operation(&InstallationOperation::DeployRuntime {
+                root: target_root.clone(),
+            })
+            .expect("runtime deployment should succeed");
+
+        assert_eq!(
+            std::fs::read(target_root.join("runtime.txt"))
+                .expect("deployed runtime file should exist"),
+            b"runtime data"
+        );
+    }
+
+    #[test]
+    fn system_executor_deploys_runtime_directories_under_target_root() {
+        let temporary_directory =
+            tempfile::tempdir().expect("temporary directory should be created");
+
+        let runtime_payload_directory = temporary_directory.path().join("payload");
+        let nested_runtime_directory = runtime_payload_directory.join("opt/daia");
+
+        std::fs::create_dir_all(&nested_runtime_directory)
+            .expect("nested runtime payload directory should be created");
+
+        std::fs::write(
+            nested_runtime_directory.join("runtime.txt"),
+            b"nested runtime data",
+        )
+        .expect("nested runtime payload file should be written");
+
+        let target_root = temporary_directory.path().join("target");
+
+        let mut executor = SystemInstallationOperationExecutor::with_dependencies(
+            RecordingCommandRunner::default(),
+            RecordingInstallationBootstrapper::default(),
+            RecordingInstallationPlanExecutor::default(),
+        )
+        .with_runtime_payload_directory(runtime_payload_directory);
+
+        executor
+            .execute_operation(&InstallationOperation::DeployRuntime {
+                root: target_root.clone(),
+            })
+            .expect("runtime deployment should succeed");
+
+        assert_eq!(
+            std::fs::read(target_root.join("opt/daia/runtime.txt"))
+                .expect("nested deployed runtime file should exist"),
+            b"nested runtime data"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn system_executor_preserves_runtime_file_permissions() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let temporary_directory =
+            tempfile::tempdir().expect("temporary directory should be created");
+
+        let runtime_payload_directory = temporary_directory.path().join("payload");
+        let runtime_script = runtime_payload_directory.join("opt/daia/bootstrap.sh");
+
+        std::fs::create_dir_all(
+            runtime_script
+                .parent()
+                .expect("runtime script should have a parent directory"),
+        )
+        .expect("runtime payload directory should be created");
+
+        std::fs::write(&runtime_script, b"#!/bin/sh\n").expect("runtime script should be written");
+
+        std::fs::set_permissions(&runtime_script, std::fs::Permissions::from_mode(0o755))
+            .expect("runtime script permissions should be set");
+
+        let target_root = temporary_directory.path().join("target");
+
+        let mut executor = SystemInstallationOperationExecutor::with_dependencies(
+            RecordingCommandRunner::default(),
+            RecordingInstallationBootstrapper::default(),
+            RecordingInstallationPlanExecutor::default(),
+        )
+        .with_runtime_payload_directory(runtime_payload_directory);
+
+        executor
+            .execute_operation(&InstallationOperation::DeployRuntime {
+                root: target_root.clone(),
+            })
+            .expect("runtime deployment should succeed");
+
+        let deployed_mode = std::fs::metadata(target_root.join("opt/daia/bootstrap.sh"))
+            .expect("deployed runtime script should exist")
+            .permissions()
+            .mode()
+            & 0o777;
+
+        assert_eq!(deployed_mode, 0o755);
+    }
+
+    #[test]
+    fn system_executor_rejects_missing_runtime_payload_directory() {
+        let temporary_directory =
+            tempfile::tempdir().expect("temporary directory should be created");
+
+        let runtime_payload_directory = temporary_directory.path().join("missing-payload");
+        let target_root = temporary_directory.path().join("target");
+
+        let mut executor = SystemInstallationOperationExecutor::with_dependencies(
+            RecordingCommandRunner::default(),
+            RecordingInstallationBootstrapper::default(),
+            RecordingInstallationPlanExecutor::default(),
+        )
+        .with_runtime_payload_directory(runtime_payload_directory);
+
+        let error = executor
+            .execute_operation(&InstallationOperation::DeployRuntime { root: target_root })
+            .expect_err("missing runtime payload should fail deployment");
+
+        assert_eq!(error.kind(), io::ErrorKind::NotFound);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn system_executor_enables_first_boot_service() {
+        let temporary_directory =
+            tempfile::tempdir().expect("temporary directory should be created");
+
+        let target_root = temporary_directory.path().join("target");
+
+        let mut executor = SystemInstallationOperationExecutor::with_dependencies(
+            RecordingCommandRunner::default(),
+            RecordingInstallationBootstrapper::default(),
+            RecordingInstallationPlanExecutor::default(),
+        );
+
+        executor
+            .execute_operation(&InstallationOperation::EnableFirstBoot {
+                root: target_root.clone(),
+            })
+            .expect("first-boot activation should succeed");
+
+        let service_link =
+            target_root.join("etc/systemd/system/multi-user.target.wants/daia-firstboot.service");
+
+        assert_eq!(
+            std::fs::read_link(service_link).expect("first-boot service symlink should exist"),
+            std::path::PathBuf::from("/etc/systemd/system/daia-firstboot.service")
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn system_executor_can_enable_first_boot_service_twice() {
+        let temporary_directory =
+            tempfile::tempdir().expect("temporary directory should be created");
+
+        let target_root = temporary_directory.path().join("target");
+
+        let mut executor = SystemInstallationOperationExecutor::with_dependencies(
+            RecordingCommandRunner::default(),
+            RecordingInstallationBootstrapper::default(),
+            RecordingInstallationPlanExecutor::default(),
+        );
+
+        let operation = InstallationOperation::EnableFirstBoot {
+            root: target_root.clone(),
+        };
+
+        executor
+            .execute_operation(&operation)
+            .expect("first first-boot activation should succeed");
+
+        executor
+            .execute_operation(&operation)
+            .expect("second first-boot activation should succeed");
+
+        assert_eq!(
+            std::fs::read_link(
+                target_root
+                    .join("etc/systemd/system/multi-user.target.wants/daia-firstboot.service")
+            )
+            .expect("first-boot service symlink should exist"),
+            std::path::PathBuf::from("/etc/systemd/system/daia-firstboot.service")
         );
     }
 

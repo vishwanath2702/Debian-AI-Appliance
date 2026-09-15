@@ -1797,6 +1797,12 @@ mod tests {
                     partitions: default_installation_partitions(),
                     mounts: default_installation_mounts(),
                 },
+                InstallationOperation::DeployRuntime {
+                    root: "/target".into(),
+                },
+                InstallationOperation::EnableFirstBoot {
+                    root: "/target".into(),
+                },
                 InstallationOperation::PrepareTargetRuntime {
                     root: "/target".into(),
                 },
