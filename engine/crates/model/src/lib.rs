@@ -5,6 +5,30 @@ use std::{
     path::{Path, PathBuf},
 };
 
+/// Generation of accepted DAIA Desired State.
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct DesiredGeneration(u64);
+
+impl DesiredGeneration {
+    /// Creates a Desired State generation.
+    #[must_use]
+    pub const fn new(value: u64) -> Self {
+        Self(value)
+    }
+
+    /// Returns the generation number.
+    #[must_use]
+    pub const fn value(self) -> u64 {
+        self.0
+    }
+}
+
+impl fmt::Display for DesiredGeneration {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt(formatter)
+    }
+}
+
 /// Result of evaluating a DAIA verification condition.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum ConditionResult {
@@ -1005,13 +1029,23 @@ mod tests {
     use super::{
         Action, ApplianceConfiguration, AssetId, Capability, CapabilityId, ConditionResult,
         ContentImportDestination, ContentImportIntent, ContentRepository, ContentRepositoryId,
-        ContentSource, ContentSourceId, DiscoveredContent, DiscoveredStorage, DiscoveredStorageId,
-        ExternalContentItem, ExternalContentItemId, ImportedContentItem, InstallationIntent,
-        Observation, ObservationSourceId, ObservationTimestamp, PackageManifest, PlanStep,
-        ProviderId, ResourceId, SchemaVersion, StorageKind, StorageTarget, StorageTargetId,
-        VerificationPurpose,
+        ContentSource, ContentSourceId, DesiredGeneration, DiscoveredContent, DiscoveredStorage,
+        DiscoveredStorageId, ExternalContentItem, ExternalContentItemId, ImportedContentItem,
+        InstallationIntent, Observation, ObservationSourceId, ObservationTimestamp,
+        PackageManifest, PlanStep, ProviderId, ResourceId, SchemaVersion, StorageKind,
+        StorageTarget, StorageTargetId, VerificationPurpose,
     };
     use std::path::{Path, PathBuf};
+
+    #[test]
+    fn desired_generation_exposes_and_orders_generation() {
+        let generation = DesiredGeneration::new(12);
+        let newer_generation = DesiredGeneration::new(13);
+
+        assert_eq!(generation.value(), 12);
+        assert_eq!(generation.to_string(), "12");
+        assert!(generation < newer_generation);
+    }
 
     #[test]
     fn condition_result_preserves_architectural_results() {
