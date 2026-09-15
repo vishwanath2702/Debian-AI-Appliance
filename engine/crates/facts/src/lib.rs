@@ -22,6 +22,33 @@ impl CpuFacts {
     }
 }
 
+/// Hardware information discovered from the current system.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct HardwareFacts {
+    cpu: CpuFacts,
+    memory: MemoryFacts,
+}
+
+impl HardwareFacts {
+    /// Creates hardware facts from discovered CPU and memory information.
+    #[must_use]
+    pub const fn new(cpu: CpuFacts, memory: MemoryFacts) -> Self {
+        Self { cpu, memory }
+    }
+
+    /// Returns the discovered CPU information.
+    #[must_use]
+    pub const fn cpu(self) -> CpuFacts {
+        self.cpu
+    }
+
+    /// Returns the discovered memory information.
+    #[must_use]
+    pub const fn memory(self) -> MemoryFacts {
+        self.memory
+    }
+}
+
 /// Memory information discovered from the current system.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct MemoryFacts {
@@ -109,7 +136,7 @@ pub fn discover_memory() -> std::io::Result<MemoryFacts> {
 #[cfg(test)]
 mod tests {
     use super::{
-        CpuFacts, MemoryFacts, discover_cpu, discover_memory, parse_linux_cpuinfo,
+        CpuFacts, HardwareFacts, MemoryFacts, discover_cpu, discover_memory, parse_linux_cpuinfo,
         parse_linux_meminfo, read_linux_cpuinfo, read_linux_meminfo,
     };
     use std::fs;
@@ -145,6 +172,14 @@ mod tests {
         fs::remove_file(&path).expect("remove cpuinfo");
 
         assert_eq!(facts.logical_processor_count(), 3);
+    }
+
+    #[test]
+    fn hardware_facts_exposes_cpu_and_memory() {
+        let facts = HardwareFacts::new(CpuFacts::new(4), MemoryFacts::new(17_179_869_184));
+
+        assert_eq!(facts.cpu().logical_processor_count(), 4);
+        assert_eq!(facts.memory().total_bytes(), 17_179_869_184);
     }
 
     #[test]
