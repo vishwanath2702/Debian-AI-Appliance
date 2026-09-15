@@ -53,6 +53,30 @@ impl fmt::Display for ObservationSourceId {
     }
 }
 
+/// Version of a DAIA schema.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub struct SchemaVersion(u32);
+
+impl SchemaVersion {
+    /// Creates a schema version.
+    #[must_use]
+    pub const fn new(value: u32) -> Self {
+        Self(value)
+    }
+
+    /// Returns the schema version number.
+    #[must_use]
+    pub const fn value(self) -> u32 {
+        self.0
+    }
+}
+
+impl fmt::Display for SchemaVersion {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt(formatter)
+    }
+}
+
 /// Stable identifier for a DAIA asset.
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub struct AssetId(String);
@@ -876,8 +900,8 @@ mod tests {
         ContentImportDestination, ContentImportIntent, ContentRepository, ContentRepositoryId,
         ContentSource, ContentSourceId, DiscoveredContent, DiscoveredStorage, DiscoveredStorageId,
         ExternalContentItem, ExternalContentItemId, ImportedContentItem, InstallationIntent,
-        ObservationSourceId, PackageManifest, PlanStep, ProviderId, ResourceId, StorageKind,
-        StorageTarget, StorageTargetId,
+        ObservationSourceId, PackageManifest, PlanStep, ProviderId, ResourceId, SchemaVersion,
+        StorageKind, StorageTarget, StorageTargetId,
     };
     use std::path::{Path, PathBuf};
 
@@ -1112,6 +1136,14 @@ mod tests {
 
         assert_eq!(repository_id.as_str(), "documents");
         assert_eq!(repository_id.to_string(), "documents");
+    }
+
+    #[test]
+    fn schema_version_exposes_its_value() {
+        let version = SchemaVersion::new(1);
+
+        assert_eq!(version.value(), 1);
+        assert_eq!(version.to_string(), "1");
     }
 
     #[test]
