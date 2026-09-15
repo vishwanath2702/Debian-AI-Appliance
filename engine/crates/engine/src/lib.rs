@@ -538,6 +538,15 @@ impl Engine {
     /// # Errors
     ///
     /// Returns a [`StorageInspectError`] if storage discovery fails.
+    /// Discovers CPU facts for the current system.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when system CPU facts cannot be discovered.
+    pub fn discover_cpu(&self) -> std::io::Result<facts::CpuFacts> {
+        facts::discover_cpu()
+    }
+
     /// Discovers memory facts for the current system.
     ///
     /// # Errors
@@ -2151,6 +2160,15 @@ mod tests {
             discovered[0].path(),
             std::path::Path::new("/media/daia/models")
         );
+    }
+
+    #[test]
+    fn discovers_cpu_facts() {
+        let engine = Engine::from_registry(desktop_registry());
+
+        let cpu = engine.discover_cpu().expect("discover CPU facts");
+
+        assert!(cpu.logical_processor_count() > 0);
     }
 
     #[test]
