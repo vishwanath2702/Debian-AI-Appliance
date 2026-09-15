@@ -31,7 +31,8 @@ pub use mmdebstrap::{MmdebstrapBootstrapper, MmdebstrapError};
 use model::{
     ApplianceProfile, Capability, ContentImportDestination, ContentImportIntent, ContentRepository,
     ContentRepositoryId, ContentSource, DiscoveredContent, DiscoveredStorage, ExternalContentItem,
-    ExternalContentItemId, ImportedContentItem, InstallationIntent, Plan, StorageKind,
+    ExternalContentItemId, ImportedContentItem, InstallationIntent, Observation,
+    ObservationSourceId, ObservationTimestamp, Plan, ResourceId, SchemaVersion, StorageKind,
 };
 
 use planner::{PlanError, Planner};
@@ -540,6 +541,26 @@ impl Engine {
     /// Returns an error when system hardware facts cannot be discovered.
     pub fn discover_hardware(&self) -> std::io::Result<facts::HardwareFacts> {
         facts::discover_hardware()
+    }
+
+    /// Observes hardware facts for the current system.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when system hardware facts cannot be discovered.
+    pub fn observe_hardware(
+        &self,
+        collected_at: ObservationTimestamp,
+    ) -> std::io::Result<Observation<facts::HardwareFacts>> {
+        let hardware = self.discover_hardware()?;
+
+        Ok(Observation::new(
+            ResourceId::new("system/hardware"),
+            ObservationSourceId::new("system-hardware-observer"),
+            collected_at,
+            SchemaVersion::new(1),
+            hardware,
+        ))
     }
 
     /// Discovers CPU facts for the current system.
@@ -2175,6 +2196,23 @@ mod tests {
             discovered[0].path(),
             std::path::Path::new("/media/daia/models")
         );
+    }
+
+    #[test]
+    fn observes_hardware_facts_with_collection_metadata() {
+        let engine = Engine::from_registry(desktop_registry());
+        let collected_at = model::ObservationTimestamp::new("2026-07-23T09:00:00Z");
+
+        let observation = engine
+            .observe_hardware(collected_at)
+            .expect("observe hardware facts");
+
+        assert_eq!(observation.resource_id().as_str(), "system/hardware");
+        assert_eq!(observation.source_id().as_str(), "system-hardware-observer");
+        assert_eq!(observation.collected_at().as_str(), "2026-07-23T09:00:00Z");
+        assert_eq!(observation.schema_version(), model::SchemaVersion::new(1));
+        assert!(observation.observed().cpu().logical_processor_count() > 0);
+        assert!(observation.observed().memory().total_bytes() > 0);
     }
 
     #[test]
