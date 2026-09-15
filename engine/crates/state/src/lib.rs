@@ -4,6 +4,7 @@
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ApplianceState {
     profile_name: String,
+    imported_content: Vec<model::ImportedContentItem>,
 }
 
 impl ApplianceState {
@@ -12,6 +13,7 @@ impl ApplianceState {
     pub fn new(profile_name: impl Into<String>) -> Self {
         Self {
             profile_name: profile_name.into(),
+            imported_content: Vec::new(),
         }
     }
 
@@ -19,6 +21,12 @@ impl ApplianceState {
     #[must_use]
     pub fn profile_name(&self) -> &str {
         &self.profile_name
+    }
+
+    /// Returns content realized on the configured appliance.
+    #[must_use]
+    pub fn imported_content(&self) -> &[model::ImportedContentItem] {
+        &self.imported_content
     }
 }
 
@@ -31,5 +39,12 @@ mod tests {
         let state = ApplianceState::new("ai-workstation");
 
         assert_eq!(state.profile_name(), "ai-workstation");
+    }
+
+    #[test]
+    fn starts_without_imported_content() {
+        let state = ApplianceState::new("ai-workstation");
+
+        assert!(state.imported_content().is_empty());
     }
 }
