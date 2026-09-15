@@ -123,6 +123,18 @@ pub fn discover_cpu() -> std::io::Result<CpuFacts> {
     read_linux_cpuinfo(std::path::Path::new("/proc/cpuinfo"))
 }
 
+/// Discovers hardware facts for the current system.
+///
+/// # Errors
+///
+/// Returns an error when CPU or memory facts cannot be discovered.
+pub fn discover_hardware() -> std::io::Result<HardwareFacts> {
+    let cpu = discover_cpu()?;
+    let memory = discover_memory()?;
+
+    Ok(HardwareFacts::new(cpu, memory))
+}
+
 /// Discovers memory facts for the current Linux system.
 ///
 /// # Errors
@@ -136,8 +148,8 @@ pub fn discover_memory() -> std::io::Result<MemoryFacts> {
 #[cfg(test)]
 mod tests {
     use super::{
-        CpuFacts, HardwareFacts, MemoryFacts, discover_cpu, discover_memory, parse_linux_cpuinfo,
-        parse_linux_meminfo, read_linux_cpuinfo, read_linux_meminfo,
+        CpuFacts, HardwareFacts, MemoryFacts, discover_cpu, discover_hardware, discover_memory,
+        parse_linux_cpuinfo, parse_linux_meminfo, read_linux_cpuinfo, read_linux_meminfo,
     };
     use std::fs;
 
@@ -208,6 +220,14 @@ mod tests {
         fs::remove_file(&path).expect("remove meminfo");
 
         assert_eq!(facts.total_bytes(), 8_388_608);
+    }
+
+    #[test]
+    fn discovers_current_system_hardware() {
+        let facts = discover_hardware().expect("discover hardware facts");
+
+        assert!(facts.cpu().logical_processor_count() > 0);
+        assert!(facts.memory().total_bytes() > 0);
     }
 
     #[test]
