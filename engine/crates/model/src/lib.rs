@@ -181,6 +181,30 @@ impl fmt::Display for ResourceId {
     }
 }
 
+/// Stable identifier for evidence submitted to DAIA verification.
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub struct EvidenceId(String);
+
+impl EvidenceId {
+    /// Creates an evidence identifier.
+    #[must_use]
+    pub fn new(value: impl Into<String>) -> Self {
+        Self(value.into())
+    }
+
+    /// Returns the evidence identifier as a string slice.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl fmt::Display for EvidenceId {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.as_str())
+    }
+}
+
 /// Evidence collected from or about a DAIA managed resource.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Observation<T> {
@@ -1135,13 +1159,21 @@ mod tests {
         Action, ApplianceConfiguration, AssetId, Capability, CapabilityId, ConditionResult,
         ContentImportDestination, ContentImportIntent, ContentRepository, ContentRepositoryId,
         ContentSource, ContentSourceId, CurrentRevision, DesiredGeneration, DiscoveredContent,
-        DiscoveredStorage, DiscoveredStorageId, ExternalContentItem, ExternalContentItemId,
-        ImportedContentItem, InstallationIntent, Observation, ObservationSourceId,
-        ObservationTimestamp, PackageManifest, PlanStep, ProviderId, ResourceId, ResourceType,
-        SchemaVersion, StateBasis, StorageKind, StorageTarget, StorageTargetId,
-        VerificationConditionId, VerificationPurpose,
+        DiscoveredStorage, DiscoveredStorageId, EvidenceId, ExternalContentItem,
+        ExternalContentItemId, ImportedContentItem, InstallationIntent, Observation,
+        ObservationSourceId, ObservationTimestamp, PackageManifest, PlanStep, ProviderId,
+        ResourceId, ResourceType, SchemaVersion, StateBasis, StorageKind, StorageTarget,
+        StorageTargetId, VerificationConditionId, VerificationPurpose,
     };
     use std::path::{Path, PathBuf};
+
+    #[test]
+    fn evidence_id_exposes_evidence_identity() {
+        let evidence_id = EvidenceId::new("observation/system-service/42");
+
+        assert_eq!(evidence_id.as_str(), "observation/system-service/42");
+        assert_eq!(evidence_id.to_string(), "observation/system-service/42");
+    }
 
     #[test]
     fn verification_condition_id_exposes_condition_name() {
