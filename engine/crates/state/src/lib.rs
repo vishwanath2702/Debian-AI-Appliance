@@ -70,6 +70,15 @@ impl ApplianceState {
 
         serde_json::to_string_pretty(&persisted)
     }
+
+    /// Writes the persisted appliance state as JSON to the supplied path.
+    pub fn write_json(&self, path: impl AsRef<std::path::Path>) -> Result<(), std::io::Error> {
+        let json = self
+            .to_json()
+            .map_err(|error| std::io::Error::other(error.to_string()))?;
+
+        std::fs::write(path, json)
+    }
 }
 
 #[cfg(test)]
@@ -97,6 +106,33 @@ mod tests {
                 "      \"path\": \"/var/lib/daia/content/model.gguf\"\n",
                 "    }\n",
                 "  ]\n",
+                "}"
+            )
+        );
+    }
+
+    #[test]
+    fn writes_appliance_state_as_json() {
+        let state = ApplianceState::new("ai-workstation");
+        let path = std::env::temp_dir().join(format!(
+            "daia-appliance-state-{}-{}.json",
+            std::process::id(),
+            std::thread::current().name().unwrap_or("test")
+        ));
+
+        state
+            .write_json(&path)
+            .expect("appliance state should be written");
+
+        let json = std::fs::read_to_string(&path).expect("appliance state should be readable");
+        std::fs::remove_file(&path).expect("temporary appliance state should be removed");
+
+        assert_eq!(
+            json,
+            concat!(
+                "{\n",
+                "  \"profile_name\": \"ai-workstation\",\n",
+                "  \"imported_content\": []\n",
                 "}"
             )
         );
