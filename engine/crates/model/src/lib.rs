@@ -86,6 +86,30 @@ impl fmt::Display for DesiredGeneration {
     }
 }
 
+/// Timestamp associated with a DAIA verification request or evaluation.
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub struct VerificationTimestamp(String);
+
+impl VerificationTimestamp {
+    /// Creates a verification timestamp from its textual representation.
+    #[must_use]
+    pub fn new(value: impl Into<String>) -> Self {
+        Self(value.into())
+    }
+
+    /// Returns the verification timestamp as a string slice.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl fmt::Display for VerificationTimestamp {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.as_str())
+    }
+}
+
 /// Stable identifier for a DAIA verification condition.
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub struct VerificationConditionId(String);
@@ -1163,9 +1187,17 @@ mod tests {
         ExternalContentItemId, ImportedContentItem, InstallationIntent, Observation,
         ObservationSourceId, ObservationTimestamp, PackageManifest, PlanStep, ProviderId,
         ResourceId, ResourceType, SchemaVersion, StateBasis, StorageKind, StorageTarget,
-        StorageTargetId, VerificationConditionId, VerificationPurpose,
+        StorageTargetId, VerificationConditionId, VerificationPurpose, VerificationTimestamp,
     };
     use std::path::{Path, PathBuf};
+
+    #[test]
+    fn verification_timestamp_exposes_its_representation() {
+        let timestamp = VerificationTimestamp::new("2026-07-23T09:05:00Z");
+
+        assert_eq!(timestamp.as_str(), "2026-07-23T09:05:00Z");
+        assert_eq!(timestamp.to_string(), "2026-07-23T09:05:00Z");
+    }
 
     #[test]
     fn evidence_id_exposes_evidence_identity() {
