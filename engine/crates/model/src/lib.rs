@@ -5,6 +5,30 @@ use std::{
     path::{Path, PathBuf},
 };
 
+/// Stable identifier for a DAIA managed resource.
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub struct ResourceId(String);
+
+impl ResourceId {
+    /// Creates a managed resource identifier.
+    #[must_use]
+    pub fn new(value: impl Into<String>) -> Self {
+        Self(value.into())
+    }
+
+    /// Returns the managed resource identifier as a string slice.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl fmt::Display for ResourceId {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.as_str())
+    }
+}
+
 /// Stable identifier for a DAIA asset.
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub struct AssetId(String);
@@ -828,7 +852,8 @@ mod tests {
         ContentImportDestination, ContentImportIntent, ContentRepository, ContentRepositoryId,
         ContentSource, ContentSourceId, DiscoveredContent, DiscoveredStorage, DiscoveredStorageId,
         ExternalContentItem, ExternalContentItemId, ImportedContentItem, InstallationIntent,
-        PackageManifest, PlanStep, ProviderId, StorageKind, StorageTarget, StorageTargetId,
+        PackageManifest, PlanStep, ProviderId, ResourceId, StorageKind, StorageTarget,
+        StorageTargetId,
     };
     use std::path::{Path, PathBuf};
 
@@ -1063,6 +1088,14 @@ mod tests {
 
         assert_eq!(repository_id.as_str(), "documents");
         assert_eq!(repository_id.to_string(), "documents");
+    }
+
+    #[test]
+    fn resource_id_exposes_its_identifier() {
+        let resource_id = ResourceId::new("service:lightdm");
+
+        assert_eq!(resource_id.as_str(), "service:lightdm");
+        assert_eq!(resource_id.to_string(), "service:lightdm");
     }
 
     #[test]
