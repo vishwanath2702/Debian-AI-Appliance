@@ -23,6 +23,11 @@ impl ApplianceState {
         &self.profile_name
     }
 
+    /// Records content realized on the configured appliance.
+    pub fn record_imported_content(&mut self, item: model::ImportedContentItem) {
+        self.imported_content.push(item);
+    }
+
     /// Returns content realized on the configured appliance.
     #[must_use]
     pub fn imported_content(&self) -> &[model::ImportedContentItem] {
@@ -46,5 +51,18 @@ mod tests {
         let state = ApplianceState::new("ai-workstation");
 
         assert!(state.imported_content().is_empty());
+    }
+
+    #[test]
+    fn records_imported_content() {
+        let mut state = ApplianceState::new("ai-workstation");
+        let item = model::ImportedContentItem::new(
+            model::ExternalContentItemId::new("model"),
+            "/var/lib/daia/content/model.gguf",
+        );
+
+        state.record_imported_content(item.clone());
+
+        assert_eq!(state.imported_content(), &[item]);
     }
 }
