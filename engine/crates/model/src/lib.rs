@@ -5,6 +5,30 @@ use std::{
     path::{Path, PathBuf},
 };
 
+/// Revision of accepted DAIA Current State.
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct CurrentRevision(u64);
+
+impl CurrentRevision {
+    /// Creates a Current State revision.
+    #[must_use]
+    pub const fn new(value: u64) -> Self {
+        Self(value)
+    }
+
+    /// Returns the revision number.
+    #[must_use]
+    pub const fn value(self) -> u64 {
+        self.0
+    }
+}
+
+impl fmt::Display for CurrentRevision {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt(formatter)
+    }
+}
+
 /// Generation of accepted DAIA Desired State.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct DesiredGeneration(u64);
@@ -1029,13 +1053,23 @@ mod tests {
     use super::{
         Action, ApplianceConfiguration, AssetId, Capability, CapabilityId, ConditionResult,
         ContentImportDestination, ContentImportIntent, ContentRepository, ContentRepositoryId,
-        ContentSource, ContentSourceId, DesiredGeneration, DiscoveredContent, DiscoveredStorage,
-        DiscoveredStorageId, ExternalContentItem, ExternalContentItemId, ImportedContentItem,
-        InstallationIntent, Observation, ObservationSourceId, ObservationTimestamp,
-        PackageManifest, PlanStep, ProviderId, ResourceId, SchemaVersion, StorageKind,
-        StorageTarget, StorageTargetId, VerificationPurpose,
+        ContentSource, ContentSourceId, CurrentRevision, DesiredGeneration, DiscoveredContent,
+        DiscoveredStorage, DiscoveredStorageId, ExternalContentItem, ExternalContentItemId,
+        ImportedContentItem, InstallationIntent, Observation, ObservationSourceId,
+        ObservationTimestamp, PackageManifest, PlanStep, ProviderId, ResourceId, SchemaVersion,
+        StorageKind, StorageTarget, StorageTargetId, VerificationPurpose,
     };
     use std::path::{Path, PathBuf};
+
+    #[test]
+    fn current_revision_exposes_and_orders_revision() {
+        let revision = CurrentRevision::new(41);
+        let newer_revision = CurrentRevision::new(42);
+
+        assert_eq!(revision.value(), 41);
+        assert_eq!(revision.to_string(), "41");
+        assert!(revision < newer_revision);
+    }
 
     #[test]
     fn desired_generation_exposes_and_orders_generation() {
