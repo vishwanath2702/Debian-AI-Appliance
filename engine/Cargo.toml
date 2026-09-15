@@ -9,6 +9,7 @@ members = [
     "crates/executor",
     "crates/inspector",
     "crates/facts",
+    "crates/state",
     "crates/engine",
     "crates/cli",
 
