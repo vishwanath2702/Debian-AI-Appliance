@@ -533,6 +533,15 @@ impl Engine {
 
         Ok(PreparedContentImport::new(intent, items, destination))
     }
+    /// Discovers hardware facts for the current system.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when system hardware facts cannot be discovered.
+    pub fn discover_hardware(&self) -> std::io::Result<facts::HardwareFacts> {
+        facts::discover_hardware()
+    }
+
     /// Discovers storage devices using the supplied storage inspector.
     ///
     /// # Errors
@@ -2160,6 +2169,16 @@ mod tests {
             discovered[0].path(),
             std::path::Path::new("/media/daia/models")
         );
+    }
+
+    #[test]
+    fn discovers_hardware_facts() {
+        let engine = Engine::from_registry(desktop_registry());
+
+        let hardware = engine.discover_hardware().expect("discover hardware facts");
+
+        assert!(hardware.cpu().logical_processor_count() > 0);
+        assert!(hardware.memory().total_bytes() > 0);
     }
 
     #[test]
