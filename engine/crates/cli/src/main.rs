@@ -860,6 +860,15 @@ fn load_package_repository() -> Result<PackageRepository, String> {
         .map_err(|error| format!("Error loading package repository: {error}"))
 }
 
+fn appliance_state_from_execution(
+    profile_name: &str,
+    imported_content: &[model::ImportedContentItem],
+) -> state::ApplianceState {
+    let mut appliance_state = state::ApplianceState::new(profile_name);
+    appliance_state.record_imported_contents(imported_content.iter().cloned());
+    appliance_state
+}
+
 fn execute_system_installation(
     engine: &Engine,
     prepared: &engine::PreparedApplianceInstallation,
@@ -1035,6 +1044,20 @@ mod tests {
     use super::{BuildOptions, run};
     use std::path::PathBuf;
     use std::process::ExitCode;
+    #[test]
+    fn builds_appliance_state_from_execution_outcomes() {
+        let imported_item = model::ImportedContentItem::new(
+            model::ExternalContentItemId::new("model"),
+            "/var/lib/daia/content/model.gguf",
+        );
+
+        let appliance_state =
+            super::appliance_state_from_execution("ai-workstation", &[imported_item.clone()]);
+
+        assert_eq!(appliance_state.profile_name(), "ai-workstation");
+        assert_eq!(appliance_state.imported_content(), &[imported_item]);
+    }
+
     #[test]
     fn discovers_wizard_hardware() {
         let engine = engine::Engine::from_registry(registry::Registry::new());

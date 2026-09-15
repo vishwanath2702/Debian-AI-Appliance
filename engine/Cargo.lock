@@ -29,6 +29,7 @@ dependencies = [
  "inspector",
  "model",
  "registry",
+ "state",
 ]
 
 [[package]]
