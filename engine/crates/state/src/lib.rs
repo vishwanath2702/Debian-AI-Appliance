@@ -28,6 +28,14 @@ impl ApplianceState {
         self.imported_content.push(item);
     }
 
+    /// Records multiple content items realized on the configured appliance.
+    pub fn record_imported_contents(
+        &mut self,
+        items: impl IntoIterator<Item = model::ImportedContentItem>,
+    ) {
+        self.imported_content.extend(items);
+    }
+
     /// Returns content realized on the configured appliance.
     #[must_use]
     pub fn imported_content(&self) -> &[model::ImportedContentItem] {
@@ -51,6 +59,23 @@ mod tests {
         let state = ApplianceState::new("ai-workstation");
 
         assert!(state.imported_content().is_empty());
+    }
+
+    #[test]
+    fn records_multiple_imported_content_items() {
+        let mut state = ApplianceState::new("ai-workstation");
+        let first = model::ImportedContentItem::new(
+            model::ExternalContentItemId::new("first"),
+            "/var/lib/daia/content/first.gguf",
+        );
+        let second = model::ImportedContentItem::new(
+            model::ExternalContentItemId::new("second"),
+            "/var/lib/daia/content/second.gguf",
+        );
+
+        state.record_imported_contents(vec![first.clone(), second.clone()]);
+
+        assert_eq!(state.imported_content(), &[first, second]);
     }
 
     #[test]
