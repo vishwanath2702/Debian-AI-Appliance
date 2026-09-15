@@ -86,6 +86,30 @@ impl fmt::Display for DesiredGeneration {
     }
 }
 
+/// Stable identifier for a DAIA verification condition.
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub struct VerificationConditionId(String);
+
+impl VerificationConditionId {
+    /// Creates a verification condition identifier.
+    #[must_use]
+    pub fn new(value: impl Into<String>) -> Self {
+        Self(value.into())
+    }
+
+    /// Returns the verification condition identifier as a string slice.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl fmt::Display for VerificationConditionId {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.as_str())
+    }
+}
+
 /// Result of evaluating a DAIA verification condition.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum ConditionResult {
@@ -1115,9 +1139,17 @@ mod tests {
         ImportedContentItem, InstallationIntent, Observation, ObservationSourceId,
         ObservationTimestamp, PackageManifest, PlanStep, ProviderId, ResourceId, ResourceType,
         SchemaVersion, StateBasis, StorageKind, StorageTarget, StorageTargetId,
-        VerificationPurpose,
+        VerificationConditionId, VerificationPurpose,
     };
     use std::path::{Path, PathBuf};
+
+    #[test]
+    fn verification_condition_id_exposes_condition_name() {
+        let condition_id = VerificationConditionId::new("running");
+
+        assert_eq!(condition_id.as_str(), "running");
+        assert_eq!(condition_id.to_string(), "running");
+    }
 
     #[test]
     fn resource_type_exposes_resource_classification() {
