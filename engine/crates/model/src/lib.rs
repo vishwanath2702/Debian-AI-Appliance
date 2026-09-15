@@ -5,6 +5,16 @@ use std::{
     path::{Path, PathBuf},
 };
 
+/// Result of evaluating a DAIA verification condition.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub enum ConditionResult {
+    Satisfied,
+    Unsatisfied,
+    Unknown,
+    NotApplicable,
+    Error,
+}
+
 /// Purpose for which DAIA verification is requested.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum VerificationPurpose {
@@ -993,7 +1003,7 @@ impl InstallationIntent {
 #[cfg(test)]
 mod tests {
     use super::{
-        Action, ApplianceConfiguration, AssetId, Capability, CapabilityId,
+        Action, ApplianceConfiguration, AssetId, Capability, CapabilityId, ConditionResult,
         ContentImportDestination, ContentImportIntent, ContentRepository, ContentRepositoryId,
         ContentSource, ContentSourceId, DiscoveredContent, DiscoveredStorage, DiscoveredStorageId,
         ExternalContentItem, ExternalContentItemId, ImportedContentItem, InstallationIntent,
@@ -1002,6 +1012,20 @@ mod tests {
         VerificationPurpose,
     };
     use std::path::{Path, PathBuf};
+
+    #[test]
+    fn condition_result_preserves_architectural_results() {
+        let results = [
+            ConditionResult::Satisfied,
+            ConditionResult::Unsatisfied,
+            ConditionResult::Unknown,
+            ConditionResult::NotApplicable,
+            ConditionResult::Error,
+        ];
+
+        assert_eq!(results.len(), 5);
+        assert_ne!(ConditionResult::Unknown, ConditionResult::Error);
+    }
 
     #[test]
     fn verification_purpose_preserves_architectural_purposes() {
