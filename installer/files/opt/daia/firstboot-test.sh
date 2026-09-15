@@ -5,6 +5,7 @@ set -u
 readonly TEST_DAIA_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 readonly TEST_SERVICE_FILE="${TEST_DAIA_ROOT}/../../etc/systemd/system/daia-firstboot.service"
 readonly TEST_CONFIG_FILE="${TEST_DAIA_ROOT}/config/daia.conf"
+readonly TEST_MODULES_FILE="${TEST_DAIA_ROOT}/config/modules.conf"
 
 fail()
 {
@@ -37,6 +38,16 @@ if grep -Fq \
     "$TEST_CONFIG_FILE"
 then
     fail "bootstrap audit state aliases the completion marker"
+fi
+
+if [[ ! -f "$TEST_MODULES_FILE" ]]
+then
+    fail "enabled-module configuration does not exist"
+fi
+
+if [[ "$(grep -Ev '^[[:space:]]*(#|$)' "$TEST_MODULES_FILE")" != "desktop" ]]
+then
+    fail "desktop is not the configured first-boot module"
 fi
 
 printf 'PASS: first-boot service contract\n'
