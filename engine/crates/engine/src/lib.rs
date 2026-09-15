@@ -542,11 +542,6 @@ impl Engine {
         facts::discover_hardware()
     }
 
-    /// Discovers storage devices using the supplied storage inspector.
-    ///
-    /// # Errors
-    ///
-    /// Returns a [`StorageInspectError`] if storage discovery fails.
     /// Discovers CPU facts for the current system.
     ///
     /// # Errors
@@ -565,6 +560,11 @@ impl Engine {
         facts::discover_memory()
     }
 
+    /// Discovers storage devices using the supplied storage inspector.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`StorageInspectError`] if storage discovery fails.
     pub fn discover_storage<I>(
         &self,
         inspector: &I,
