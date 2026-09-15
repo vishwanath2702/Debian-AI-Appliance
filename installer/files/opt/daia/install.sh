@@ -184,6 +184,34 @@ _disable_firstboot_service()
 }
 
 ############################################################
+# _mark_firstboot_complete
+############################################################
+
+_mark_firstboot_complete()
+{
+    if ! mkdir -p "$DAIA_STATE_DIR"
+    then
+        log_error \
+            "Unable to prepare DAIA state directory: ${DAIA_STATE_DIR}"
+
+        return "$DAIA_ERROR"
+    fi
+
+    if ! : > "$DAIA_FIRSTBOOT_COMPLETE"
+    then
+        log_error \
+            "Unable to record first-boot completion: ${DAIA_FIRSTBOOT_COMPLETE}"
+
+        return "$DAIA_ERROR"
+    fi
+
+    log_success \
+        "First-boot completion recorded."
+
+    return "$DAIA_SUCCESS"
+}
+
+############################################################
 # main
 ############################################################
 
@@ -210,6 +238,14 @@ main()
     fi
 
     if _disable_firstboot_service
+    then
+        :
+    else
+        status=$?
+        return "$status"
+    fi
+
+    if _mark_firstboot_complete
     then
         :
     else

@@ -6,7 +6,7 @@ ConditionPathExists=!/var/lib/daia/firstboot-complete
 
 [Service]
 Type=oneshot
-ExecStart=/opt/daia/bootstrap.sh
+ExecStart=/opt/daia/install.sh
 RemainAfterExit=yes
 StandardOutput=journal
 StandardError=journal
