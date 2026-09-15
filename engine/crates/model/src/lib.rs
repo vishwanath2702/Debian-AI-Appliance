@@ -29,6 +29,30 @@ impl fmt::Display for ResourceId {
     }
 }
 
+/// Stable identifier for a DAIA observation source.
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub struct ObservationSourceId(String);
+
+impl ObservationSourceId {
+    /// Creates an observation source identifier.
+    #[must_use]
+    pub fn new(value: impl Into<String>) -> Self {
+        Self(value.into())
+    }
+
+    /// Returns the observation source identifier as a string slice.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl fmt::Display for ObservationSourceId {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.as_str())
+    }
+}
+
 /// Stable identifier for a DAIA asset.
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub struct AssetId(String);
@@ -852,8 +876,8 @@ mod tests {
         ContentImportDestination, ContentImportIntent, ContentRepository, ContentRepositoryId,
         ContentSource, ContentSourceId, DiscoveredContent, DiscoveredStorage, DiscoveredStorageId,
         ExternalContentItem, ExternalContentItemId, ImportedContentItem, InstallationIntent,
-        PackageManifest, PlanStep, ProviderId, ResourceId, StorageKind, StorageTarget,
-        StorageTargetId,
+        ObservationSourceId, PackageManifest, PlanStep, ProviderId, ResourceId, StorageKind,
+        StorageTarget, StorageTargetId,
     };
     use std::path::{Path, PathBuf};
 
@@ -1088,6 +1112,14 @@ mod tests {
 
         assert_eq!(repository_id.as_str(), "documents");
         assert_eq!(repository_id.to_string(), "documents");
+    }
+
+    #[test]
+    fn observation_source_id_exposes_its_identifier() {
+        let source_id = ObservationSourceId::new("systemd");
+
+        assert_eq!(source_id.as_str(), "systemd");
+        assert_eq!(source_id.to_string(), "systemd");
     }
 
     #[test]
