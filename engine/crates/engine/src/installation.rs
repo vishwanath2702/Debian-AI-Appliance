@@ -402,6 +402,7 @@ pub struct SystemInstallationOperationExecutor<R, B, P, W = SystemInstallationFi
     plan_executor: P,
     file_writer: W,
     target_root: PathBuf,
+    imported_content: Vec<model::ImportedContentItem>,
 }
 
 #[cfg(test)]
@@ -418,11 +419,16 @@ where
             plan_executor,
             file_writer: SystemInstallationFileWriter,
             target_root: PathBuf::from("/target"),
+            imported_content: Vec::new(),
         }
     }
     fn with_target_root(mut self, target_root: PathBuf) -> Self {
         self.target_root = target_root;
         self
+    }
+
+    fn imported_content(&self) -> &[model::ImportedContentItem] {
+        &self.imported_content
     }
 }
 
@@ -441,6 +447,7 @@ where
             plan_executor,
             file_writer,
             target_root: PathBuf::from("/target"),
+            imported_content: Vec::new(),
         }
     }
 }
@@ -466,6 +473,7 @@ impl
             ),
             file_writer: SystemInstallationFileWriter,
             target_root: PathBuf::from("/target"),
+            imported_content: Vec::new(),
         }
     }
 }
@@ -691,7 +699,8 @@ where
                     SystemContentImportFileSystem::with_root(&self.target_root),
                 );
 
-                content.execute(&mut executor)?;
+                let imported_content = content.execute(&mut executor)?;
+                self.imported_content.extend(imported_content);
 
                 Ok(())
             }
@@ -1444,6 +1453,12 @@ mod tests {
             std::fs::read(target_root.join("var/lib/daia/content/model.gguf"))
                 .expect("imported content should exist"),
             b"model data"
+        );
+
+        assert_eq!(executor.imported_content().len(), 1);
+        assert_eq!(
+            executor.imported_content()[0].path(),
+            target_root.join("var/lib/daia/content/model.gguf")
         );
     }
     #[test]
