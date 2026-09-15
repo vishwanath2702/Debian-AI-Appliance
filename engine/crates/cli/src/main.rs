@@ -872,29 +872,37 @@ fn appliance_state_from_execution(
 fn execute_system_installation(
     engine: &Engine,
     prepared: &engine::PreparedApplianceInstallation,
+    profile_name: &str,
     package_repository: PackageRepository,
-) -> Result<(), String> {
+) -> Result<state::ApplianceState, String> {
     let mut executor =
         SystemInstallationOperationExecutor::new(asset_directory(), package_repository);
 
     engine
         .execute_appliance_installation(prepared, &mut executor)
-        .map_err(|error| format!("Installation failed: {error}"))
+        .map_err(|error| format!("Installation failed: {error}"))?;
+
+    Ok(appliance_state_from_execution(
+        profile_name,
+        executor.imported_content(),
+    ))
 }
 
 fn execute_confirmed_installation(
     engine: &Engine,
     prepared: &engine::PreparedApplianceInstallation,
+    profile_name: &str,
     package_repository: PackageRepository,
-) -> Result<(), String> {
+) -> Result<state::ApplianceState, String> {
     println!();
     println!("Starting installation...");
 
-    execute_system_installation(engine, prepared, package_repository)?;
+    let appliance_state =
+        execute_system_installation(engine, prepared, profile_name, package_repository)?;
 
     println!("Installation complete.");
 
-    Ok(())
+    Ok(appliance_state)
 }
 
 fn run_install() -> ExitCode {
@@ -960,8 +968,13 @@ fn run_install() -> ExitCode {
     println!("  {selected_storage}");
 
     match confirm_wizard_state("Erase this disk and start installation? [y/N]: ") {
-        Ok(true) => match execute_confirmed_installation(&engine, &prepared, package_repository) {
-            Ok(()) => ExitCode::SUCCESS,
+        Ok(true) => match execute_confirmed_installation(
+            &engine,
+            &prepared,
+            appliance_configuration.profile_name(),
+            package_repository,
+        ) {
+            Ok(_) => ExitCode::SUCCESS,
             Err(error) => {
                 eprintln!("{error}");
                 ExitCode::FAILURE
