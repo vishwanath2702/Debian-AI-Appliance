@@ -5,6 +5,19 @@ use std::{
     path::{Path, PathBuf},
 };
 
+/// Purpose for which DAIA verification is requested.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub enum VerificationPurpose {
+    CurrentStateEstablishment,
+    DesiredStateSatisfaction,
+    TransitionPreconditions,
+    TransitionPostconditions,
+    RecoveryVerification,
+    DriftVerification,
+    IntegrityVerification,
+    HealthVerification,
+}
+
 /// Stable identifier for a DAIA managed resource.
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub struct ResourceId(String);
@@ -986,8 +999,25 @@ mod tests {
         ExternalContentItem, ExternalContentItemId, ImportedContentItem, InstallationIntent,
         Observation, ObservationSourceId, ObservationTimestamp, PackageManifest, PlanStep,
         ProviderId, ResourceId, SchemaVersion, StorageKind, StorageTarget, StorageTargetId,
+        VerificationPurpose,
     };
     use std::path::{Path, PathBuf};
+
+    #[test]
+    fn verification_purpose_preserves_architectural_purposes() {
+        let purposes = [
+            VerificationPurpose::CurrentStateEstablishment,
+            VerificationPurpose::DesiredStateSatisfaction,
+            VerificationPurpose::TransitionPreconditions,
+            VerificationPurpose::TransitionPostconditions,
+            VerificationPurpose::RecoveryVerification,
+            VerificationPurpose::DriftVerification,
+            VerificationPurpose::IntegrityVerification,
+            VerificationPurpose::HealthVerification,
+        ];
+
+        assert_eq!(purposes.len(), 8);
+    }
 
     #[test]
     fn appliance_configuration_builds_confirmed_intents_from_selections() {
