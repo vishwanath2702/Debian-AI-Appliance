@@ -643,7 +643,7 @@ fn format_memory_capacity(total_bytes: u64) -> String {
     format!("{:.1} GiB", total_bytes as f64 / BYTES_PER_GIB)
 }
 
-fn review_wizard_state(state: &WizardState, memory_bytes: u64) {
+fn review_wizard_state(state: &WizardState, logical_processor_count: usize, memory_bytes: u64) {
     println!();
     println!("Review:");
     println!(
@@ -668,6 +668,7 @@ fn review_wizard_state(state: &WizardState, memory_bytes: u64) {
         }
     }
 
+    println!("  System CPU         : {logical_processor_count} logical processors");
     println!(
         "  System memory      : {}",
         format_memory_capacity(memory_bytes)
@@ -934,6 +935,14 @@ fn run_install() -> ExitCode {
         return ExitCode::FAILURE;
     }
 
+    let logical_processor_count = match discover_wizard_cpu(&engine) {
+        Ok(logical_processor_count) => logical_processor_count,
+        Err(error) => {
+            eprintln!("{error}");
+            return ExitCode::FAILURE;
+        }
+    };
+
     let memory_bytes = match discover_wizard_memory(&engine) {
         Ok(memory_bytes) => memory_bytes,
         Err(error) => {
@@ -942,7 +951,7 @@ fn run_install() -> ExitCode {
         }
     };
 
-    review_wizard_state(&state, memory_bytes);
+    review_wizard_state(&state, logical_processor_count, memory_bytes);
 
     let Some(config) = state.into_config() else {
         eprintln!("Error: installer configuration is incomplete");
@@ -1031,6 +1040,14 @@ fn run_wizard() -> ExitCode {
         return ExitCode::FAILURE;
     }
 
+    let logical_processor_count = match discover_wizard_cpu(&engine) {
+        Ok(logical_processor_count) => logical_processor_count,
+        Err(error) => {
+            eprintln!("{error}");
+            return ExitCode::FAILURE;
+        }
+    };
+
     let memory_bytes = match discover_wizard_memory(&engine) {
         Ok(memory_bytes) => memory_bytes,
         Err(error) => {
@@ -1039,7 +1056,7 @@ fn run_wizard() -> ExitCode {
         }
     };
 
-    review_wizard_state(&state, memory_bytes);
+    review_wizard_state(&state, logical_processor_count, memory_bytes);
 
     match confirm_wizard_state("Continue with this configuration? [y/N]: ") {
         Ok(true) => match execute_confirmed_wizard(&engine, state) {
