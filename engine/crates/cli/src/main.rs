@@ -869,6 +869,15 @@ fn appliance_state_from_execution(
     appliance_state
 }
 
+fn persist_appliance_state(
+    appliance_state: &state::ApplianceState,
+    root: impl AsRef<std::path::Path>,
+) -> Result<(), String> {
+    appliance_state
+        .write_to_root(root)
+        .map_err(|error| format!("Error persisting appliance state: {error}"))
+}
+
 fn execute_system_installation(
     engine: &Engine,
     prepared: &engine::PreparedApplianceInstallation,
@@ -1069,6 +1078,26 @@ mod tests {
 
         assert_eq!(appliance_state.profile_name(), "ai-workstation");
         assert_eq!(appliance_state.imported_content(), &[imported_item]);
+    }
+
+    #[test]
+    fn persists_appliance_state_beneath_supplied_root() {
+        let appliance_state = state::ApplianceState::new("ai-workstation");
+        let root = std::env::temp_dir().join(format!(
+            "daia-cli-appliance-state-{}-{}",
+            std::process::id(),
+            std::thread::current().name().unwrap_or("test")
+        ));
+
+        super::persist_appliance_state(&appliance_state, &root)
+            .expect("appliance state should persist");
+
+        let path = state::appliance_state_path(&root);
+        let json = std::fs::read_to_string(path).expect("appliance state should be readable");
+
+        std::fs::remove_dir_all(&root).expect("temporary appliance root should be removed");
+
+        assert!(json.contains("\"profile_name\": \"ai-workstation\""));
     }
 
     #[test]
