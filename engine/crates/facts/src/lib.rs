@@ -42,6 +42,18 @@ impl MemoryFacts {
     }
 }
 
+fn parse_linux_cpuinfo(cpuinfo: &str) -> Option<CpuFacts> {
+    let logical_processor_count = cpuinfo
+        .lines()
+        .filter(|line| {
+            line.split_once(':')
+                .is_some_and(|(field, _)| field.trim() == "processor")
+        })
+        .count();
+
+    (logical_processor_count > 0).then(|| CpuFacts::new(logical_processor_count))
+}
+
 fn parse_linux_meminfo(meminfo: &str) -> Option<MemoryFacts> {
     let total_kib = meminfo.lines().find_map(|line| {
         let value = line.strip_prefix("MemTotal:")?;
@@ -75,7 +87,10 @@ pub fn discover_memory() -> std::io::Result<MemoryFacts> {
 
 #[cfg(test)]
 mod tests {
-    use super::{CpuFacts, MemoryFacts, discover_memory, parse_linux_meminfo, read_linux_meminfo};
+    use super::{
+        CpuFacts, MemoryFacts, discover_memory, parse_linux_cpuinfo, parse_linux_meminfo,
+        read_linux_meminfo,
+    };
     use std::fs;
 
     #[test]
@@ -83,6 +98,16 @@ mod tests {
         let facts = CpuFacts::new(4);
 
         assert_eq!(facts.logical_processor_count(), 4);
+    }
+
+    #[test]
+    fn parses_linux_cpuinfo_logical_processor_count() {
+        let cpuinfo =
+            "processor\t: 0\nmodel name\t: Test CPU\n\nprocessor\t: 1\nmodel name\t: Test CPU\n";
+
+        let facts = parse_linux_cpuinfo(cpuinfo).expect("CPU facts");
+
+        assert_eq!(facts.logical_processor_count(), 2);
     }
 
     #[test]
