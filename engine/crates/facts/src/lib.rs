@@ -64,6 +64,17 @@ fn parse_linux_meminfo(meminfo: &str) -> Option<MemoryFacts> {
     Some(MemoryFacts::new(total_kib * 1024))
 }
 
+fn read_linux_cpuinfo(path: &std::path::Path) -> std::io::Result<CpuFacts> {
+    let cpuinfo = std::fs::read_to_string(path)?;
+
+    parse_linux_cpuinfo(&cpuinfo).ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "processor entries missing from Linux cpuinfo",
+        )
+    })
+}
+
 fn read_linux_meminfo(path: &std::path::Path) -> std::io::Result<MemoryFacts> {
     let meminfo = std::fs::read_to_string(path)?;
 
@@ -89,7 +100,7 @@ pub fn discover_memory() -> std::io::Result<MemoryFacts> {
 mod tests {
     use super::{
         CpuFacts, MemoryFacts, discover_memory, parse_linux_cpuinfo, parse_linux_meminfo,
-        read_linux_meminfo,
+        read_linux_cpuinfo, read_linux_meminfo,
     };
     use std::fs;
 
@@ -108,6 +119,22 @@ mod tests {
         let facts = parse_linux_cpuinfo(cpuinfo).expect("CPU facts");
 
         assert_eq!(facts.logical_processor_count(), 2);
+    }
+
+    #[test]
+    fn reads_linux_cpuinfo_from_path() {
+        let path = std::env::temp_dir().join("daia-facts-cpuinfo-test");
+        fs::write(
+            &path,
+            "processor\t: 0\n\nprocessor\t: 1\n\nprocessor\t: 2\n",
+        )
+        .expect("write cpuinfo");
+
+        let facts = read_linux_cpuinfo(&path).expect("read CPU facts");
+
+        fs::remove_file(&path).expect("remove cpuinfo");
+
+        assert_eq!(facts.logical_processor_count(), 3);
     }
 
     #[test]
