@@ -1,5 +1,27 @@
 //! Hardware, operating-system, and environment fact discovery.
 
+/// CPU information discovered from the current system.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CpuFacts {
+    logical_processor_count: usize,
+}
+
+impl CpuFacts {
+    /// Creates CPU facts with the discovered logical processor count.
+    #[must_use]
+    pub const fn new(logical_processor_count: usize) -> Self {
+        Self {
+            logical_processor_count,
+        }
+    }
+
+    /// Returns the number of logical processors.
+    #[must_use]
+    pub const fn logical_processor_count(self) -> usize {
+        self.logical_processor_count
+    }
+}
+
 /// Memory information discovered from the current system.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct MemoryFacts {
@@ -53,8 +75,15 @@ pub fn discover_memory() -> std::io::Result<MemoryFacts> {
 
 #[cfg(test)]
 mod tests {
-    use super::{MemoryFacts, discover_memory, parse_linux_meminfo, read_linux_meminfo};
+    use super::{CpuFacts, MemoryFacts, discover_memory, parse_linux_meminfo, read_linux_meminfo};
     use std::fs;
+
+    #[test]
+    fn cpu_facts_exposes_logical_processor_count() {
+        let facts = CpuFacts::new(4);
+
+        assert_eq!(facts.logical_processor_count(), 4);
+    }
 
     #[test]
     fn memory_facts_exposes_total_bytes() {
