@@ -623,7 +623,20 @@ fn configure_wizard_state(engine: &Engine, state: &mut WizardState) -> Result<()
     configure_wizard_storage(engine, state, &storage_inspector)
 }
 
-fn review_wizard_state(state: &WizardState) {
+fn discover_wizard_memory(engine: &Engine) -> Result<u64, String> {
+    engine
+        .discover_memory()
+        .map(|memory| memory.total_bytes())
+        .map_err(|error| format!("Error discovering system memory: {error}"))
+}
+
+fn format_memory_capacity(total_bytes: u64) -> String {
+    const BYTES_PER_GIB: f64 = 1024.0 * 1024.0 * 1024.0;
+
+    format!("{:.1} GiB", total_bytes as f64 / BYTES_PER_GIB)
+}
+
+fn review_wizard_state(state: &WizardState, memory_bytes: u64) {
     println!();
     println!("Review:");
     println!(
@@ -648,6 +661,10 @@ fn review_wizard_state(state: &WizardState) {
         }
     }
 
+    println!(
+        "  System memory      : {}",
+        format_memory_capacity(memory_bytes)
+    );
     println!(
         "  Storage            : {}",
         format_selected_storage(
@@ -910,7 +927,15 @@ fn run_install() -> ExitCode {
         return ExitCode::FAILURE;
     }
 
-    review_wizard_state(&state);
+    let memory_bytes = match discover_wizard_memory(&engine) {
+        Ok(memory_bytes) => memory_bytes,
+        Err(error) => {
+            eprintln!("{error}");
+            return ExitCode::FAILURE;
+        }
+    };
+
+    review_wizard_state(&state, memory_bytes);
 
     let Some(config) = state.into_config() else {
         eprintln!("Error: installer configuration is incomplete");
@@ -999,7 +1024,15 @@ fn run_wizard() -> ExitCode {
         return ExitCode::FAILURE;
     }
 
-    review_wizard_state(&state);
+    let memory_bytes = match discover_wizard_memory(&engine) {
+        Ok(memory_bytes) => memory_bytes,
+        Err(error) => {
+            eprintln!("{error}");
+            return ExitCode::FAILURE;
+        }
+    };
+
+    review_wizard_state(&state, memory_bytes);
 
     match confirm_wizard_state("Continue with this configuration? [y/N]: ") {
         Ok(true) => match execute_confirmed_wizard(&engine, state) {
@@ -1026,6 +1059,21 @@ mod tests {
     use super::{BuildOptions, run};
     use std::path::PathBuf;
     use std::process::ExitCode;
+    #[test]
+    fn discovers_wizard_memory() {
+        let engine = engine::Engine::from_registry(registry::Registry::new());
+
+        let memory =
+            super::discover_wizard_memory(&engine).expect("wizard memory discovery should succeed");
+
+        assert!(memory > 0);
+    }
+
+    #[test]
+    fn formats_wizard_memory_capacity() {
+        assert_eq!(super::format_memory_capacity(17_179_869_184), "16.0 GiB");
+    }
+
     #[test]
     fn loads_package_repository_for_installer_preflight() {
         let repository = super::load_package_repository().expect("package repository should load");
