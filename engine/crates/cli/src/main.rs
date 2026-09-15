@@ -462,53 +462,23 @@ where
 {
     let selected_repository_id = state
         .selected_content_repository()
-        .expect("content repository should be selected")
-        .clone();
+        .expect("content repository should be selected");
 
-    let sources = state
+    let repository = state
         .content_repositories()
         .iter()
-        .find(|repository| repository.id() == &selected_repository_id)
-        .expect("selected content repository should exist")
-        .sources()
-        .to_vec();
+        .find(|repository| repository.id() == selected_repository_id)
+        .expect("selected content repository should exist");
 
-    let mut discovered_content = Vec::new();
+    let items = engine
+        .repository_content_items(repository, inspector)
+        .map_err(|error| format!("Error discovering repository content: {error}"))?;
 
-    for source in &sources {
-        let mut discovered = engine
-            .discover_content(source, inspector)
-            .map_err(|error| {
-                format!(
-                    "Error discovering content from source \"{}\": {error}",
-                    source.id()
-                )
-            })?;
-
-        discovered_content.append(&mut discovered);
-    }
-
-    state.set_discovered_content(discovered_content);
-
-    let mut external_content_items = Vec::new();
-
-    for content in state.discovered_content() {
-        let mut items = engine
-            .external_content_items(content, inspector)
-            .map_err(|error| {
-                format!(
-                    "Error enumerating external content from \"{}\": {error}",
-                    content.path().display()
-                )
-            })?;
-
-        external_content_items.append(&mut items);
-    }
-
-    state.set_external_content_items(external_content_items);
+    state.set_external_content_items(items);
 
     Ok(())
 }
+
 fn configure_wizard_external_content<I>(
     engine: &Engine,
     state: &mut WizardState,
@@ -1283,9 +1253,6 @@ mod tests {
 
         super::discover_external_content(&engine, &mut state, &inspector)
             .expect("external content discovery should succeed");
-
-        assert_eq!(state.discovered_content().len(), 1);
-        assert_eq!(state.discovered_content()[0].path(), directory);
 
         assert_eq!(state.external_content_items().len(), 1);
         assert_eq!(state.external_content_items()[0].path(), model_path);
