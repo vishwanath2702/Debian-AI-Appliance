@@ -623,18 +623,16 @@ fn configure_wizard_state(engine: &Engine, state: &mut WizardState) -> Result<()
     configure_wizard_storage(engine, state, &storage_inspector)
 }
 
-fn discover_wizard_cpu(engine: &Engine) -> Result<usize, String> {
+fn discover_wizard_hardware(engine: &Engine) -> Result<(usize, u64), String> {
     engine
-        .discover_cpu()
-        .map(|cpu| cpu.logical_processor_count())
-        .map_err(|error| format!("Error discovering system CPU: {error}"))
-}
-
-fn discover_wizard_memory(engine: &Engine) -> Result<u64, String> {
-    engine
-        .discover_memory()
-        .map(|memory| memory.total_bytes())
-        .map_err(|error| format!("Error discovering system memory: {error}"))
+        .discover_hardware()
+        .map(|hardware| {
+            (
+                hardware.cpu().logical_processor_count(),
+                hardware.memory().total_bytes(),
+            )
+        })
+        .map_err(|error| format!("Error discovering system hardware: {error}"))
 }
 
 fn format_memory_capacity(total_bytes: u64) -> String {
@@ -935,16 +933,8 @@ fn run_install() -> ExitCode {
         return ExitCode::FAILURE;
     }
 
-    let logical_processor_count = match discover_wizard_cpu(&engine) {
-        Ok(logical_processor_count) => logical_processor_count,
-        Err(error) => {
-            eprintln!("{error}");
-            return ExitCode::FAILURE;
-        }
-    };
-
-    let memory_bytes = match discover_wizard_memory(&engine) {
-        Ok(memory_bytes) => memory_bytes,
+    let (logical_processor_count, memory_bytes) = match discover_wizard_hardware(&engine) {
+        Ok(hardware) => hardware,
         Err(error) => {
             eprintln!("{error}");
             return ExitCode::FAILURE;
@@ -1040,16 +1030,8 @@ fn run_wizard() -> ExitCode {
         return ExitCode::FAILURE;
     }
 
-    let logical_processor_count = match discover_wizard_cpu(&engine) {
-        Ok(logical_processor_count) => logical_processor_count,
-        Err(error) => {
-            eprintln!("{error}");
-            return ExitCode::FAILURE;
-        }
-    };
-
-    let memory_bytes = match discover_wizard_memory(&engine) {
-        Ok(memory_bytes) => memory_bytes,
+    let (logical_processor_count, memory_bytes) = match discover_wizard_hardware(&engine) {
+        Ok(hardware) => hardware,
         Err(error) => {
             eprintln!("{error}");
             return ExitCode::FAILURE;
@@ -1084,23 +1066,14 @@ mod tests {
     use std::path::PathBuf;
     use std::process::ExitCode;
     #[test]
-    fn discovers_wizard_cpu() {
+    fn discovers_wizard_hardware() {
         let engine = engine::Engine::from_registry(registry::Registry::new());
 
-        let logical_processor_count =
-            super::discover_wizard_cpu(&engine).expect("wizard CPU discovery should succeed");
+        let (logical_processor_count, memory_bytes) = super::discover_wizard_hardware(&engine)
+            .expect("wizard hardware discovery should succeed");
 
         assert!(logical_processor_count > 0);
-    }
-
-    #[test]
-    fn discovers_wizard_memory() {
-        let engine = engine::Engine::from_registry(registry::Registry::new());
-
-        let memory =
-            super::discover_wizard_memory(&engine).expect("wizard memory discovery should succeed");
-
-        assert!(memory > 0);
+        assert!(memory_bytes > 0);
     }
 
     #[test]
