@@ -623,6 +623,13 @@ fn configure_wizard_state(engine: &Engine, state: &mut WizardState) -> Result<()
     configure_wizard_storage(engine, state, &storage_inspector)
 }
 
+fn discover_wizard_cpu(engine: &Engine) -> Result<usize, String> {
+    engine
+        .discover_cpu()
+        .map(|cpu| cpu.logical_processor_count())
+        .map_err(|error| format!("Error discovering system CPU: {error}"))
+}
+
 fn discover_wizard_memory(engine: &Engine) -> Result<u64, String> {
     engine
         .discover_memory()
@@ -1059,6 +1066,16 @@ mod tests {
     use super::{BuildOptions, run};
     use std::path::PathBuf;
     use std::process::ExitCode;
+    #[test]
+    fn discovers_wizard_cpu() {
+        let engine = engine::Engine::from_registry(registry::Registry::new());
+
+        let logical_processor_count =
+            super::discover_wizard_cpu(&engine).expect("wizard CPU discovery should succeed");
+
+        assert!(logical_processor_count > 0);
+    }
+
     #[test]
     fn discovers_wizard_memory() {
         let engine = engine::Engine::from_registry(registry::Registry::new());
