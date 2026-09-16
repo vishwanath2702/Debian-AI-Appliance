@@ -134,6 +134,30 @@ impl fmt::Display for VerificationPolicyRevision {
     }
 }
 
+/// Stable identifier for a DAIA Verification Provider.
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub struct VerificationProviderId(String);
+
+impl VerificationProviderId {
+    /// Creates a Verification Provider identifier.
+    #[must_use]
+    pub fn new(value: impl Into<String>) -> Self {
+        Self(value.into())
+    }
+
+    /// Returns the Verification Provider identifier as a string slice.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl fmt::Display for VerificationProviderId {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.as_str())
+    }
+}
+
 /// Version of a DAIA Verification Rule.
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub struct VerificationRuleVersion(String);
@@ -1481,8 +1505,8 @@ mod tests {
         PackageManifest, PlanStep, ProviderId, ResourceId, ResourceType, SchemaVersion, StateBasis,
         StorageKind, StorageTarget, StorageTargetId, VerificationConditionId,
         VerificationConditionResult, VerificationEvidenceReference, VerificationPolicyRevision,
-        VerificationPurpose, VerificationRequest, VerificationResultId, VerificationRuleVersion,
-        VerificationTimestamp,
+        VerificationProviderId, VerificationPurpose, VerificationRequest, VerificationResultId,
+        VerificationRuleVersion, VerificationTimestamp,
     };
     use std::path::{Path, PathBuf};
 
@@ -1492,6 +1516,14 @@ mod tests {
 
         assert_eq!(component_id.as_str(), "reconciliation");
         assert_eq!(component_id.to_string(), "reconciliation");
+    }
+
+    #[test]
+    fn verification_provider_id_exposes_provider_identity() {
+        let provider_id = VerificationProviderId::new("system-service-verifier");
+
+        assert_eq!(provider_id.as_str(), "system-service-verifier");
+        assert_eq!(provider_id.to_string(), "system-service-verifier");
     }
 
     #[test]
