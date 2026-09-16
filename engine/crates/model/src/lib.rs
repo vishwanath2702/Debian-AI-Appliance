@@ -572,6 +572,36 @@ impl fmt::Display for VerificationConditionId {
     }
 }
 
+/// Expected condition declared by a DAIA Verification Request.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct VerificationCondition {
+    condition_id: VerificationConditionId,
+    mandatory: bool,
+}
+
+impl VerificationCondition {
+    /// Creates an expected verification condition.
+    #[must_use]
+    pub fn new(condition_id: VerificationConditionId, mandatory: bool) -> Self {
+        Self {
+            condition_id,
+            mandatory,
+        }
+    }
+
+    /// Returns the expected condition identifier.
+    #[must_use]
+    pub fn condition_id(&self) -> &VerificationConditionId {
+        &self.condition_id
+    }
+
+    /// Returns whether the condition is mandatory for verification.
+    #[must_use]
+    pub const fn is_mandatory(&self) -> bool {
+        self.mandatory
+    }
+}
+
 /// Result produced for one evaluated DAIA verification condition.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct VerificationConditionResult {
@@ -1718,11 +1748,12 @@ mod tests {
         EvidenceSourceId, ExternalContentItem, ExternalContentItemId, ImportedContentItem,
         InstallationIntent, Observation, ObservationSourceId, ObservationTimestamp,
         PackageManifest, PlanStep, ProviderId, ResourceId, ResourceType, SchemaVersion, StateBasis,
-        StorageKind, StorageTarget, StorageTargetId, VerificationConditionId,
-        VerificationConditionResult, VerificationEvidenceReference, VerificationOverallResult,
-        VerificationPolicyRevision, VerificationProviderId, VerificationProviderVersion,
-        VerificationPurpose, VerificationRequest, VerificationResult, VerificationResultId,
-        VerificationRuleReference, VerificationRuleVersion, VerificationTimestamp,
+        StorageKind, StorageTarget, StorageTargetId, VerificationCondition,
+        VerificationConditionId, VerificationConditionResult, VerificationEvidenceReference,
+        VerificationOverallResult, VerificationPolicyRevision, VerificationProviderId,
+        VerificationProviderVersion, VerificationPurpose, VerificationRequest, VerificationResult,
+        VerificationResultId, VerificationRuleReference, VerificationRuleVersion,
+        VerificationTimestamp,
     };
     use std::path::{Path, PathBuf};
 
@@ -1732,6 +1763,17 @@ mod tests {
 
         assert_eq!(component_id.as_str(), "reconciliation");
         assert_eq!(component_id.to_string(), "reconciliation");
+    }
+
+    #[test]
+    fn verification_condition_exposes_requirement() {
+        let mandatory = VerificationCondition::new(VerificationConditionId::new("running"), true);
+        let optional = VerificationCondition::new(VerificationConditionId::new("healthy"), false);
+
+        assert_eq!(mandatory.condition_id().as_str(), "running");
+        assert!(mandatory.is_mandatory());
+        assert_eq!(optional.condition_id().as_str(), "healthy");
+        assert!(!optional.is_mandatory());
     }
 
     #[test]
