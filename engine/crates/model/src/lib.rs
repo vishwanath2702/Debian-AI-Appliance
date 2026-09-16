@@ -491,6 +491,36 @@ impl fmt::Display for EvidenceId {
     }
 }
 
+/// Reference to evidence used by DAIA verification and when it was collected.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct VerificationEvidenceReference {
+    evidence_id: EvidenceId,
+    collected_at: ObservationTimestamp,
+}
+
+impl VerificationEvidenceReference {
+    /// Creates a reference to collected verification evidence.
+    #[must_use]
+    pub fn new(evidence_id: EvidenceId, collected_at: ObservationTimestamp) -> Self {
+        Self {
+            evidence_id,
+            collected_at,
+        }
+    }
+
+    /// Returns the evidence identifier.
+    #[must_use]
+    pub fn evidence_id(&self) -> &EvidenceId {
+        &self.evidence_id
+    }
+
+    /// Returns when the evidence was collected.
+    #[must_use]
+    pub fn collected_at(&self) -> &ObservationTimestamp {
+        &self.collected_at
+    }
+}
+
 /// Evidence collected from or about a DAIA managed resource.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Observation<T> {
@@ -1450,8 +1480,9 @@ mod tests {
         InstallationIntent, Observation, ObservationSourceId, ObservationTimestamp,
         PackageManifest, PlanStep, ProviderId, ResourceId, ResourceType, SchemaVersion, StateBasis,
         StorageKind, StorageTarget, StorageTargetId, VerificationConditionId,
-        VerificationConditionResult, VerificationPolicyRevision, VerificationPurpose,
-        VerificationRequest, VerificationResultId, VerificationRuleVersion, VerificationTimestamp,
+        VerificationConditionResult, VerificationEvidenceReference, VerificationPolicyRevision,
+        VerificationPurpose, VerificationRequest, VerificationResultId, VerificationRuleVersion,
+        VerificationTimestamp,
     };
     use std::path::{Path, PathBuf};
 
@@ -1461,6 +1492,17 @@ mod tests {
 
         assert_eq!(component_id.as_str(), "reconciliation");
         assert_eq!(component_id.to_string(), "reconciliation");
+    }
+
+    #[test]
+    fn verification_evidence_reference_exposes_identity_and_collection_time() {
+        let evidence = VerificationEvidenceReference::new(
+            EvidenceId::new("observation/service/42"),
+            ObservationTimestamp::new("2026-07-23T09:00:00Z"),
+        );
+
+        assert_eq!(evidence.evidence_id().as_str(), "observation/service/42");
+        assert_eq!(evidence.collected_at().as_str(), "2026-07-23T09:00:00Z");
     }
 
     #[test]
