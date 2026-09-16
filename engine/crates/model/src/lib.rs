@@ -86,6 +86,30 @@ impl fmt::Display for DesiredGeneration {
     }
 }
 
+/// Stable identifier for a DAIA architectural component.
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub struct ArchitecturalComponentId(String);
+
+impl ArchitecturalComponentId {
+    /// Creates an architectural component identifier.
+    #[must_use]
+    pub fn new(value: impl Into<String>) -> Self {
+        Self(value.into())
+    }
+
+    /// Returns the architectural component identifier as a string slice.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl fmt::Display for ArchitecturalComponentId {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.as_str())
+    }
+}
+
 /// Stable revision identifier for the verification policy used by DAIA.
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub struct VerificationPolicyRevision(String);
@@ -1204,17 +1228,25 @@ impl InstallationIntent {
 #[cfg(test)]
 mod tests {
     use super::{
-        Action, ApplianceConfiguration, AssetId, Capability, CapabilityId, ConditionResult,
-        ContentImportDestination, ContentImportIntent, ContentRepository, ContentRepositoryId,
-        ContentSource, ContentSourceId, CurrentRevision, DesiredGeneration, DiscoveredContent,
-        DiscoveredStorage, DiscoveredStorageId, EvidenceId, ExternalContentItem,
-        ExternalContentItemId, ImportedContentItem, InstallationIntent, Observation,
-        ObservationSourceId, ObservationTimestamp, PackageManifest, PlanStep, ProviderId,
-        ResourceId, ResourceType, SchemaVersion, StateBasis, StorageKind, StorageTarget,
-        StorageTargetId, VerificationConditionId, VerificationPolicyRevision, VerificationPurpose,
-        VerificationTimestamp,
+        Action, ApplianceConfiguration, ArchitecturalComponentId, AssetId, Capability,
+        CapabilityId, ConditionResult, ContentImportDestination, ContentImportIntent,
+        ContentRepository, ContentRepositoryId, ContentSource, ContentSourceId, CurrentRevision,
+        DesiredGeneration, DiscoveredContent, DiscoveredStorage, DiscoveredStorageId, EvidenceId,
+        ExternalContentItem, ExternalContentItemId, ImportedContentItem, InstallationIntent,
+        Observation, ObservationSourceId, ObservationTimestamp, PackageManifest, PlanStep,
+        ProviderId, ResourceId, ResourceType, SchemaVersion, StateBasis, StorageKind,
+        StorageTarget, StorageTargetId, VerificationConditionId, VerificationPolicyRevision,
+        VerificationPurpose, VerificationTimestamp,
     };
     use std::path::{Path, PathBuf};
+
+    #[test]
+    fn architectural_component_id_exposes_component_identity() {
+        let component_id = ArchitecturalComponentId::new("reconciliation");
+
+        assert_eq!(component_id.as_str(), "reconciliation");
+        assert_eq!(component_id.to_string(), "reconciliation");
+    }
 
     #[test]
     fn verification_policy_revision_exposes_policy_identity() {
