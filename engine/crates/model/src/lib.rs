@@ -445,7 +445,7 @@ pub struct VerificationRequest {
     purpose: VerificationPurpose,
     state_basis: StateBasis,
     desired_generation: Option<DesiredGeneration>,
-    expected_conditions: Vec<VerificationConditionId>,
+    expected_conditions: Vec<VerificationCondition>,
     evidence_ids: Vec<EvidenceId>,
     authorized_evidence_sources: Vec<EvidenceSourceId>,
     policy_revision: VerificationPolicyRevision,
@@ -464,7 +464,7 @@ impl VerificationRequest {
         purpose: VerificationPurpose,
         state_basis: StateBasis,
         desired_generation: Option<DesiredGeneration>,
-        expected_conditions: Vec<VerificationConditionId>,
+        expected_conditions: Vec<VerificationCondition>,
         evidence_ids: Vec<EvidenceId>,
         authorized_evidence_sources: Vec<EvidenceSourceId>,
         policy_revision: VerificationPolicyRevision,
@@ -518,7 +518,7 @@ impl VerificationRequest {
     }
 
     #[must_use]
-    pub fn expected_conditions(&self) -> &[VerificationConditionId] {
+    pub fn expected_conditions(&self) -> &[VerificationCondition] {
         &self.expected_conditions
     }
 
@@ -1962,8 +1962,8 @@ mod tests {
             StateBasis::new(DesiredGeneration::new(12), CurrentRevision::new(41)),
             Some(DesiredGeneration::new(12)),
             vec![
-                VerificationConditionId::new("present"),
-                VerificationConditionId::new("running"),
+                VerificationCondition::new(VerificationConditionId::new("present"), true),
+                VerificationCondition::new(VerificationConditionId::new("running"), true),
             ],
             vec![EvidenceId::new("observation/service/42")],
             vec![EvidenceSourceId::new("systemd")],
@@ -1987,13 +1987,17 @@ mod tests {
             request.desired_generation(),
             Some(DesiredGeneration::new(12))
         );
+        assert_eq!(request.expected_conditions().len(), 2);
         assert_eq!(
-            request.expected_conditions(),
-            &[
-                VerificationConditionId::new("present"),
-                VerificationConditionId::new("running"),
-            ]
+            request.expected_conditions()[0].condition_id().as_str(),
+            "present"
         );
+        assert!(request.expected_conditions()[0].is_mandatory());
+        assert_eq!(
+            request.expected_conditions()[1].condition_id().as_str(),
+            "running"
+        );
+        assert!(request.expected_conditions()[1].is_mandatory());
         assert_eq!(
             request.evidence_ids(),
             &[EvidenceId::new("observation/service/42")]
