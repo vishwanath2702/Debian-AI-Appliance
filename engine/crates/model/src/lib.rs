@@ -86,6 +86,30 @@ impl fmt::Display for DesiredGeneration {
     }
 }
 
+/// Stable revision identifier for the verification policy used by DAIA.
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub struct VerificationPolicyRevision(String);
+
+impl VerificationPolicyRevision {
+    /// Creates a verification policy revision identifier.
+    #[must_use]
+    pub fn new(value: impl Into<String>) -> Self {
+        Self(value.into())
+    }
+
+    /// Returns the verification policy revision as a string slice.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl fmt::Display for VerificationPolicyRevision {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.as_str())
+    }
+}
+
 /// Timestamp associated with a DAIA verification request or evaluation.
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub struct VerificationTimestamp(String);
@@ -1187,9 +1211,18 @@ mod tests {
         ExternalContentItemId, ImportedContentItem, InstallationIntent, Observation,
         ObservationSourceId, ObservationTimestamp, PackageManifest, PlanStep, ProviderId,
         ResourceId, ResourceType, SchemaVersion, StateBasis, StorageKind, StorageTarget,
-        StorageTargetId, VerificationConditionId, VerificationPurpose, VerificationTimestamp,
+        StorageTargetId, VerificationConditionId, VerificationPolicyRevision, VerificationPurpose,
+        VerificationTimestamp,
     };
     use std::path::{Path, PathBuf};
+
+    #[test]
+    fn verification_policy_revision_exposes_policy_identity() {
+        let revision = VerificationPolicyRevision::new("default-v1");
+
+        assert_eq!(revision.as_str(), "default-v1");
+        assert_eq!(revision.to_string(), "default-v1");
+    }
 
     #[test]
     fn verification_timestamp_exposes_its_representation() {
