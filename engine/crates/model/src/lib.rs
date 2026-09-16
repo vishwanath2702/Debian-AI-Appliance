@@ -420,6 +420,15 @@ impl VerificationConditionResult {
     }
 }
 
+/// Overall conclusion of DAIA verification for one managed resource.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub enum VerificationOverallResult {
+    Satisfied,
+    Unsatisfied,
+    Unknown,
+    Error,
+}
+
 /// Result of evaluating a DAIA verification condition.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum ConditionResult {
@@ -1528,9 +1537,10 @@ mod tests {
         InstallationIntent, Observation, ObservationSourceId, ObservationTimestamp,
         PackageManifest, PlanStep, ProviderId, ResourceId, ResourceType, SchemaVersion, StateBasis,
         StorageKind, StorageTarget, StorageTargetId, VerificationConditionId,
-        VerificationConditionResult, VerificationEvidenceReference, VerificationPolicyRevision,
-        VerificationProviderId, VerificationProviderVersion, VerificationPurpose,
-        VerificationRequest, VerificationResultId, VerificationRuleVersion, VerificationTimestamp,
+        VerificationConditionResult, VerificationEvidenceReference, VerificationOverallResult,
+        VerificationPolicyRevision, VerificationProviderId, VerificationProviderVersion,
+        VerificationPurpose, VerificationRequest, VerificationResultId, VerificationRuleVersion,
+        VerificationTimestamp,
     };
     use std::path::{Path, PathBuf};
 
@@ -1540,6 +1550,22 @@ mod tests {
 
         assert_eq!(component_id.as_str(), "reconciliation");
         assert_eq!(component_id.to_string(), "reconciliation");
+    }
+
+    #[test]
+    fn verification_overall_result_exposes_supported_outcomes() {
+        let outcomes = [
+            VerificationOverallResult::Satisfied,
+            VerificationOverallResult::Unsatisfied,
+            VerificationOverallResult::Unknown,
+            VerificationOverallResult::Error,
+        ];
+
+        assert_eq!(outcomes.len(), 4);
+        assert_ne!(
+            VerificationOverallResult::Unknown,
+            VerificationOverallResult::Error
+        );
     }
 
     #[test]
