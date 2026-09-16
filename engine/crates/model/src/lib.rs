@@ -134,6 +134,30 @@ impl fmt::Display for VerificationPolicyRevision {
     }
 }
 
+/// Version of a DAIA Verification Rule.
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub struct VerificationRuleVersion(String);
+
+impl VerificationRuleVersion {
+    /// Creates a Verification Rule version.
+    #[must_use]
+    pub fn new(value: impl Into<String>) -> Self {
+        Self(value.into())
+    }
+
+    /// Returns the Verification Rule version as a string slice.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl fmt::Display for VerificationRuleVersion {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.as_str())
+    }
+}
+
 /// Stable identifier for a DAIA Verification Result.
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub struct VerificationResultId(String);
@@ -1397,7 +1421,7 @@ mod tests {
         PackageManifest, PlanStep, ProviderId, ResourceId, ResourceType, SchemaVersion, StateBasis,
         StorageKind, StorageTarget, StorageTargetId, VerificationConditionId,
         VerificationPolicyRevision, VerificationPurpose, VerificationRequest, VerificationResultId,
-        VerificationTimestamp,
+        VerificationRuleVersion, VerificationTimestamp,
     };
     use std::path::{Path, PathBuf};
 
@@ -1407,6 +1431,14 @@ mod tests {
 
         assert_eq!(component_id.as_str(), "reconciliation");
         assert_eq!(component_id.to_string(), "reconciliation");
+    }
+
+    #[test]
+    fn verification_rule_version_exposes_rule_version() {
+        let version = VerificationRuleVersion::new("service-state-v1");
+
+        assert_eq!(version.as_str(), "service-state-v1");
+        assert_eq!(version.to_string(), "service-state-v1");
     }
 
     #[test]
