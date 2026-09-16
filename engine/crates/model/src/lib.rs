@@ -134,6 +134,30 @@ impl fmt::Display for VerificationPolicyRevision {
     }
 }
 
+/// Stable identifier for a DAIA Verification Result.
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub struct VerificationResultId(String);
+
+impl VerificationResultId {
+    /// Creates a Verification Result identifier.
+    #[must_use]
+    pub fn new(value: impl Into<String>) -> Self {
+        Self(value.into())
+    }
+
+    /// Returns the Verification Result identifier as a string slice.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl fmt::Display for VerificationResultId {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.as_str())
+    }
+}
+
 /// Timestamp associated with a DAIA verification request or evaluation.
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub struct VerificationTimestamp(String);
@@ -1372,7 +1396,7 @@ mod tests {
         InstallationIntent, Observation, ObservationSourceId, ObservationTimestamp,
         PackageManifest, PlanStep, ProviderId, ResourceId, ResourceType, SchemaVersion, StateBasis,
         StorageKind, StorageTarget, StorageTargetId, VerificationConditionId,
-        VerificationPolicyRevision, VerificationPurpose, VerificationRequest,
+        VerificationPolicyRevision, VerificationPurpose, VerificationRequest, VerificationResultId,
         VerificationTimestamp,
     };
     use std::path::{Path, PathBuf};
@@ -1383,6 +1407,14 @@ mod tests {
 
         assert_eq!(component_id.as_str(), "reconciliation");
         assert_eq!(component_id.to_string(), "reconciliation");
+    }
+
+    #[test]
+    fn verification_result_id_exposes_result_identity() {
+        let result_id = VerificationResultId::new("verification/service/ollama/42");
+
+        assert_eq!(result_id.as_str(), "verification/service/ollama/42");
+        assert_eq!(result_id.to_string(), "verification/service/ollama/42");
     }
 
     #[test]
