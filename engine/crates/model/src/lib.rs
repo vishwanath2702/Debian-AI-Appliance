@@ -158,6 +158,118 @@ impl fmt::Display for VerificationTimestamp {
     }
 }
 
+/// Request to evaluate declared conditions for one DAIA managed resource.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct VerificationRequest {
+    resource_id: ResourceId,
+    resource_type: ResourceType,
+    resource_schema_version: SchemaVersion,
+    purpose: VerificationPurpose,
+    state_basis: StateBasis,
+    desired_generation: Option<DesiredGeneration>,
+    expected_conditions: Vec<VerificationConditionId>,
+    evidence_ids: Vec<EvidenceId>,
+    authorized_evidence_sources: Vec<EvidenceSourceId>,
+    policy_revision: VerificationPolicyRevision,
+    requested_at: VerificationTimestamp,
+    requesting_component: ArchitecturalComponentId,
+}
+
+impl VerificationRequest {
+    /// Creates a verification request for one managed resource.
+    #[must_use]
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        resource_id: ResourceId,
+        resource_type: ResourceType,
+        resource_schema_version: SchemaVersion,
+        purpose: VerificationPurpose,
+        state_basis: StateBasis,
+        desired_generation: Option<DesiredGeneration>,
+        expected_conditions: Vec<VerificationConditionId>,
+        evidence_ids: Vec<EvidenceId>,
+        authorized_evidence_sources: Vec<EvidenceSourceId>,
+        policy_revision: VerificationPolicyRevision,
+        requested_at: VerificationTimestamp,
+        requesting_component: ArchitecturalComponentId,
+    ) -> Self {
+        Self {
+            resource_id,
+            resource_type,
+            resource_schema_version,
+            purpose,
+            state_basis,
+            desired_generation,
+            expected_conditions,
+            evidence_ids,
+            authorized_evidence_sources,
+            policy_revision,
+            requested_at,
+            requesting_component,
+        }
+    }
+
+    #[must_use]
+    pub fn resource_id(&self) -> &ResourceId {
+        &self.resource_id
+    }
+
+    #[must_use]
+    pub fn resource_type(&self) -> &ResourceType {
+        &self.resource_type
+    }
+
+    #[must_use]
+    pub const fn resource_schema_version(&self) -> SchemaVersion {
+        self.resource_schema_version
+    }
+
+    #[must_use]
+    pub const fn purpose(&self) -> VerificationPurpose {
+        self.purpose
+    }
+
+    #[must_use]
+    pub const fn state_basis(&self) -> StateBasis {
+        self.state_basis
+    }
+
+    #[must_use]
+    pub const fn desired_generation(&self) -> Option<DesiredGeneration> {
+        self.desired_generation
+    }
+
+    #[must_use]
+    pub fn expected_conditions(&self) -> &[VerificationConditionId] {
+        &self.expected_conditions
+    }
+
+    #[must_use]
+    pub fn evidence_ids(&self) -> &[EvidenceId] {
+        &self.evidence_ids
+    }
+
+    #[must_use]
+    pub fn authorized_evidence_sources(&self) -> &[EvidenceSourceId] {
+        &self.authorized_evidence_sources
+    }
+
+    #[must_use]
+    pub fn policy_revision(&self) -> &VerificationPolicyRevision {
+        &self.policy_revision
+    }
+
+    #[must_use]
+    pub fn requested_at(&self) -> &VerificationTimestamp {
+        &self.requested_at
+    }
+
+    #[must_use]
+    pub fn requesting_component(&self) -> &ArchitecturalComponentId {
+        &self.requesting_component
+    }
+}
+
 /// Stable identifier for a DAIA verification condition.
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub struct VerificationConditionId(String);
@@ -1260,7 +1372,8 @@ mod tests {
         InstallationIntent, Observation, ObservationSourceId, ObservationTimestamp,
         PackageManifest, PlanStep, ProviderId, ResourceId, ResourceType, SchemaVersion, StateBasis,
         StorageKind, StorageTarget, StorageTargetId, VerificationConditionId,
-        VerificationPolicyRevision, VerificationPurpose, VerificationTimestamp,
+        VerificationPolicyRevision, VerificationPurpose, VerificationRequest,
+        VerificationTimestamp,
     };
     use std::path::{Path, PathBuf};
 
@@ -1270,6 +1383,70 @@ mod tests {
 
         assert_eq!(component_id.as_str(), "reconciliation");
         assert_eq!(component_id.to_string(), "reconciliation");
+    }
+
+    #[test]
+    fn verification_request_exposes_request_contract() {
+        let request = VerificationRequest::new(
+            ResourceId::new("service/ollama"),
+            ResourceType::new("service"),
+            SchemaVersion::new(1),
+            VerificationPurpose::DesiredStateSatisfaction,
+            StateBasis::new(DesiredGeneration::new(12), CurrentRevision::new(41)),
+            Some(DesiredGeneration::new(12)),
+            vec![
+                VerificationConditionId::new("present"),
+                VerificationConditionId::new("running"),
+            ],
+            vec![EvidenceId::new("observation/service/42")],
+            vec![EvidenceSourceId::new("systemd")],
+            VerificationPolicyRevision::new("default-v1"),
+            VerificationTimestamp::new("2026-07-23T09:05:00Z"),
+            ArchitecturalComponentId::new("reconciliation"),
+        );
+
+        assert_eq!(request.resource_id(), &ResourceId::new("service/ollama"));
+        assert_eq!(request.resource_type(), &ResourceType::new("service"));
+        assert_eq!(request.resource_schema_version(), SchemaVersion::new(1));
+        assert_eq!(
+            request.purpose(),
+            VerificationPurpose::DesiredStateSatisfaction
+        );
+        assert_eq!(
+            request.state_basis(),
+            StateBasis::new(DesiredGeneration::new(12), CurrentRevision::new(41))
+        );
+        assert_eq!(
+            request.desired_generation(),
+            Some(DesiredGeneration::new(12))
+        );
+        assert_eq!(
+            request.expected_conditions(),
+            &[
+                VerificationConditionId::new("present"),
+                VerificationConditionId::new("running"),
+            ]
+        );
+        assert_eq!(
+            request.evidence_ids(),
+            &[EvidenceId::new("observation/service/42")]
+        );
+        assert_eq!(
+            request.authorized_evidence_sources(),
+            &[EvidenceSourceId::new("systemd")]
+        );
+        assert_eq!(
+            request.policy_revision(),
+            &VerificationPolicyRevision::new("default-v1")
+        );
+        assert_eq!(
+            request.requested_at(),
+            &VerificationTimestamp::new("2026-07-23T09:05:00Z")
+        );
+        assert_eq!(
+            request.requesting_component(),
+            &ArchitecturalComponentId::new("reconciliation")
+        );
     }
 
     #[test]
