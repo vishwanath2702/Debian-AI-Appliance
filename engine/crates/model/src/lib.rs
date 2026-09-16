@@ -206,6 +206,36 @@ impl fmt::Display for VerificationRuleVersion {
     }
 }
 
+/// Reference to the versioned Verification Rule applied to one condition.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct VerificationRuleReference {
+    condition_id: VerificationConditionId,
+    version: VerificationRuleVersion,
+}
+
+impl VerificationRuleReference {
+    /// Creates a reference to a versioned Verification Rule.
+    #[must_use]
+    pub fn new(condition_id: VerificationConditionId, version: VerificationRuleVersion) -> Self {
+        Self {
+            condition_id,
+            version,
+        }
+    }
+
+    /// Returns the condition evaluated by the rule.
+    #[must_use]
+    pub fn condition_id(&self) -> &VerificationConditionId {
+        &self.condition_id
+    }
+
+    /// Returns the applied Verification Rule version.
+    #[must_use]
+    pub fn version(&self) -> &VerificationRuleVersion {
+        &self.version
+    }
+}
+
 /// Stable identifier for a DAIA Verification Result.
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub struct VerificationResultId(String);
@@ -1539,8 +1569,8 @@ mod tests {
         StorageKind, StorageTarget, StorageTargetId, VerificationConditionId,
         VerificationConditionResult, VerificationEvidenceReference, VerificationOverallResult,
         VerificationPolicyRevision, VerificationProviderId, VerificationProviderVersion,
-        VerificationPurpose, VerificationRequest, VerificationResultId, VerificationRuleVersion,
-        VerificationTimestamp,
+        VerificationPurpose, VerificationRequest, VerificationResultId, VerificationRuleReference,
+        VerificationRuleVersion, VerificationTimestamp,
     };
     use std::path::{Path, PathBuf};
 
@@ -1550,6 +1580,17 @@ mod tests {
 
         assert_eq!(component_id.as_str(), "reconciliation");
         assert_eq!(component_id.to_string(), "reconciliation");
+    }
+
+    #[test]
+    fn verification_rule_reference_exposes_condition_and_version() {
+        let rule = VerificationRuleReference::new(
+            VerificationConditionId::new("running"),
+            VerificationRuleVersion::new("service-running-v1"),
+        );
+
+        assert_eq!(rule.condition_id().as_str(), "running");
+        assert_eq!(rule.version().as_str(), "service-running-v1");
     }
 
     #[test]
