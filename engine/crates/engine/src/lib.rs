@@ -5,6 +5,7 @@ mod bootstrapper;
 mod context;
 mod installation;
 mod mmdebstrap;
+mod verification;
 mod workflow;
 
 pub use installation::{
