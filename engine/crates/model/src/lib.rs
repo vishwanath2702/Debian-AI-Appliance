@@ -253,6 +253,30 @@ impl fmt::Display for ResourceId {
     }
 }
 
+/// Stable identifier for a source of DAIA verification evidence.
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub struct EvidenceSourceId(String);
+
+impl EvidenceSourceId {
+    /// Creates an evidence source identifier.
+    #[must_use]
+    pub fn new(value: impl Into<String>) -> Self {
+        Self(value.into())
+    }
+
+    /// Returns the evidence source identifier as a string slice.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl fmt::Display for EvidenceSourceId {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.as_str())
+    }
+}
+
 /// Stable identifier for evidence submitted to DAIA verification.
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub struct EvidenceId(String);
@@ -1232,11 +1256,11 @@ mod tests {
         CapabilityId, ConditionResult, ContentImportDestination, ContentImportIntent,
         ContentRepository, ContentRepositoryId, ContentSource, ContentSourceId, CurrentRevision,
         DesiredGeneration, DiscoveredContent, DiscoveredStorage, DiscoveredStorageId, EvidenceId,
-        ExternalContentItem, ExternalContentItemId, ImportedContentItem, InstallationIntent,
-        Observation, ObservationSourceId, ObservationTimestamp, PackageManifest, PlanStep,
-        ProviderId, ResourceId, ResourceType, SchemaVersion, StateBasis, StorageKind,
-        StorageTarget, StorageTargetId, VerificationConditionId, VerificationPolicyRevision,
-        VerificationPurpose, VerificationTimestamp,
+        EvidenceSourceId, ExternalContentItem, ExternalContentItemId, ImportedContentItem,
+        InstallationIntent, Observation, ObservationSourceId, ObservationTimestamp,
+        PackageManifest, PlanStep, ProviderId, ResourceId, ResourceType, SchemaVersion, StateBasis,
+        StorageKind, StorageTarget, StorageTargetId, VerificationConditionId,
+        VerificationPolicyRevision, VerificationPurpose, VerificationTimestamp,
     };
     use std::path::{Path, PathBuf};
 
@@ -1262,6 +1286,14 @@ mod tests {
 
         assert_eq!(timestamp.as_str(), "2026-07-23T09:05:00Z");
         assert_eq!(timestamp.to_string(), "2026-07-23T09:05:00Z");
+    }
+
+    #[test]
+    fn evidence_source_id_exposes_source_identity() {
+        let source_id = EvidenceSourceId::new("systemd");
+
+        assert_eq!(source_id.as_str(), "systemd");
+        assert_eq!(source_id.to_string(), "systemd");
     }
 
     #[test]
