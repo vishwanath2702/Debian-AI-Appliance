@@ -236,6 +236,158 @@ impl VerificationRuleReference {
     }
 }
 
+/// Immutable conclusion produced by DAIA verification for one managed resource.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct VerificationResult {
+    result_id: VerificationResultId,
+    resource_id: ResourceId,
+    resource_type: ResourceType,
+    purpose: VerificationPurpose,
+    state_basis: StateBasis,
+    desired_generation: Option<DesiredGeneration>,
+    policy_revision: VerificationPolicyRevision,
+    rules: Vec<VerificationRuleReference>,
+    evidence: Vec<VerificationEvidenceReference>,
+    verified_at: VerificationTimestamp,
+    conditions: Vec<VerificationConditionResult>,
+    overall_result: VerificationOverallResult,
+    reasons: Vec<String>,
+    warnings: Vec<String>,
+    provider_id: VerificationProviderId,
+    provider_version: VerificationProviderVersion,
+    result_schema_version: SchemaVersion,
+}
+
+impl VerificationResult {
+    /// Creates an immutable Verification Result.
+    #[must_use]
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        result_id: VerificationResultId,
+        resource_id: ResourceId,
+        resource_type: ResourceType,
+        purpose: VerificationPurpose,
+        state_basis: StateBasis,
+        desired_generation: Option<DesiredGeneration>,
+        policy_revision: VerificationPolicyRevision,
+        rules: Vec<VerificationRuleReference>,
+        evidence: Vec<VerificationEvidenceReference>,
+        verified_at: VerificationTimestamp,
+        conditions: Vec<VerificationConditionResult>,
+        overall_result: VerificationOverallResult,
+        reasons: Vec<String>,
+        warnings: Vec<String>,
+        provider_id: VerificationProviderId,
+        provider_version: VerificationProviderVersion,
+        result_schema_version: SchemaVersion,
+    ) -> Self {
+        Self {
+            result_id,
+            resource_id,
+            resource_type,
+            purpose,
+            state_basis,
+            desired_generation,
+            policy_revision,
+            rules,
+            evidence,
+            verified_at,
+            conditions,
+            overall_result,
+            reasons,
+            warnings,
+            provider_id,
+            provider_version,
+            result_schema_version,
+        }
+    }
+
+    #[must_use]
+    pub fn result_id(&self) -> &VerificationResultId {
+        &self.result_id
+    }
+
+    #[must_use]
+    pub fn resource_id(&self) -> &ResourceId {
+        &self.resource_id
+    }
+
+    #[must_use]
+    pub fn resource_type(&self) -> &ResourceType {
+        &self.resource_type
+    }
+
+    #[must_use]
+    pub const fn purpose(&self) -> VerificationPurpose {
+        self.purpose
+    }
+
+    #[must_use]
+    pub const fn state_basis(&self) -> StateBasis {
+        self.state_basis
+    }
+
+    #[must_use]
+    pub const fn desired_generation(&self) -> Option<DesiredGeneration> {
+        self.desired_generation
+    }
+
+    #[must_use]
+    pub fn policy_revision(&self) -> &VerificationPolicyRevision {
+        &self.policy_revision
+    }
+
+    #[must_use]
+    pub fn rules(&self) -> &[VerificationRuleReference] {
+        &self.rules
+    }
+
+    #[must_use]
+    pub fn evidence(&self) -> &[VerificationEvidenceReference] {
+        &self.evidence
+    }
+
+    #[must_use]
+    pub fn verified_at(&self) -> &VerificationTimestamp {
+        &self.verified_at
+    }
+
+    #[must_use]
+    pub fn conditions(&self) -> &[VerificationConditionResult] {
+        &self.conditions
+    }
+
+    #[must_use]
+    pub const fn overall_result(&self) -> VerificationOverallResult {
+        self.overall_result
+    }
+
+    #[must_use]
+    pub fn reasons(&self) -> &[String] {
+        &self.reasons
+    }
+
+    #[must_use]
+    pub fn warnings(&self) -> &[String] {
+        &self.warnings
+    }
+
+    #[must_use]
+    pub fn provider_id(&self) -> &VerificationProviderId {
+        &self.provider_id
+    }
+
+    #[must_use]
+    pub fn provider_version(&self) -> &VerificationProviderVersion {
+        &self.provider_version
+    }
+
+    #[must_use]
+    pub const fn result_schema_version(&self) -> SchemaVersion {
+        self.result_schema_version
+    }
+}
+
 /// Stable identifier for a DAIA Verification Result.
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub struct VerificationResultId(String);
@@ -1569,8 +1721,8 @@ mod tests {
         StorageKind, StorageTarget, StorageTargetId, VerificationConditionId,
         VerificationConditionResult, VerificationEvidenceReference, VerificationOverallResult,
         VerificationPolicyRevision, VerificationProviderId, VerificationProviderVersion,
-        VerificationPurpose, VerificationRequest, VerificationResultId, VerificationRuleReference,
-        VerificationRuleVersion, VerificationTimestamp,
+        VerificationPurpose, VerificationRequest, VerificationResult, VerificationResultId,
+        VerificationRuleReference, VerificationRuleVersion, VerificationTimestamp,
     };
     use std::path::{Path, PathBuf};
 
@@ -1653,6 +1805,101 @@ mod tests {
 
         assert_eq!(version.as_str(), "service-state-v1");
         assert_eq!(version.to_string(), "service-state-v1");
+    }
+
+    #[test]
+    fn verification_result_exposes_result_contract() {
+        let result = VerificationResult::new(
+            VerificationResultId::new("verification/service/ollama/42"),
+            ResourceId::new("service/ollama"),
+            ResourceType::new("service"),
+            VerificationPurpose::DesiredStateSatisfaction,
+            StateBasis::new(DesiredGeneration::new(12), CurrentRevision::new(41)),
+            Some(DesiredGeneration::new(12)),
+            VerificationPolicyRevision::new("default-v1"),
+            vec![VerificationRuleReference::new(
+                VerificationConditionId::new("running"),
+                VerificationRuleVersion::new("service-running-v1"),
+            )],
+            vec![VerificationEvidenceReference::new(
+                EvidenceId::new("observation/service/42"),
+                ObservationTimestamp::new("2026-07-23T09:00:00Z"),
+            )],
+            VerificationTimestamp::new("2026-07-23T09:05:00Z"),
+            vec![VerificationConditionResult::new(
+                VerificationConditionId::new("running"),
+                ConditionResult::Satisfied,
+            )],
+            VerificationOverallResult::Satisfied,
+            vec!["acceptable evidence proves the service is running".into()],
+            vec!["evidence approaches its freshness limit".into()],
+            VerificationProviderId::new("system-service-verifier"),
+            VerificationProviderVersion::new("system-service-verifier-v1"),
+            SchemaVersion::new(1),
+        );
+
+        assert_eq!(
+            result.result_id(),
+            &VerificationResultId::new("verification/service/ollama/42")
+        );
+        assert_eq!(result.resource_id(), &ResourceId::new("service/ollama"));
+        assert_eq!(result.resource_type(), &ResourceType::new("service"));
+        assert_eq!(
+            result.purpose(),
+            VerificationPurpose::DesiredStateSatisfaction
+        );
+        assert_eq!(
+            result.state_basis(),
+            StateBasis::new(DesiredGeneration::new(12), CurrentRevision::new(41))
+        );
+        assert_eq!(
+            result.desired_generation(),
+            Some(DesiredGeneration::new(12))
+        );
+        assert_eq!(
+            result.policy_revision(),
+            &VerificationPolicyRevision::new("default-v1")
+        );
+
+        assert_eq!(result.rules().len(), 1);
+        assert_eq!(result.rules()[0].condition_id().as_str(), "running");
+        assert_eq!(result.rules()[0].version().as_str(), "service-running-v1");
+
+        assert_eq!(result.evidence().len(), 1);
+        assert_eq!(
+            result.evidence()[0].evidence_id().as_str(),
+            "observation/service/42"
+        );
+        assert_eq!(
+            result.evidence()[0].collected_at().as_str(),
+            "2026-07-23T09:00:00Z"
+        );
+
+        assert_eq!(result.verified_at().as_str(), "2026-07-23T09:05:00Z");
+        assert_eq!(result.conditions().len(), 1);
+        assert_eq!(result.conditions()[0].condition_id().as_str(), "running");
+        assert_eq!(result.conditions()[0].result(), ConditionResult::Satisfied);
+        assert_eq!(
+            result.overall_result(),
+            VerificationOverallResult::Satisfied
+        );
+        assert_eq!(
+            result.reasons(),
+            &["acceptable evidence proves the service is running"]
+        );
+        assert_eq!(
+            result.warnings(),
+            &["evidence approaches its freshness limit"]
+        );
+        assert_eq!(
+            result.provider_id(),
+            &VerificationProviderId::new("system-service-verifier")
+        );
+        assert_eq!(
+            result.provider_version(),
+            &VerificationProviderVersion::new("system-service-verifier-v1")
+        );
+        assert_eq!(result.result_schema_version(), SchemaVersion::new(1));
     }
 
     #[test]
