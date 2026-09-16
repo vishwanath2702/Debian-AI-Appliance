@@ -342,6 +342,36 @@ impl fmt::Display for VerificationConditionId {
     }
 }
 
+/// Result produced for one evaluated DAIA verification condition.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct VerificationConditionResult {
+    condition_id: VerificationConditionId,
+    result: ConditionResult,
+}
+
+impl VerificationConditionResult {
+    /// Creates the result for one evaluated verification condition.
+    #[must_use]
+    pub fn new(condition_id: VerificationConditionId, result: ConditionResult) -> Self {
+        Self {
+            condition_id,
+            result,
+        }
+    }
+
+    /// Returns the evaluated condition identifier.
+    #[must_use]
+    pub fn condition_id(&self) -> &VerificationConditionId {
+        &self.condition_id
+    }
+
+    /// Returns the condition evaluation result.
+    #[must_use]
+    pub const fn result(&self) -> ConditionResult {
+        self.result
+    }
+}
+
 /// Result of evaluating a DAIA verification condition.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum ConditionResult {
@@ -1420,8 +1450,8 @@ mod tests {
         InstallationIntent, Observation, ObservationSourceId, ObservationTimestamp,
         PackageManifest, PlanStep, ProviderId, ResourceId, ResourceType, SchemaVersion, StateBasis,
         StorageKind, StorageTarget, StorageTargetId, VerificationConditionId,
-        VerificationPolicyRevision, VerificationPurpose, VerificationRequest, VerificationResultId,
-        VerificationRuleVersion, VerificationTimestamp,
+        VerificationConditionResult, VerificationPolicyRevision, VerificationPurpose,
+        VerificationRequest, VerificationResultId, VerificationRuleVersion, VerificationTimestamp,
     };
     use std::path::{Path, PathBuf};
 
@@ -1431,6 +1461,17 @@ mod tests {
 
         assert_eq!(component_id.as_str(), "reconciliation");
         assert_eq!(component_id.to_string(), "reconciliation");
+    }
+
+    #[test]
+    fn verification_condition_result_exposes_condition_and_result() {
+        let condition = VerificationConditionResult::new(
+            VerificationConditionId::new("running"),
+            ConditionResult::Satisfied,
+        );
+
+        assert_eq!(condition.condition_id().as_str(), "running");
+        assert_eq!(condition.result(), ConditionResult::Satisfied);
     }
 
     #[test]
