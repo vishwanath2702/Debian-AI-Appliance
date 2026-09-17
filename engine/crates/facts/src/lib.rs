@@ -50,29 +50,40 @@ impl HardwareFacts {
 }
 
 /// Service information discovered from the current system.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ServiceFacts {
     present: bool,
     enabled: bool,
+    active_state: String,
 }
 
 impl ServiceFacts {
-    /// Creates service facts from discovered presence and enablement state.
+    /// Creates service facts from discovered presence, enablement, and active state.
     #[must_use]
-    pub const fn new(present: bool, enabled: bool) -> Self {
-        Self { present, enabled }
+    pub fn new(present: bool, enabled: bool, active_state: impl Into<String>) -> Self {
+        Self {
+            present,
+            enabled,
+            active_state: active_state.into(),
+        }
     }
 
     /// Returns whether the service is present on the system.
     #[must_use]
-    pub const fn is_present(self) -> bool {
+    pub const fn is_present(&self) -> bool {
         self.present
     }
 
     /// Returns whether the service is enabled.
     #[must_use]
-    pub const fn is_enabled(self) -> bool {
+    pub const fn is_enabled(&self) -> bool {
         self.enabled
+    }
+
+    /// Returns the observed service active state.
+    #[must_use]
+    pub fn active_state(&self) -> &str {
+        &self.active_state
     }
 }
 
@@ -223,11 +234,12 @@ mod tests {
     }
 
     #[test]
-    fn service_facts_exposes_presence_and_enablement() {
-        let facts = ServiceFacts::new(true, true);
+    fn service_facts_exposes_observed_state() {
+        let facts = ServiceFacts::new(true, true, "active");
 
         assert!(facts.is_present());
         assert!(facts.is_enabled());
+        assert_eq!(facts.active_state(), "active");
     }
 
     #[test]
