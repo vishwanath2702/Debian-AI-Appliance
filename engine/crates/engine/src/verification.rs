@@ -1,9 +1,9 @@
 use model::{
-    ConditionResult, CurrentStateProposal, SchemaVersion, ServiceDesiredState,
-    VerificationConditionId, VerificationConditionResult, VerificationEvidenceReference,
-    VerificationOverallResult, VerificationProviderId, VerificationProviderVersion,
-    VerificationPurpose, VerificationRequest, VerificationResult, VerificationResultId,
-    VerificationRuleReference, VerificationTimestamp,
+    ConditionResult, CurrentResource, CurrentRevision, CurrentStateProposal, SchemaVersion,
+    ServiceDesiredState, VerificationConditionId, VerificationConditionResult,
+    VerificationEvidenceReference, VerificationOverallResult, VerificationProviderId,
+    VerificationProviderVersion, VerificationPurpose, VerificationRequest, VerificationResult,
+    VerificationResultId, VerificationRuleReference, VerificationTimestamp,
 };
 
 fn service_running(active_state: &str) -> Option<bool> {
@@ -134,10 +134,33 @@ pub(crate) fn current_state_proposal_is_acceptable<T>(
         && verification_matches_current_state_proposal(verification, proposal)
 }
 
+pub(crate) fn accept_current_state_proposal<T>(
+    proposal: CurrentStateProposal<T>,
+    verification: &VerificationResult,
+    revision: CurrentRevision,
+) -> Option<CurrentResource<T>> {
+    if !current_state_proposal_is_acceptable(&proposal, verification) {
+        return None;
+    }
+
+    let resource_id = proposal.resource_id().clone();
+    let resource_type = proposal.resource_type().clone();
+    let schema_version = proposal.schema_version();
+    let proposed = proposal.into_proposed();
+
+    Some(CurrentResource::new(
+        resource_id,
+        resource_type,
+        schema_version,
+        revision,
+        proposed,
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        aggregate_verification_result, build_verification_result,
+        accept_current_state_proposal, aggregate_verification_result, build_verification_result,
         current_state_proposal_is_acceptable, evaluate_service, service_running,
         verification_eligible_for_current_state, verification_matches_current_state_proposal,
     };
@@ -175,6 +198,64 @@ mod tests {
             VerificationTimestamp::new("2026-09-17T00:00:00Z"),
             ArchitecturalComponentId::new("test"),
         )
+    }
+
+    #[test]
+    fn accepts_current_state_proposal_with_caller_supplied_revision() {
+        let proposal = CurrentStateProposal::new(
+            ResourceId::new("service/ollama"),
+            ResourceType::new("service"),
+            SchemaVersion::new(1),
+            ServiceCurrentState::new(true, true, true),
+        );
+        let verification = VerificationResult::new(
+            VerificationResultId::new("verification/service/ollama/1"),
+            ResourceId::new("service/ollama"),
+            ResourceType::new("service"),
+            VerificationPurpose::CurrentStateEstablishment,
+            StateBasis::new(DesiredGeneration::new(1), CurrentRevision::new(1)),
+            Some(DesiredGeneration::new(1)),
+            VerificationPolicyRevision::new("default-v1"),
+            Vec::new(),
+            Vec::new(),
+            VerificationTimestamp::new("2026-09-17T00:01:00Z"),
+            Vec::new(),
+            VerificationOverallResult::Satisfied,
+            Vec::new(),
+            Vec::new(),
+            VerificationProviderId::new("system-service-verifier"),
+            VerificationProviderVersion::new("system-service-verifier-v1"),
+            SchemaVersion::new(1),
+        );
+
+        let current =
+            accept_current_state_proposal(proposal, &verification, CurrentRevision::new(2))
+                .expect("eligible matching proposal should be accepted");
+
+        assert_eq!(current.resource_id().as_str(), "service/ollama");
+        assert_eq!(current.resource_type().as_str(), "service");
+        assert_eq!(current.schema_version(), SchemaVersion::new(1));
+        assert_eq!(current.revision(), CurrentRevision::new(2));
+        assert_eq!(
+            current.current(),
+            &ServiceCurrentState::new(true, true, true)
+        );
+
+        let rejected_proposal = CurrentStateProposal::new(
+            ResourceId::new("service/other"),
+            ResourceType::new("service"),
+            SchemaVersion::new(1),
+            ServiceCurrentState::new(true, true, true),
+        );
+
+        assert!(
+            accept_current_state_proposal(
+                rejected_proposal,
+                &verification,
+                CurrentRevision::new(3),
+            )
+            .is_none()
+        );
     }
 
     #[test]
