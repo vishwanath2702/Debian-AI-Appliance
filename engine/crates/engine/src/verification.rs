@@ -1,6 +1,46 @@
 use model::{
-    ConditionResult, VerificationConditionResult, VerificationOverallResult, VerificationRequest,
+    ConditionResult, ServiceDesiredState, VerificationConditionId, VerificationConditionResult,
+    VerificationOverallResult, VerificationRequest,
 };
+
+fn service_running(active_state: &str) -> Option<bool> {
+    match active_state {
+        "active" | "reloading" => Some(true),
+        "inactive" | "failed" => Some(false),
+        "activating" | "deactivating" => None,
+        _ => None,
+    }
+}
+
+pub(crate) fn evaluate_service(
+    desired: &ServiceDesiredState,
+    observed: &facts::ServiceFacts,
+) -> Vec<VerificationConditionResult> {
+    let condition = |name, satisfied| {
+        VerificationConditionResult::new(
+            VerificationConditionId::new(name),
+            if satisfied {
+                ConditionResult::Satisfied
+            } else {
+                ConditionResult::Unsatisfied
+            },
+        )
+    };
+
+    let running = match service_running(observed.active_state()) {
+        Some(running) => condition("running", running == desired.is_running()),
+        None => VerificationConditionResult::new(
+            VerificationConditionId::new("running"),
+            ConditionResult::Unknown,
+        ),
+    };
+
+    vec![
+        condition("present", observed.is_present() == desired.is_present()),
+        condition("enabled", observed.is_enabled() == desired.is_enabled()),
+        running,
+    ]
+}
 
 pub(crate) fn aggregate_verification_result(
     request: &VerificationRequest,
@@ -37,10 +77,10 @@ pub(crate) fn aggregate_verification_result(
 
 #[cfg(test)]
 mod tests {
-    use super::aggregate_verification_result;
+    use super::{aggregate_verification_result, evaluate_service, service_running};
     use model::{
         ArchitecturalComponentId, ConditionResult, CurrentRevision, DesiredGeneration,
-        EvidenceSourceId, ResourceId, ResourceType, SchemaVersion, StateBasis,
+        EvidenceSourceId, ResourceId, ResourceType, SchemaVersion, ServiceDesiredState, StateBasis,
         VerificationCondition, VerificationConditionId, VerificationConditionResult,
         VerificationOverallResult, VerificationPolicyRevision, VerificationPurpose,
         VerificationRequest, VerificationTimestamp,
@@ -69,6 +109,57 @@ mod tests {
             VerificationTimestamp::new("2026-09-17T00:00:00Z"),
             ArchitecturalComponentId::new("test"),
         )
+    }
+
+    #[test]
+    fn evaluates_service_desired_state_against_observed_facts() {
+        let desired = ServiceDesiredState::new(true, true, true);
+        let observed = facts::ServiceFacts::new(true, true, "active");
+
+        assert_eq!(
+            evaluate_service(&desired, &observed),
+            vec![
+                result("present", ConditionResult::Satisfied),
+                result("enabled", ConditionResult::Satisfied),
+                result("running", ConditionResult::Satisfied),
+            ]
+        );
+
+        let desired = ServiceDesiredState::new(true, false, false);
+        let observed = facts::ServiceFacts::new(true, true, "inactive");
+
+        assert_eq!(
+            evaluate_service(&desired, &observed),
+            vec![
+                result("present", ConditionResult::Satisfied),
+                result("enabled", ConditionResult::Unsatisfied),
+                result("running", ConditionResult::Satisfied),
+            ]
+        );
+
+        let observed = facts::ServiceFacts::new(true, false, "activating");
+
+        assert_eq!(
+            evaluate_service(&desired, &observed),
+            vec![
+                result("present", ConditionResult::Satisfied),
+                result("enabled", ConditionResult::Satisfied),
+                result("running", ConditionResult::Unknown),
+            ]
+        );
+    }
+
+    #[test]
+    fn interprets_systemd_active_state_as_service_running_state() {
+        assert_eq!(service_running("active"), Some(true));
+        assert_eq!(service_running("reloading"), Some(true));
+
+        assert_eq!(service_running("inactive"), Some(false));
+        assert_eq!(service_running("failed"), Some(false));
+
+        assert_eq!(service_running("activating"), None);
+        assert_eq!(service_running("deactivating"), None);
+        assert_eq!(service_running("maintenance"), None);
     }
 
     #[test]

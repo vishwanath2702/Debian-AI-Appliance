@@ -33,8 +33,9 @@ use model::{
     ApplianceProfile, Capability, ContentImportDestination, ContentImportIntent, ContentRepository,
     ContentRepositoryId, ContentSource, DiscoveredContent, DiscoveredStorage, ExternalContentItem,
     ExternalContentItemId, ImportedContentItem, InstallationIntent, Observation,
-    ObservationSourceId, ObservationTimestamp, Plan, ResourceId, SchemaVersion, StorageKind,
-    VerificationConditionResult, VerificationOverallResult, VerificationRequest,
+    ObservationSourceId, ObservationTimestamp, Plan, ResourceId, SchemaVersion,
+    ServiceDesiredState, StorageKind, VerificationConditionResult, VerificationOverallResult,
+    VerificationRequest,
 };
 
 use planner::{PlanError, Planner};
@@ -552,6 +553,15 @@ impl Engine {
         condition_results: &[VerificationConditionResult],
     ) -> VerificationOverallResult {
         verification::aggregate_verification_result(request, condition_results)
+    }
+
+    /// Evaluates desired service state against observed service facts.
+    pub fn evaluate_service_verification(
+        &self,
+        desired: &ServiceDesiredState,
+        observed: &facts::ServiceFacts,
+    ) -> Vec<VerificationConditionResult> {
+        verification::evaluate_service(desired, observed)
     }
 
     /// Observes hardware facts for the current system.
@@ -2236,6 +2246,31 @@ mod tests {
         assert_eq!(
             discovered[0].path(),
             std::path::Path::new("/media/daia/models")
+        );
+    }
+
+    #[test]
+    fn evaluates_service_verification_through_engine() {
+        let engine = Engine::from_registry(desktop_registry());
+        let desired = model::ServiceDesiredState::new(true, false, false);
+        let observed = facts::ServiceFacts::new(true, true, "inactive");
+
+        assert_eq!(
+            engine.evaluate_service_verification(&desired, &observed),
+            vec![
+                model::VerificationConditionResult::new(
+                    model::VerificationConditionId::new("present"),
+                    model::ConditionResult::Satisfied,
+                ),
+                model::VerificationConditionResult::new(
+                    model::VerificationConditionId::new("enabled"),
+                    model::ConditionResult::Unsatisfied,
+                ),
+                model::VerificationConditionResult::new(
+                    model::VerificationConditionId::new("running"),
+                    model::ConditionResult::Satisfied,
+                ),
+            ]
         );
     }
 
