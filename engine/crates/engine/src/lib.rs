@@ -574,6 +574,36 @@ impl Engine {
         ))
     }
 
+    /// Observes service facts for the current system.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the service facts cannot be discovered.
+    pub fn observe_service(
+        &self,
+        service: &str,
+        collected_at: ObservationTimestamp,
+    ) -> std::io::Result<Observation<facts::ServiceFacts>> {
+        let service_facts = self.discover_service(service)?;
+
+        Ok(Observation::new(
+            ResourceId::new(format!("service/{service}")),
+            ObservationSourceId::new("system-service-observer"),
+            collected_at,
+            SchemaVersion::new(1),
+            service_facts,
+        ))
+    }
+
+    /// Discovers service facts for the current system.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the service facts cannot be discovered.
+    pub fn discover_service(&self, service: &str) -> std::io::Result<facts::ServiceFacts> {
+        facts::discover_service(&format!("{service}.service"))
+    }
+
     /// Discovers CPU facts for the current system.
     ///
     /// # Errors
