@@ -38,6 +38,26 @@ fn service_state_differences(
     differences
 }
 
+trait ServiceTransitionExecutor {
+    type Error;
+
+    fn execute(&mut self, transition: ServiceTransition) -> Result<(), Self::Error>;
+}
+
+fn execute_service_transitions<E>(
+    transitions: &[ServiceTransition],
+    executor: &mut E,
+) -> Result<(), E::Error>
+where
+    E: ServiceTransitionExecutor,
+{
+    for transition in transitions {
+        executor.execute(*transition)?;
+    }
+
+    Ok(())
+}
+
 fn service_transitions(
     desired: &ServiceDesiredState,
     current: &ServiceCurrentState,
@@ -81,10 +101,40 @@ pub(crate) fn service_state_differs(
 #[cfg(test)]
 mod tests {
     use super::{
-        ServiceStateDifference, ServiceTransition, service_state_differences,
-        service_state_differs, service_transitions,
+        ServiceStateDifference, ServiceTransition, ServiceTransitionExecutor,
+        execute_service_transitions, service_state_differences, service_state_differs,
+        service_transitions,
     };
     use model::{ServiceCurrentState, ServiceDesiredState};
+
+    struct RecordingServiceTransitionExecutor {
+        transitions: Vec<ServiceTransition>,
+    }
+
+    impl ServiceTransitionExecutor for RecordingServiceTransitionExecutor {
+        type Error = ();
+
+        fn execute(&mut self, transition: ServiceTransition) -> Result<(), Self::Error> {
+            self.transitions.push(transition);
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn executes_service_transitions_in_order() {
+        let transitions = vec![
+            ServiceTransition::Install,
+            ServiceTransition::Enable,
+            ServiceTransition::Start,
+        ];
+        let mut executor = RecordingServiceTransitionExecutor {
+            transitions: Vec::new(),
+        };
+
+        execute_service_transitions(&transitions, &mut executor).unwrap();
+
+        assert_eq!(executor.transitions, transitions);
+    }
 
     #[test]
     fn identifies_service_state_differences() {
