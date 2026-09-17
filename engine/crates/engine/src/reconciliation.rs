@@ -48,6 +48,23 @@ trait ServiceCommandRunner {
     fn status(&mut self, command: &mut std::process::Command) -> std::io::Result<()>;
 }
 
+#[derive(Clone, Copy, Debug, Default)]
+struct ProcessServiceCommandRunner;
+
+impl ServiceCommandRunner for ProcessServiceCommandRunner {
+    fn status(&mut self, command: &mut std::process::Command) -> std::io::Result<()> {
+        let status = command.status()?;
+
+        if status.success() {
+            Ok(())
+        } else {
+            Err(std::io::Error::other(format!(
+                "service command exited unsuccessfully: {status}"
+            )))
+        }
+    }
+}
+
 struct SystemServiceTransitionExecutor<R> {
     runner: R,
 }
