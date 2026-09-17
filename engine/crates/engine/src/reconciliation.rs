@@ -179,6 +179,15 @@ pub(crate) fn service_state_differs(
     !service_transitions(desired, current).is_empty()
 }
 
+pub(crate) fn reconcile_service_system(
+    service: &str,
+    desired: &ServiceDesiredState,
+    current: &ServiceCurrentState,
+) -> std::io::Result<()> {
+    let mut executor = SystemServiceTransitionExecutor::new(ProcessServiceCommandRunner);
+    reconcile_service(service, desired, current, &mut executor)
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
