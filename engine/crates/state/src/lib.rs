@@ -100,9 +100,44 @@ impl ApplianceState {
     }
 }
 
+/// Holds the accepted Current State for one managed resource.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CurrentState<T> {
+    current: model::CurrentResource<T>,
+}
+
+impl<T> CurrentState<T> {
+    /// Creates Current State from an already accepted resource.
+    #[must_use]
+    pub const fn new(current: model::CurrentResource<T>) -> Self {
+        Self { current }
+    }
+
+    /// Returns the accepted current resource.
+    #[must_use]
+    pub const fn current(&self) -> &model::CurrentResource<T> {
+        &self.current
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::ApplianceState;
+    use super::{ApplianceState, CurrentState};
+
+    #[test]
+    fn stores_accepted_current_resource() {
+        let resource = model::CurrentResource::new(
+            model::ResourceId::new("service/ollama"),
+            model::ResourceType::new("service"),
+            model::SchemaVersion::new(1),
+            model::CurrentRevision::new(2),
+            model::ServiceCurrentState::new(true, true, true),
+        );
+
+        let state = CurrentState::new(resource.clone());
+
+        assert_eq!(state.current(), &resource);
+    }
 
     #[test]
     fn appliance_state_path_is_beneath_appliance_root() {
