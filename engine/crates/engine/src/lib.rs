@@ -557,6 +557,20 @@ impl Engine {
         reconciliation::service_state_differs(desired, current)
     }
 
+    /// Reconciles a service against accepted Current State.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if a required service transition cannot be executed.
+    pub fn reconcile_service(
+        &self,
+        service: &str,
+        desired: &ServiceDesiredState,
+        current: &ServiceCurrentState,
+    ) -> std::io::Result<()> {
+        reconciliation::reconcile_service_system(service, desired, current)
+    }
+
     /// Aggregates evaluated condition results for a verification request.
     pub fn aggregate_verification(
         &self,
