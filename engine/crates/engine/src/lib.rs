@@ -34,6 +34,7 @@ use model::{
     ContentRepositoryId, ContentSource, DiscoveredContent, DiscoveredStorage, ExternalContentItem,
     ExternalContentItemId, ImportedContentItem, InstallationIntent, Observation,
     ObservationSourceId, ObservationTimestamp, Plan, ResourceId, SchemaVersion, StorageKind,
+    VerificationConditionResult, VerificationOverallResult, VerificationRequest,
 };
 
 use planner::{PlanError, Planner};
@@ -542,6 +543,15 @@ impl Engine {
     /// Returns an error when system hardware facts cannot be discovered.
     pub fn discover_hardware(&self) -> std::io::Result<facts::HardwareFacts> {
         facts::discover_hardware()
+    }
+
+    /// Aggregates evaluated condition results for a verification request.
+    pub fn aggregate_verification(
+        &self,
+        request: &VerificationRequest,
+        condition_results: &[VerificationConditionResult],
+    ) -> VerificationOverallResult {
+        verification::aggregate_verification_result(request, condition_results)
     }
 
     /// Observes hardware facts for the current system.
@@ -2196,6 +2206,47 @@ mod tests {
         assert_eq!(
             discovered[0].path(),
             std::path::Path::new("/media/daia/models")
+        );
+    }
+
+    #[test]
+    fn aggregates_verification_through_engine() {
+        let engine = Engine::from_registry(desktop_registry());
+        let request = model::VerificationRequest::new(
+            model::ResourceId::new("service/ollama"),
+            model::ResourceType::new("service"),
+            model::SchemaVersion::new(1),
+            model::VerificationPurpose::DesiredStateSatisfaction,
+            model::StateBasis::new(
+                model::DesiredGeneration::new(1),
+                model::CurrentRevision::new(1),
+            ),
+            Some(model::DesiredGeneration::new(1)),
+            vec![
+                model::VerificationCondition::new(
+                    model::VerificationConditionId::new("present"),
+                    true,
+                ),
+                model::VerificationCondition::new(
+                    model::VerificationConditionId::new("running"),
+                    true,
+                ),
+            ],
+            Vec::new(),
+            vec![model::EvidenceSourceId::new("systemd")],
+            model::VerificationPolicyRevision::new("default-v1"),
+            model::VerificationTimestamp::new("2026-09-17T00:00:00Z"),
+            model::ArchitecturalComponentId::new("test"),
+        );
+
+        let condition_results = vec![model::VerificationConditionResult::new(
+            model::VerificationConditionId::new("present"),
+            model::ConditionResult::Satisfied,
+        )];
+
+        assert_eq!(
+            engine.aggregate_verification(&request, &condition_results),
+            model::VerificationOverallResult::Unknown
         );
     }
 
