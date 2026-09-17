@@ -5,6 +5,7 @@ mod bootstrapper;
 mod context;
 mod installation;
 mod mmdebstrap;
+mod reconciliation;
 mod verification;
 mod workflow;
 
@@ -34,8 +35,8 @@ use model::{
     ContentRepositoryId, ContentSource, DiscoveredContent, DiscoveredStorage, ExternalContentItem,
     ExternalContentItemId, ImportedContentItem, InstallationIntent, Observation,
     ObservationSourceId, ObservationTimestamp, Plan, ResourceId, SchemaVersion,
-    ServiceDesiredState, StorageKind, VerificationConditionResult, VerificationOverallResult,
-    VerificationRequest,
+    ServiceCurrentState, ServiceDesiredState, StorageKind, VerificationConditionResult,
+    VerificationOverallResult, VerificationRequest,
 };
 
 use planner::{PlanError, Planner};
@@ -544,6 +545,16 @@ impl Engine {
     /// Returns an error when system hardware facts cannot be discovered.
     pub fn discover_hardware(&self) -> std::io::Result<facts::HardwareFacts> {
         facts::discover_hardware()
+    }
+
+    /// Returns whether desired service state differs from accepted Current State.
+    #[must_use]
+    pub fn service_state_differs(
+        &self,
+        desired: &ServiceDesiredState,
+        current: &ServiceCurrentState,
+    ) -> bool {
+        reconciliation::service_state_differs(desired, current)
     }
 
     /// Aggregates evaluated condition results for a verification request.
@@ -2247,6 +2258,24 @@ mod tests {
             discovered[0].path(),
             std::path::Path::new("/media/daia/models")
         );
+    }
+
+    #[test]
+    fn detects_service_state_difference_through_engine() {
+        let engine = Engine::from_registry(desktop_registry());
+        let desired = model::ServiceDesiredState::new(true, true, true);
+
+        assert!(
+            !engine.service_state_differs(
+                &desired,
+                &model::ServiceCurrentState::new(true, true, true),
+            )
+        );
+
+        assert!(engine.service_state_differs(
+            &desired,
+            &model::ServiceCurrentState::new(true, false, true),
+        ));
     }
 
     #[test]
