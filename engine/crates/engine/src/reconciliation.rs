@@ -1,6 +1,12 @@
 use model::{ServiceCurrentState, ServiceDesiredState};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ServiceReconciliationDecision {
+    NoChange,
+    ChangeRequired,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ServiceStateDifference {
     Present,
     Enabled,
@@ -28,6 +34,17 @@ fn service_state_differences(
     differences
 }
 
+fn service_reconciliation_decision(
+    desired: &ServiceDesiredState,
+    current: &ServiceCurrentState,
+) -> ServiceReconciliationDecision {
+    if service_state_differences(desired, current).is_empty() {
+        ServiceReconciliationDecision::NoChange
+    } else {
+        ServiceReconciliationDecision::ChangeRequired
+    }
+}
+
 pub(crate) fn service_state_differs(
     desired: &ServiceDesiredState,
     current: &ServiceCurrentState,
@@ -37,8 +54,33 @@ pub(crate) fn service_state_differs(
 
 #[cfg(test)]
 mod tests {
-    use super::{ServiceStateDifference, service_state_differences, service_state_differs};
+    use super::{
+        ServiceReconciliationDecision, ServiceStateDifference, service_reconciliation_decision,
+        service_state_differences, service_state_differs,
+    };
     use model::{ServiceCurrentState, ServiceDesiredState};
+
+    #[test]
+    fn decides_no_change_for_matching_service_state() {
+        let desired = ServiceDesiredState::new(true, true, true);
+        let current = ServiceCurrentState::new(true, true, true);
+
+        assert_eq!(
+            service_reconciliation_decision(&desired, &current),
+            ServiceReconciliationDecision::NoChange
+        );
+    }
+
+    #[test]
+    fn decides_change_required_for_different_service_state() {
+        let desired = ServiceDesiredState::new(true, true, true);
+        let current = ServiceCurrentState::new(true, false, true);
+
+        assert_eq!(
+            service_reconciliation_decision(&desired, &current),
+            ServiceReconciliationDecision::ChangeRequired
+        );
+    }
 
     #[test]
     fn identifies_service_state_differences() {
