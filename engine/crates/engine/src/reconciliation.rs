@@ -44,6 +44,38 @@ trait ServiceTransitionExecutor {
     fn execute(&mut self, service: &str, transition: ServiceTransition) -> Result<(), Self::Error>;
 }
 
+trait ServiceCommandRunner {
+    fn status(&mut self, command: &mut std::process::Command) -> std::io::Result<()>;
+}
+
+struct SystemServiceTransitionExecutor<R> {
+    runner: R,
+}
+
+impl<R> SystemServiceTransitionExecutor<R> {
+    fn new(runner: R) -> Self {
+        Self { runner }
+    }
+}
+
+impl<R> ServiceTransitionExecutor for SystemServiceTransitionExecutor<R>
+where
+    R: ServiceCommandRunner,
+{
+    type Error = std::io::Error;
+
+    fn execute(&mut self, service: &str, transition: ServiceTransition) -> Result<(), Self::Error> {
+        match transition {
+            ServiceTransition::Start => {
+                let mut command = std::process::Command::new("systemctl");
+                command.arg("start").arg(service);
+                self.runner.status(&mut command)
+            }
+            _ => Ok(()),
+        }
+    }
+}
+
 fn execute_service_transitions<E>(
     service: &str,
     transitions: &[ServiceTransition],
@@ -102,9 +134,9 @@ pub(crate) fn service_state_differs(
 #[cfg(test)]
 mod tests {
     use super::{
-        ServiceStateDifference, ServiceTransition, ServiceTransitionExecutor,
-        execute_service_transitions, service_state_differences, service_state_differs,
-        service_transitions,
+        ServiceCommandRunner, ServiceStateDifference, ServiceTransition, ServiceTransitionExecutor,
+        SystemServiceTransitionExecutor, execute_service_transitions, service_state_differences,
+        service_state_differs, service_transitions,
     };
     use model::{ServiceCurrentState, ServiceDesiredState};
 
@@ -124,6 +156,44 @@ mod tests {
             self.transitions.push(transition);
             Ok(())
         }
+    }
+
+    struct RecordingServiceCommandRunner {
+        program: Option<std::ffi::OsString>,
+        args: Vec<std::ffi::OsString>,
+    }
+
+    impl ServiceCommandRunner for RecordingServiceCommandRunner {
+        fn status(&mut self, command: &mut std::process::Command) -> std::io::Result<()> {
+            self.program = Some(command.get_program().to_os_string());
+            self.args = command.get_args().map(std::ffi::OsString::from).collect();
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn system_executor_sends_start_service_command_to_runner() {
+        let runner = RecordingServiceCommandRunner {
+            program: None,
+            args: Vec::new(),
+        };
+        let mut executor = SystemServiceTransitionExecutor::new(runner);
+
+        executor
+            .execute("ollama", ServiceTransition::Start)
+            .unwrap();
+
+        assert_eq!(
+            executor.runner.program,
+            Some(std::ffi::OsString::from("systemctl"))
+        );
+        assert_eq!(
+            executor.runner.args,
+            vec![
+                std::ffi::OsString::from("start"),
+                std::ffi::OsString::from("ollama"),
+            ]
+        );
     }
 
     #[test]
