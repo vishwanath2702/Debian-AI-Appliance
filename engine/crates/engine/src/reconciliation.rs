@@ -1,18 +1,58 @@
 use model::{ServiceCurrentState, ServiceDesiredState};
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ServiceStateDifference {
+    Present,
+    Enabled,
+    Running,
+}
+
+fn service_state_differences(
+    desired: &ServiceDesiredState,
+    current: &ServiceCurrentState,
+) -> Vec<ServiceStateDifference> {
+    let mut differences = Vec::new();
+
+    if desired.is_present() != current.is_present() {
+        differences.push(ServiceStateDifference::Present);
+    }
+
+    if desired.is_enabled() != current.is_enabled() {
+        differences.push(ServiceStateDifference::Enabled);
+    }
+
+    if desired.is_running() != current.is_running() {
+        differences.push(ServiceStateDifference::Running);
+    }
+
+    differences
+}
+
 pub(crate) fn service_state_differs(
     desired: &ServiceDesiredState,
     current: &ServiceCurrentState,
 ) -> bool {
-    desired.is_present() != current.is_present()
-        || desired.is_enabled() != current.is_enabled()
-        || desired.is_running() != current.is_running()
+    !service_state_differences(desired, current).is_empty()
 }
 
 #[cfg(test)]
 mod tests {
-    use super::service_state_differs;
+    use super::{ServiceStateDifference, service_state_differences, service_state_differs};
     use model::{ServiceCurrentState, ServiceDesiredState};
+
+    #[test]
+    fn identifies_service_state_differences() {
+        let desired = ServiceDesiredState::new(true, false, true);
+        let current = ServiceCurrentState::new(false, true, true);
+
+        assert_eq!(
+            service_state_differences(&desired, &current),
+            vec![
+                ServiceStateDifference::Present,
+                ServiceStateDifference::Enabled,
+            ]
+        );
+    }
 
     #[test]
     fn detects_service_state_difference() {
