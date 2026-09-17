@@ -7,6 +7,16 @@ enum ServiceStateDifference {
     Running,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ServiceTransition {
+    Install,
+    Remove,
+    Enable,
+    Disable,
+    Start,
+    Stop,
+}
+
 fn service_state_differences(
     desired: &ServiceDesiredState,
     current: &ServiceCurrentState,
@@ -28,6 +38,39 @@ fn service_state_differences(
     differences
 }
 
+fn service_transitions(
+    desired: &ServiceDesiredState,
+    current: &ServiceCurrentState,
+) -> Vec<ServiceTransition> {
+    let mut transitions = Vec::new();
+
+    if desired.is_present() != current.is_present() {
+        transitions.push(if desired.is_present() {
+            ServiceTransition::Install
+        } else {
+            ServiceTransition::Remove
+        });
+    }
+
+    if desired.is_enabled() != current.is_enabled() {
+        transitions.push(if desired.is_enabled() {
+            ServiceTransition::Enable
+        } else {
+            ServiceTransition::Disable
+        });
+    }
+
+    if desired.is_running() != current.is_running() {
+        transitions.push(if desired.is_running() {
+            ServiceTransition::Start
+        } else {
+            ServiceTransition::Stop
+        });
+    }
+
+    transitions
+}
+
 pub(crate) fn service_state_differs(
     desired: &ServiceDesiredState,
     current: &ServiceCurrentState,
@@ -37,7 +80,10 @@ pub(crate) fn service_state_differs(
 
 #[cfg(test)]
 mod tests {
-    use super::{ServiceStateDifference, service_state_differences, service_state_differs};
+    use super::{
+        ServiceStateDifference, ServiceTransition, service_state_differences,
+        service_state_differs, service_transitions,
+    };
     use model::{ServiceCurrentState, ServiceDesiredState};
 
     #[test]
@@ -73,6 +119,33 @@ mod tests {
                 ServiceStateDifference::Present,
                 ServiceStateDifference::Enabled,
                 ServiceStateDifference::Running,
+            ]
+        );
+    }
+
+    #[test]
+    fn plans_service_transitions() {
+        assert_eq!(
+            service_transitions(
+                &ServiceDesiredState::new(true, true, true),
+                &ServiceCurrentState::new(false, false, false),
+            ),
+            vec![
+                ServiceTransition::Install,
+                ServiceTransition::Enable,
+                ServiceTransition::Start,
+            ]
+        );
+
+        assert_eq!(
+            service_transitions(
+                &ServiceDesiredState::new(false, false, false),
+                &ServiceCurrentState::new(true, true, true),
+            ),
+            vec![
+                ServiceTransition::Remove,
+                ServiceTransition::Disable,
+                ServiceTransition::Stop,
             ]
         );
     }
