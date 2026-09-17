@@ -55,6 +55,29 @@ mod tests {
     }
 
     #[test]
+    fn identifies_no_and_all_service_state_differences() {
+        assert_eq!(
+            service_state_differences(
+                &ServiceDesiredState::new(true, true, true),
+                &ServiceCurrentState::new(true, true, true),
+            ),
+            vec![]
+        );
+
+        assert_eq!(
+            service_state_differences(
+                &ServiceDesiredState::new(true, true, true),
+                &ServiceCurrentState::new(false, false, false),
+            ),
+            vec![
+                ServiceStateDifference::Present,
+                ServiceStateDifference::Enabled,
+                ServiceStateDifference::Running,
+            ]
+        );
+    }
+
+    #[test]
     fn detects_service_state_difference() {
         let desired = ServiceDesiredState::new(true, true, true);
 
