@@ -1604,6 +1604,12 @@ impl<T> CurrentStateProposal<T> {
     pub fn proposed(&self) -> &T {
         &self.proposed
     }
+
+    /// Consumes the proposal and returns its proposed state.
+    #[must_use]
+    pub fn into_proposed(self) -> T {
+        self.proposed
+    }
 }
 
 /// Accepted Current State for one DAIA managed resource.
