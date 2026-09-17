@@ -6,6 +6,24 @@ trait ServiceCommandRunner {
     fn output(&mut self, command: &mut Command) -> io::Result<Vec<u8>>;
 }
 
+#[derive(Clone, Copy, Debug, Default)]
+struct ProcessServiceCommandRunner;
+
+impl ServiceCommandRunner for ProcessServiceCommandRunner {
+    fn output(&mut self, command: &mut Command) -> io::Result<Vec<u8>> {
+        let output = command.output()?;
+
+        if output.status.success() {
+            Ok(output.stdout)
+        } else {
+            Err(io::Error::other(format!(
+                "systemctl service query exited unsuccessfully: {}",
+                output.status
+            )))
+        }
+    }
+}
+
 /// CPU information discovered from the current system.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct CpuFacts {
@@ -245,6 +263,18 @@ pub fn discover_hardware() -> std::io::Result<HardwareFacts> {
 /// a valid `MemTotal` entry.
 pub fn discover_memory() -> std::io::Result<MemoryFacts> {
     read_linux_meminfo(std::path::Path::new("/proc/meminfo"))
+}
+
+/// Discovers service facts for the current system.
+///
+/// # Errors
+///
+/// Returns an error when `systemctl` cannot be executed or its output cannot
+/// be interpreted as service facts.
+pub fn discover_service(service: &str) -> io::Result<ServiceFacts> {
+    let mut runner = ProcessServiceCommandRunner;
+
+    query_systemd_service(&mut runner, service)
 }
 
 #[cfg(test)]
