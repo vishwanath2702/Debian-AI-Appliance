@@ -1,8 +1,9 @@
 use model::{
-    ConditionResult, SchemaVersion, ServiceDesiredState, VerificationConditionId,
-    VerificationConditionResult, VerificationEvidenceReference, VerificationOverallResult,
-    VerificationProviderId, VerificationProviderVersion, VerificationPurpose, VerificationRequest,
-    VerificationResult, VerificationResultId, VerificationRuleReference, VerificationTimestamp,
+    ConditionResult, CurrentStateProposal, SchemaVersion, ServiceDesiredState,
+    VerificationConditionId, VerificationConditionResult, VerificationEvidenceReference,
+    VerificationOverallResult, VerificationProviderId, VerificationProviderVersion,
+    VerificationPurpose, VerificationRequest, VerificationResult, VerificationResultId,
+    VerificationRuleReference, VerificationTimestamp,
 };
 
 fn service_running(active_state: &str) -> Option<bool> {
@@ -117,20 +118,30 @@ pub(crate) fn verification_eligible_for_current_state(result: &VerificationResul
         && result.overall_result() == VerificationOverallResult::Satisfied
 }
 
+pub(crate) fn verification_matches_current_state_proposal<T>(
+    result: &VerificationResult,
+    proposal: &CurrentStateProposal<T>,
+) -> bool {
+    result.resource_id() == proposal.resource_id()
+        && result.resource_type() == proposal.resource_type()
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
         aggregate_verification_result, build_verification_result, evaluate_service,
         service_running, verification_eligible_for_current_state,
+        verification_matches_current_state_proposal,
     };
     use model::{
-        ArchitecturalComponentId, ConditionResult, CurrentRevision, DesiredGeneration, EvidenceId,
-        EvidenceSourceId, ObservationTimestamp, ResourceId, ResourceType, SchemaVersion,
-        ServiceDesiredState, StateBasis, VerificationCondition, VerificationConditionId,
-        VerificationConditionResult, VerificationEvidenceReference, VerificationOverallResult,
-        VerificationPolicyRevision, VerificationProviderId, VerificationProviderVersion,
-        VerificationPurpose, VerificationRequest, VerificationResult, VerificationResultId,
-        VerificationRuleReference, VerificationRuleVersion, VerificationTimestamp,
+        ArchitecturalComponentId, ConditionResult, CurrentRevision, CurrentStateProposal,
+        DesiredGeneration, EvidenceId, EvidenceSourceId, ObservationTimestamp, ResourceId,
+        ResourceType, SchemaVersion, ServiceCurrentState, ServiceDesiredState, StateBasis,
+        VerificationCondition, VerificationConditionId, VerificationConditionResult,
+        VerificationEvidenceReference, VerificationOverallResult, VerificationPolicyRevision,
+        VerificationProviderId, VerificationProviderVersion, VerificationPurpose,
+        VerificationRequest, VerificationResult, VerificationResultId, VerificationRuleReference,
+        VerificationRuleVersion, VerificationTimestamp,
     };
 
     fn expected(name: &str, mandatory: bool) -> VerificationCondition {
@@ -156,6 +167,63 @@ mod tests {
             VerificationTimestamp::new("2026-09-17T00:00:00Z"),
             ArchitecturalComponentId::new("test"),
         )
+    }
+
+    #[test]
+    fn current_state_verification_must_match_proposed_resource() {
+        let verification = VerificationResult::new(
+            VerificationResultId::new("verification/service/ollama/1"),
+            ResourceId::new("service/ollama"),
+            ResourceType::new("service"),
+            VerificationPurpose::CurrentStateEstablishment,
+            StateBasis::new(DesiredGeneration::new(1), CurrentRevision::new(1)),
+            Some(DesiredGeneration::new(1)),
+            VerificationPolicyRevision::new("default-v1"),
+            Vec::new(),
+            Vec::new(),
+            VerificationTimestamp::new("2026-09-17T00:01:00Z"),
+            Vec::new(),
+            VerificationOverallResult::Satisfied,
+            Vec::new(),
+            Vec::new(),
+            VerificationProviderId::new("system-service-verifier"),
+            VerificationProviderVersion::new("system-service-verifier-v1"),
+            SchemaVersion::new(1),
+        );
+
+        let matching = CurrentStateProposal::new(
+            ResourceId::new("service/ollama"),
+            ResourceType::new("service"),
+            SchemaVersion::new(1),
+            ServiceCurrentState::new(true, true, true),
+        );
+
+        let wrong_id = CurrentStateProposal::new(
+            ResourceId::new("service/other"),
+            ResourceType::new("service"),
+            SchemaVersion::new(1),
+            ServiceCurrentState::new(true, true, true),
+        );
+
+        let wrong_type = CurrentStateProposal::new(
+            ResourceId::new("service/ollama"),
+            ResourceType::new("other"),
+            SchemaVersion::new(1),
+            ServiceCurrentState::new(true, true, true),
+        );
+
+        assert!(verification_matches_current_state_proposal(
+            &verification,
+            &matching
+        ));
+        assert!(!verification_matches_current_state_proposal(
+            &verification,
+            &wrong_id
+        ));
+        assert!(!verification_matches_current_state_proposal(
+            &verification,
+            &wrong_type
+        ));
     }
 
     #[test]
