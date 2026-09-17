@@ -1,8 +1,8 @@
 use model::{
     ConditionResult, SchemaVersion, ServiceDesiredState, VerificationConditionId,
     VerificationConditionResult, VerificationEvidenceReference, VerificationOverallResult,
-    VerificationProviderId, VerificationProviderVersion, VerificationRequest, VerificationResult,
-    VerificationResultId, VerificationRuleReference, VerificationTimestamp,
+    VerificationProviderId, VerificationProviderVersion, VerificationPurpose, VerificationRequest,
+    VerificationResult, VerificationResultId, VerificationRuleReference, VerificationTimestamp,
 };
 
 fn service_running(active_state: &str) -> Option<bool> {
@@ -112,10 +112,16 @@ pub(crate) fn build_verification_result(
     )
 }
 
+pub(crate) fn verification_eligible_for_current_state(result: &VerificationResult) -> bool {
+    result.purpose() == VerificationPurpose::CurrentStateEstablishment
+        && result.overall_result() == VerificationOverallResult::Satisfied
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        aggregate_verification_result, build_verification_result, evaluate_service, service_running,
+        aggregate_verification_result, build_verification_result, evaluate_service,
+        service_running, verification_eligible_for_current_state,
     };
     use model::{
         ArchitecturalComponentId, ConditionResult, CurrentRevision, DesiredGeneration, EvidenceId,
@@ -123,8 +129,8 @@ mod tests {
         ServiceDesiredState, StateBasis, VerificationCondition, VerificationConditionId,
         VerificationConditionResult, VerificationEvidenceReference, VerificationOverallResult,
         VerificationPolicyRevision, VerificationProviderId, VerificationProviderVersion,
-        VerificationPurpose, VerificationRequest, VerificationResultId, VerificationRuleReference,
-        VerificationRuleVersion, VerificationTimestamp,
+        VerificationPurpose, VerificationRequest, VerificationResult, VerificationResultId,
+        VerificationRuleReference, VerificationRuleVersion, VerificationTimestamp,
     };
 
     fn expected(name: &str, mandatory: bool) -> VerificationCondition {
@@ -150,6 +156,52 @@ mod tests {
             VerificationTimestamp::new("2026-09-17T00:00:00Z"),
             ArchitecturalComponentId::new("test"),
         )
+    }
+
+    #[test]
+    fn current_state_eligibility_requires_purpose_and_satisfaction() {
+        let build = |purpose, overall_result| {
+            VerificationResult::new(
+                VerificationResultId::new("verification/service/ollama/1"),
+                ResourceId::new("service/ollama"),
+                ResourceType::new("service"),
+                purpose,
+                StateBasis::new(DesiredGeneration::new(1), CurrentRevision::new(1)),
+                Some(DesiredGeneration::new(1)),
+                VerificationPolicyRevision::new("default-v1"),
+                Vec::new(),
+                Vec::new(),
+                VerificationTimestamp::new("2026-09-17T00:01:00Z"),
+                Vec::new(),
+                overall_result,
+                Vec::new(),
+                Vec::new(),
+                VerificationProviderId::new("system-service-verifier"),
+                VerificationProviderVersion::new("system-service-verifier-v1"),
+                SchemaVersion::new(1),
+            )
+        };
+
+        assert!(verification_eligible_for_current_state(&build(
+            VerificationPurpose::CurrentStateEstablishment,
+            VerificationOverallResult::Satisfied,
+        )));
+        assert!(!verification_eligible_for_current_state(&build(
+            VerificationPurpose::DesiredStateSatisfaction,
+            VerificationOverallResult::Satisfied,
+        )));
+        assert!(!verification_eligible_for_current_state(&build(
+            VerificationPurpose::CurrentStateEstablishment,
+            VerificationOverallResult::Unsatisfied,
+        )));
+        assert!(!verification_eligible_for_current_state(&build(
+            VerificationPurpose::CurrentStateEstablishment,
+            VerificationOverallResult::Unknown,
+        )));
+        assert!(!verification_eligible_for_current_state(&build(
+            VerificationPurpose::CurrentStateEstablishment,
+            VerificationOverallResult::Error,
+        )));
     }
 
     #[test]
