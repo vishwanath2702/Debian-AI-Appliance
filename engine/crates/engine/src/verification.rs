@@ -1,14 +1,15 @@
 use model::{
-    ConditionResult, VerificationCondition, VerificationConditionResult, VerificationOverallResult,
+    ConditionResult, VerificationConditionResult, VerificationOverallResult, VerificationRequest,
 };
 
 pub(crate) fn aggregate_verification_result(
-    expected_conditions: &[VerificationCondition],
+    request: &VerificationRequest,
     condition_results: &[VerificationConditionResult],
 ) -> VerificationOverallResult {
     let mut overall = VerificationOverallResult::Satisfied;
 
-    for expected in expected_conditions
+    for expected in request
+        .expected_conditions()
         .iter()
         .filter(|condition| condition.is_mandatory())
     {
@@ -38,8 +39,11 @@ pub(crate) fn aggregate_verification_result(
 mod tests {
     use super::aggregate_verification_result;
     use model::{
-        ConditionResult, VerificationCondition, VerificationConditionId,
-        VerificationConditionResult, VerificationOverallResult,
+        ArchitecturalComponentId, ConditionResult, CurrentRevision, DesiredGeneration,
+        EvidenceSourceId, ResourceId, ResourceType, SchemaVersion, StateBasis,
+        VerificationCondition, VerificationConditionId, VerificationConditionResult,
+        VerificationOverallResult, VerificationPolicyRevision, VerificationPurpose,
+        VerificationRequest, VerificationTimestamp,
     };
 
     fn expected(name: &str, mandatory: bool) -> VerificationCondition {
@@ -50,17 +54,34 @@ mod tests {
         VerificationConditionResult::new(VerificationConditionId::new(name), value)
     }
 
+    fn request(expected_conditions: Vec<VerificationCondition>) -> VerificationRequest {
+        VerificationRequest::new(
+            ResourceId::new("service/ollama"),
+            ResourceType::new("service"),
+            SchemaVersion::new(1),
+            VerificationPurpose::DesiredStateSatisfaction,
+            StateBasis::new(DesiredGeneration::new(1), CurrentRevision::new(1)),
+            Some(DesiredGeneration::new(1)),
+            expected_conditions,
+            Vec::new(),
+            vec![EvidenceSourceId::new("systemd")],
+            VerificationPolicyRevision::new("default-v1"),
+            VerificationTimestamp::new("2026-09-17T00:00:00Z"),
+            ArchitecturalComponentId::new("test"),
+        )
+    }
+
     #[test]
     fn aggregates_mandatory_condition_results() {
-        let expected_conditions = vec![
+        let request = request(vec![
             expected("present", true),
             expected("enabled", true),
             expected("running", true),
-        ];
+        ]);
 
         assert_eq!(
             aggregate_verification_result(
-                &expected_conditions,
+                &request,
                 &[
                     result("present", ConditionResult::Satisfied),
                     result("enabled", ConditionResult::Satisfied),
@@ -72,7 +93,7 @@ mod tests {
 
         assert_eq!(
             aggregate_verification_result(
-                &expected_conditions,
+                &request,
                 &[
                     result("present", ConditionResult::Satisfied),
                     result("enabled", ConditionResult::Unsatisfied),
@@ -84,7 +105,7 @@ mod tests {
 
         assert_eq!(
             aggregate_verification_result(
-                &expected_conditions,
+                &request,
                 &[
                     result("present", ConditionResult::Satisfied),
                     result("enabled", ConditionResult::Unsatisfied),
@@ -96,7 +117,7 @@ mod tests {
 
         assert_eq!(
             aggregate_verification_result(
-                &expected_conditions,
+                &request,
                 &[
                     result("present", ConditionResult::Unknown),
                     result("enabled", ConditionResult::Error),
@@ -109,34 +130,33 @@ mod tests {
 
     #[test]
     fn missing_mandatory_condition_is_unknown_unless_another_condition_errors() {
-        let expected_conditions = [expected("present", true), expected("running", true)];
+        let request = request(vec![expected("present", true), expected("running", true)]);
 
         assert_eq!(
             aggregate_verification_result(
-                &expected_conditions,
+                &request,
                 &[result("present", ConditionResult::Satisfied)],
             ),
             VerificationOverallResult::Unknown
         );
 
         assert_eq!(
-            aggregate_verification_result(
-                &expected_conditions,
-                &[result("running", ConditionResult::Error)],
-            ),
+            aggregate_verification_result(&request, &[result("running", ConditionResult::Error)],),
             VerificationOverallResult::Error
         );
     }
 
     #[test]
     fn optional_and_not_applicable_conditions_do_not_prevent_satisfaction() {
+        let request = request(vec![
+            expected("present", true),
+            expected("health", false),
+            expected("legacy", true),
+        ]);
+
         assert_eq!(
             aggregate_verification_result(
-                &[
-                    expected("present", true),
-                    expected("health", false),
-                    expected("legacy", true),
-                ],
+                &request,
                 &[
                     result("present", ConditionResult::Satisfied),
                     result("health", ConditionResult::Error),
