@@ -71,6 +71,11 @@ where
                 command.arg("start").arg(service);
                 self.runner.status(&mut command)
             }
+            ServiceTransition::Stop => {
+                let mut command = std::process::Command::new("systemctl");
+                command.arg("stop").arg(service);
+                self.runner.status(&mut command)
+            }
             _ => Ok(()),
         }
     }
@@ -169,6 +174,29 @@ mod tests {
             self.args = command.get_args().map(std::ffi::OsString::from).collect();
             Ok(())
         }
+    }
+
+    #[test]
+    fn system_executor_sends_stop_service_command_to_runner() {
+        let runner = RecordingServiceCommandRunner {
+            program: None,
+            args: Vec::new(),
+        };
+        let mut executor = SystemServiceTransitionExecutor::new(runner);
+
+        executor.execute("ollama", ServiceTransition::Stop).unwrap();
+
+        assert_eq!(
+            executor.runner.program,
+            Some(std::ffi::OsString::from("systemctl"))
+        );
+        assert_eq!(
+            executor.runner.args,
+            vec![
+                std::ffi::OsString::from("stop"),
+                std::ffi::OsString::from("ollama"),
+            ]
+        );
     }
 
     #[test]
