@@ -107,6 +107,35 @@ impl MemoryFacts {
     }
 }
 
+fn parse_systemd_service_show(output: &str) -> Option<ServiceFacts> {
+    let mut load_state = None;
+    let mut unit_file_state = None;
+    let mut active_state = None;
+
+    for line in output.lines() {
+        let Some((field, value)) = line.split_once('=') else {
+            continue;
+        };
+
+        match field {
+            "LoadState" => load_state = Some(value),
+            "UnitFileState" => unit_file_state = Some(value),
+            "ActiveState" => active_state = Some(value),
+            _ => {}
+        }
+    }
+
+    let load_state = load_state?;
+    let unit_file_state = unit_file_state?;
+    let active_state = active_state?;
+
+    Some(ServiceFacts::new(
+        load_state != "not-found",
+        unit_file_state == "enabled",
+        active_state,
+    ))
+}
+
 fn parse_linux_cpuinfo(cpuinfo: &str) -> Option<CpuFacts> {
     let logical_processor_count = cpuinfo
         .lines()
@@ -187,8 +216,8 @@ pub fn discover_memory() -> std::io::Result<MemoryFacts> {
 mod tests {
     use super::{
         CpuFacts, HardwareFacts, MemoryFacts, ServiceFacts, discover_cpu, discover_hardware,
-        discover_memory, parse_linux_cpuinfo, parse_linux_meminfo, read_linux_cpuinfo,
-        read_linux_meminfo,
+        discover_memory, parse_linux_cpuinfo, parse_linux_meminfo, parse_systemd_service_show,
+        read_linux_cpuinfo, read_linux_meminfo,
     };
     use std::fs;
 
@@ -231,6 +260,28 @@ mod tests {
 
         assert_eq!(facts.cpu().logical_processor_count(), 4);
         assert_eq!(facts.memory().total_bytes(), 17_179_869_184);
+    }
+
+    #[test]
+    fn parses_systemd_service_show_state() {
+        let output = "LoadState=loaded\nActiveState=active\nUnitFileState=enabled\n";
+
+        let facts = parse_systemd_service_show(output).expect("service facts");
+
+        assert!(facts.is_present());
+        assert!(facts.is_enabled());
+        assert_eq!(facts.active_state(), "active");
+    }
+
+    #[test]
+    fn parses_missing_systemd_service() {
+        let output = "LoadState=not-found\nActiveState=inactive\nUnitFileState=\n";
+
+        let facts = parse_systemd_service_show(output).expect("service facts");
+
+        assert!(!facts.is_present());
+        assert!(!facts.is_enabled());
+        assert_eq!(facts.active_state(), "inactive");
     }
 
     #[test]
