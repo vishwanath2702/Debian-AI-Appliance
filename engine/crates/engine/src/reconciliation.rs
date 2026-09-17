@@ -41,10 +41,11 @@ fn service_state_differences(
 trait ServiceTransitionExecutor {
     type Error;
 
-    fn execute(&mut self, transition: ServiceTransition) -> Result<(), Self::Error>;
+    fn execute(&mut self, service: &str, transition: ServiceTransition) -> Result<(), Self::Error>;
 }
 
 fn execute_service_transitions<E>(
+    service: &str,
     transitions: &[ServiceTransition],
     executor: &mut E,
 ) -> Result<(), E::Error>
@@ -52,7 +53,7 @@ where
     E: ServiceTransitionExecutor,
 {
     for transition in transitions {
-        executor.execute(*transition)?;
+        executor.execute(service, *transition)?;
     }
 
     Ok(())
@@ -114,7 +115,12 @@ mod tests {
     impl ServiceTransitionExecutor for RecordingServiceTransitionExecutor {
         type Error = ();
 
-        fn execute(&mut self, transition: ServiceTransition) -> Result<(), Self::Error> {
+        fn execute(
+            &mut self,
+            service: &str,
+            transition: ServiceTransition,
+        ) -> Result<(), Self::Error> {
+            assert_eq!(service, "ollama");
             self.transitions.push(transition);
             Ok(())
         }
@@ -131,7 +137,7 @@ mod tests {
             transitions: Vec::new(),
         };
 
-        execute_service_transitions(&transitions, &mut executor).unwrap();
+        execute_service_transitions("ollama", &transitions, &mut executor).unwrap();
 
         assert_eq!(executor.transitions, transitions);
     }
@@ -145,7 +151,12 @@ mod tests {
         impl ServiceTransitionExecutor for FailingServiceTransitionExecutor {
             type Error = &'static str;
 
-            fn execute(&mut self, transition: ServiceTransition) -> Result<(), Self::Error> {
+            fn execute(
+                &mut self,
+                service: &str,
+                transition: ServiceTransition,
+            ) -> Result<(), Self::Error> {
+                assert_eq!(service, "ollama");
                 self.transitions.push(transition);
 
                 if transition == ServiceTransition::Enable {
@@ -165,7 +176,7 @@ mod tests {
             transitions: Vec::new(),
         };
 
-        let result = execute_service_transitions(&transitions, &mut executor);
+        let result = execute_service_transitions("ollama", &transitions, &mut executor);
 
         assert_eq!(result, Err("enable failed"));
         assert_eq!(
