@@ -1,5 +1,11 @@
 //! Hardware, operating-system, and environment fact discovery.
 
+use std::{io, process::Command};
+
+trait ServiceCommandRunner {
+    fn output(&mut self, command: &mut Command) -> io::Result<Vec<u8>>;
+}
+
 /// CPU information discovered from the current system.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct CpuFacts {
@@ -105,6 +111,35 @@ impl MemoryFacts {
     pub const fn total_bytes(self) -> u64 {
         self.total_bytes
     }
+}
+
+fn query_systemd_service<R>(runner: &mut R, service: &str) -> io::Result<ServiceFacts>
+where
+    R: ServiceCommandRunner,
+{
+    let output = runner.output(
+        Command::new("systemctl")
+            .arg("show")
+            .arg(service)
+            .arg("--property=LoadState")
+            .arg("--property=UnitFileState")
+            .arg("--property=ActiveState")
+            .arg("--no-pager"),
+    )?;
+
+    let output = std::str::from_utf8(&output).map_err(|error| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("systemctl service output is not UTF-8: {error}"),
+        )
+    })?;
+
+    parse_systemd_service_show(output).ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            "systemctl service output is missing required properties",
+        )
+    })
 }
 
 fn parse_systemd_service_show(output: &str) -> Option<ServiceFacts> {
@@ -215,11 +250,11 @@ pub fn discover_memory() -> std::io::Result<MemoryFacts> {
 #[cfg(test)]
 mod tests {
     use super::{
-        CpuFacts, HardwareFacts, MemoryFacts, ServiceFacts, discover_cpu, discover_hardware,
-        discover_memory, parse_linux_cpuinfo, parse_linux_meminfo, parse_systemd_service_show,
-        read_linux_cpuinfo, read_linux_meminfo,
+        CpuFacts, HardwareFacts, MemoryFacts, ServiceCommandRunner, ServiceFacts, discover_cpu,
+        discover_hardware, discover_memory, parse_linux_cpuinfo, parse_linux_meminfo,
+        parse_systemd_service_show, query_systemd_service, read_linux_cpuinfo, read_linux_meminfo,
     };
-    use std::fs;
+    use std::{ffi::OsStr, fs, io, process::Command};
 
     #[test]
     fn cpu_facts_exposes_logical_processor_count() {
@@ -260,6 +295,51 @@ mod tests {
 
         assert_eq!(facts.cpu().logical_processor_count(), 4);
         assert_eq!(facts.memory().total_bytes(), 17_179_869_184);
+    }
+
+    struct RecordingServiceCommandRunner {
+        output: Vec<u8>,
+        command: Option<Vec<String>>,
+    }
+
+    impl ServiceCommandRunner for RecordingServiceCommandRunner {
+        fn output(&mut self, command: &mut Command) -> io::Result<Vec<u8>> {
+            self.command = Some(
+                command
+                    .get_args()
+                    .map(OsStr::to_string_lossy)
+                    .map(|argument| argument.into_owned())
+                    .collect(),
+            );
+
+            Ok(self.output.clone())
+        }
+    }
+
+    #[test]
+    fn queries_systemd_service_through_command_runner() {
+        let mut runner = RecordingServiceCommandRunner {
+            output: b"LoadState=loaded\nActiveState=active\nUnitFileState=enabled\n".to_vec(),
+            command: None,
+        };
+
+        let facts =
+            query_systemd_service(&mut runner, "ollama.service").expect("query service facts");
+
+        assert_eq!(
+            runner.command,
+            Some(vec![
+                "show".to_owned(),
+                "ollama.service".to_owned(),
+                "--property=LoadState".to_owned(),
+                "--property=UnitFileState".to_owned(),
+                "--property=ActiveState".to_owned(),
+                "--no-pager".to_owned(),
+            ])
+        );
+        assert!(facts.is_present());
+        assert!(facts.is_enabled());
+        assert_eq!(facts.active_state(), "active");
     }
 
     #[test]
