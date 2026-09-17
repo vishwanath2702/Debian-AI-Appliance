@@ -44,6 +44,14 @@ fn service_transitions(
 ) -> Vec<ServiceTransition> {
     let mut transitions = Vec::new();
 
+    if desired.is_running() != current.is_running() && !desired.is_running() {
+        transitions.push(ServiceTransition::Stop);
+    }
+
+    if desired.is_enabled() != current.is_enabled() && !desired.is_enabled() {
+        transitions.push(ServiceTransition::Disable);
+    }
+
     if desired.is_present() != current.is_present() {
         transitions.push(if desired.is_present() {
             ServiceTransition::Install
@@ -52,20 +60,12 @@ fn service_transitions(
         });
     }
 
-    if desired.is_enabled() != current.is_enabled() {
-        transitions.push(if desired.is_enabled() {
-            ServiceTransition::Enable
-        } else {
-            ServiceTransition::Disable
-        });
+    if desired.is_enabled() != current.is_enabled() && desired.is_enabled() {
+        transitions.push(ServiceTransition::Enable);
     }
 
-    if desired.is_running() != current.is_running() {
-        transitions.push(if desired.is_running() {
-            ServiceTransition::Start
-        } else {
-            ServiceTransition::Stop
-        });
+    if desired.is_running() != current.is_running() && desired.is_running() {
+        transitions.push(ServiceTransition::Start);
     }
 
     transitions
@@ -143,9 +143,9 @@ mod tests {
                 &ServiceCurrentState::new(true, true, true),
             ),
             vec![
-                ServiceTransition::Remove,
-                ServiceTransition::Disable,
                 ServiceTransition::Stop,
+                ServiceTransition::Disable,
+                ServiceTransition::Remove,
             ]
         );
     }
