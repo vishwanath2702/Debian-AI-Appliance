@@ -137,6 +137,44 @@ mod tests {
     }
 
     #[test]
+    fn stops_service_transition_execution_after_failure() {
+        struct FailingServiceTransitionExecutor {
+            transitions: Vec<ServiceTransition>,
+        }
+
+        impl ServiceTransitionExecutor for FailingServiceTransitionExecutor {
+            type Error = &'static str;
+
+            fn execute(&mut self, transition: ServiceTransition) -> Result<(), Self::Error> {
+                self.transitions.push(transition);
+
+                if transition == ServiceTransition::Enable {
+                    return Err("enable failed");
+                }
+
+                Ok(())
+            }
+        }
+
+        let transitions = vec![
+            ServiceTransition::Install,
+            ServiceTransition::Enable,
+            ServiceTransition::Start,
+        ];
+        let mut executor = FailingServiceTransitionExecutor {
+            transitions: Vec::new(),
+        };
+
+        let result = execute_service_transitions(&transitions, &mut executor);
+
+        assert_eq!(result, Err("enable failed"));
+        assert_eq!(
+            executor.transitions,
+            vec![ServiceTransition::Install, ServiceTransition::Enable]
+        );
+    }
+
+    #[test]
     fn identifies_service_state_differences() {
         let desired = ServiceDesiredState::new(true, false, true);
         let current = ServiceCurrentState::new(false, true, true);
