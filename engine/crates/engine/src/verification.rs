@@ -126,12 +126,20 @@ pub(crate) fn verification_matches_current_state_proposal<T>(
         && result.resource_type() == proposal.resource_type()
 }
 
+pub(crate) fn current_state_proposal_is_acceptable<T>(
+    proposal: &CurrentStateProposal<T>,
+    verification: &VerificationResult,
+) -> bool {
+    verification_eligible_for_current_state(verification)
+        && verification_matches_current_state_proposal(verification, proposal)
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        aggregate_verification_result, build_verification_result, evaluate_service,
-        service_running, verification_eligible_for_current_state,
-        verification_matches_current_state_proposal,
+        aggregate_verification_result, build_verification_result,
+        current_state_proposal_is_acceptable, evaluate_service, service_running,
+        verification_eligible_for_current_state, verification_matches_current_state_proposal,
     };
     use model::{
         ArchitecturalComponentId, ConditionResult, CurrentRevision, CurrentStateProposal,
@@ -167,6 +175,74 @@ mod tests {
             VerificationTimestamp::new("2026-09-17T00:00:00Z"),
             ArchitecturalComponentId::new("test"),
         )
+    }
+
+    #[test]
+    fn current_state_proposal_acceptance_requires_eligible_matching_verification() {
+        let proposal = CurrentStateProposal::new(
+            ResourceId::new("service/ollama"),
+            ResourceType::new("service"),
+            SchemaVersion::new(1),
+            ServiceCurrentState::new(true, true, true),
+        );
+
+        let build = |resource_id, purpose, overall_result| {
+            VerificationResult::new(
+                VerificationResultId::new("verification/service/ollama/1"),
+                ResourceId::new(resource_id),
+                ResourceType::new("service"),
+                purpose,
+                StateBasis::new(DesiredGeneration::new(1), CurrentRevision::new(1)),
+                Some(DesiredGeneration::new(1)),
+                VerificationPolicyRevision::new("default-v1"),
+                Vec::new(),
+                Vec::new(),
+                VerificationTimestamp::new("2026-09-17T00:01:00Z"),
+                Vec::new(),
+                overall_result,
+                Vec::new(),
+                Vec::new(),
+                VerificationProviderId::new("system-service-verifier"),
+                VerificationProviderVersion::new("system-service-verifier-v1"),
+                SchemaVersion::new(1),
+            )
+        };
+
+        assert!(current_state_proposal_is_acceptable(
+            &proposal,
+            &build(
+                "service/ollama",
+                VerificationPurpose::CurrentStateEstablishment,
+                VerificationOverallResult::Satisfied,
+            ),
+        ));
+
+        assert!(!current_state_proposal_is_acceptable(
+            &proposal,
+            &build(
+                "service/other",
+                VerificationPurpose::CurrentStateEstablishment,
+                VerificationOverallResult::Satisfied,
+            ),
+        ));
+
+        assert!(!current_state_proposal_is_acceptable(
+            &proposal,
+            &build(
+                "service/ollama",
+                VerificationPurpose::DesiredStateSatisfaction,
+                VerificationOverallResult::Satisfied,
+            ),
+        ));
+
+        assert!(!current_state_proposal_is_acceptable(
+            &proposal,
+            &build(
+                "service/ollama",
+                VerificationPurpose::CurrentStateEstablishment,
+                VerificationOverallResult::Unsatisfied,
+            ),
+        ));
     }
 
     #[test]
