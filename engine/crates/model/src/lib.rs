@@ -1555,6 +1555,66 @@ impl ServiceDesiredState {
     }
 }
 
+/// Accepted Current State for one DAIA managed resource.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CurrentResource<T> {
+    resource_id: ResourceId,
+    resource_type: ResourceType,
+    schema_version: SchemaVersion,
+    revision: CurrentRevision,
+    current: T,
+}
+
+impl<T> CurrentResource<T> {
+    /// Creates accepted Current State for a managed resource.
+    #[must_use]
+    pub fn new(
+        resource_id: ResourceId,
+        resource_type: ResourceType,
+        schema_version: SchemaVersion,
+        revision: CurrentRevision,
+        current: T,
+    ) -> Self {
+        Self {
+            resource_id,
+            resource_type,
+            schema_version,
+            revision,
+            current,
+        }
+    }
+
+    /// Returns the managed resource identifier.
+    #[must_use]
+    pub fn resource_id(&self) -> &ResourceId {
+        &self.resource_id
+    }
+
+    /// Returns the managed resource type.
+    #[must_use]
+    pub fn resource_type(&self) -> &ResourceType {
+        &self.resource_type
+    }
+
+    /// Returns the resource schema version.
+    #[must_use]
+    pub const fn schema_version(&self) -> SchemaVersion {
+        self.schema_version
+    }
+
+    /// Returns the accepted Current State revision.
+    #[must_use]
+    pub const fn revision(&self) -> CurrentRevision {
+        self.revision
+    }
+
+    /// Returns the accepted Current State payload.
+    #[must_use]
+    pub fn current(&self) -> &T {
+        &self.current
+    }
+}
+
 /// Accepted Current State for a system service.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ServiceCurrentState {
@@ -1879,8 +1939,8 @@ mod tests {
     use super::{
         Action, ApplianceConfiguration, ArchitecturalComponentId, AssetId, Capability,
         CapabilityId, ConditionResult, ContentImportDestination, ContentImportIntent,
-        ContentRepository, ContentRepositoryId, ContentSource, ContentSourceId, CurrentRevision,
-        DesiredGeneration, DesiredResource, DiscoveredContent, DiscoveredStorage,
+        ContentRepository, ContentRepositoryId, ContentSource, ContentSourceId, CurrentResource,
+        CurrentRevision, DesiredGeneration, DesiredResource, DiscoveredContent, DiscoveredStorage,
         DiscoveredStorageId, EvidenceId, EvidenceSourceId, ExternalContentItem,
         ExternalContentItemId, ImportedContentItem, InstallationIntent, Observation,
         ObservationSourceId, ObservationTimestamp, PackageManifest, PlanStep, ProviderId,
@@ -2641,6 +2701,25 @@ mod tests {
         assert!(desired.desired().is_present());
         assert!(desired.desired().is_enabled());
         assert!(desired.desired().is_running());
+    }
+
+    #[test]
+    fn current_resource_exposes_service_current_state() {
+        let current = CurrentResource::new(
+            ResourceId::new("service/ollama"),
+            ResourceType::new("service"),
+            SchemaVersion::new(1),
+            CurrentRevision::new(41),
+            ServiceCurrentState::new(true, false, false),
+        );
+
+        assert_eq!(current.resource_id().as_str(), "service/ollama");
+        assert_eq!(current.resource_type().as_str(), "service");
+        assert_eq!(current.schema_version(), SchemaVersion::new(1));
+        assert_eq!(current.revision(), CurrentRevision::new(41));
+        assert!(current.current().is_present());
+        assert!(!current.current().is_enabled());
+        assert!(!current.current().is_running());
     }
 
     #[test]
