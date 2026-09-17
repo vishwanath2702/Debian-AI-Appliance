@@ -1555,6 +1555,57 @@ impl ServiceDesiredState {
     }
 }
 
+/// Proposed Current State for one DAIA managed resource.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CurrentStateProposal<T> {
+    resource_id: ResourceId,
+    resource_type: ResourceType,
+    schema_version: SchemaVersion,
+    proposed: T,
+}
+
+impl<T> CurrentStateProposal<T> {
+    /// Creates proposed Current State for a managed resource.
+    #[must_use]
+    pub fn new(
+        resource_id: ResourceId,
+        resource_type: ResourceType,
+        schema_version: SchemaVersion,
+        proposed: T,
+    ) -> Self {
+        Self {
+            resource_id,
+            resource_type,
+            schema_version,
+            proposed,
+        }
+    }
+
+    /// Returns the managed resource identifier.
+    #[must_use]
+    pub fn resource_id(&self) -> &ResourceId {
+        &self.resource_id
+    }
+
+    /// Returns the managed resource type.
+    #[must_use]
+    pub fn resource_type(&self) -> &ResourceType {
+        &self.resource_type
+    }
+
+    /// Returns the resource schema version.
+    #[must_use]
+    pub const fn schema_version(&self) -> SchemaVersion {
+        self.schema_version
+    }
+
+    /// Returns the proposed Current State payload.
+    #[must_use]
+    pub fn proposed(&self) -> &T {
+        &self.proposed
+    }
+}
+
 /// Accepted Current State for one DAIA managed resource.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CurrentResource<T> {
@@ -1940,17 +1991,17 @@ mod tests {
         Action, ApplianceConfiguration, ArchitecturalComponentId, AssetId, Capability,
         CapabilityId, ConditionResult, ContentImportDestination, ContentImportIntent,
         ContentRepository, ContentRepositoryId, ContentSource, ContentSourceId, CurrentResource,
-        CurrentRevision, DesiredGeneration, DesiredResource, DiscoveredContent, DiscoveredStorage,
-        DiscoveredStorageId, EvidenceId, EvidenceSourceId, ExternalContentItem,
-        ExternalContentItemId, ImportedContentItem, InstallationIntent, Observation,
-        ObservationSourceId, ObservationTimestamp, PackageManifest, PlanStep, ProviderId,
-        ResourceId, ResourceType, SchemaVersion, ServiceCurrentState, ServiceDesiredState,
-        StateBasis, StorageKind, StorageTarget, StorageTargetId, VerificationCondition,
-        VerificationConditionId, VerificationConditionResult, VerificationEvidenceReference,
-        VerificationOverallResult, VerificationPolicyRevision, VerificationProviderId,
-        VerificationProviderVersion, VerificationPurpose, VerificationRequest, VerificationResult,
-        VerificationResultId, VerificationRuleReference, VerificationRuleVersion,
-        VerificationTimestamp,
+        CurrentRevision, CurrentStateProposal, DesiredGeneration, DesiredResource,
+        DiscoveredContent, DiscoveredStorage, DiscoveredStorageId, EvidenceId, EvidenceSourceId,
+        ExternalContentItem, ExternalContentItemId, ImportedContentItem, InstallationIntent,
+        Observation, ObservationSourceId, ObservationTimestamp, PackageManifest, PlanStep,
+        ProviderId, ResourceId, ResourceType, SchemaVersion, ServiceCurrentState,
+        ServiceDesiredState, StateBasis, StorageKind, StorageTarget, StorageTargetId,
+        VerificationCondition, VerificationConditionId, VerificationConditionResult,
+        VerificationEvidenceReference, VerificationOverallResult, VerificationPolicyRevision,
+        VerificationProviderId, VerificationProviderVersion, VerificationPurpose,
+        VerificationRequest, VerificationResult, VerificationResultId, VerificationRuleReference,
+        VerificationRuleVersion, VerificationTimestamp,
     };
     use std::path::{Path, PathBuf};
 
@@ -2701,6 +2752,23 @@ mod tests {
         assert!(desired.desired().is_present());
         assert!(desired.desired().is_enabled());
         assert!(desired.desired().is_running());
+    }
+
+    #[test]
+    fn current_state_proposal_exposes_service_current_state() {
+        let proposal = CurrentStateProposal::new(
+            ResourceId::new("service/ollama"),
+            ResourceType::new("service"),
+            SchemaVersion::new(1),
+            ServiceCurrentState::new(true, true, true),
+        );
+
+        assert_eq!(proposal.resource_id().as_str(), "service/ollama");
+        assert_eq!(proposal.resource_type().as_str(), "service");
+        assert_eq!(proposal.schema_version(), SchemaVersion::new(1));
+        assert!(proposal.proposed().is_present());
+        assert!(proposal.proposed().is_enabled());
+        assert!(proposal.proposed().is_running());
     }
 
     #[test]
