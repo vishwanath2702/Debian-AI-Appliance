@@ -86,7 +86,10 @@ where
                 command.arg("disable").arg(service);
                 self.runner.status(&mut command)
             }
-            _ => Ok(()),
+            ServiceTransition::Install | ServiceTransition::Remove => Err(std::io::Error::new(
+                std::io::ErrorKind::Unsupported,
+                "service installation transition is not supported by the system service executor",
+            )),
         }
     }
 }
@@ -183,6 +186,23 @@ mod tests {
             self.program = Some(command.get_program().to_os_string());
             self.args = command.get_args().map(std::ffi::OsString::from).collect();
             Ok(())
+        }
+    }
+
+    #[test]
+    fn system_executor_rejects_install_and_remove_transitions() {
+        for transition in [ServiceTransition::Install, ServiceTransition::Remove] {
+            let runner = RecordingServiceCommandRunner {
+                program: None,
+                args: Vec::new(),
+            };
+            let mut executor = SystemServiceTransitionExecutor::new(runner);
+
+            let error = executor.execute("ollama", transition).unwrap_err();
+
+            assert_eq!(error.kind(), std::io::ErrorKind::Unsupported);
+            assert_eq!(executor.runner.program, None);
+            assert!(executor.runner.args.is_empty());
         }
     }
 
