@@ -49,6 +49,33 @@ impl HardwareFacts {
     }
 }
 
+/// Service information discovered from the current system.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ServiceFacts {
+    present: bool,
+    enabled: bool,
+}
+
+impl ServiceFacts {
+    /// Creates service facts from discovered presence and enablement state.
+    #[must_use]
+    pub const fn new(present: bool, enabled: bool) -> Self {
+        Self { present, enabled }
+    }
+
+    /// Returns whether the service is present on the system.
+    #[must_use]
+    pub const fn is_present(self) -> bool {
+        self.present
+    }
+
+    /// Returns whether the service is enabled.
+    #[must_use]
+    pub const fn is_enabled(self) -> bool {
+        self.enabled
+    }
+}
+
 /// Memory information discovered from the current system.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct MemoryFacts {
@@ -148,8 +175,9 @@ pub fn discover_memory() -> std::io::Result<MemoryFacts> {
 #[cfg(test)]
 mod tests {
     use super::{
-        CpuFacts, HardwareFacts, MemoryFacts, discover_cpu, discover_hardware, discover_memory,
-        parse_linux_cpuinfo, parse_linux_meminfo, read_linux_cpuinfo, read_linux_meminfo,
+        CpuFacts, HardwareFacts, MemoryFacts, ServiceFacts, discover_cpu, discover_hardware,
+        discover_memory, parse_linux_cpuinfo, parse_linux_meminfo, read_linux_cpuinfo,
+        read_linux_meminfo,
     };
     use std::fs;
 
@@ -192,6 +220,14 @@ mod tests {
 
         assert_eq!(facts.cpu().logical_processor_count(), 4);
         assert_eq!(facts.memory().total_bytes(), 17_179_869_184);
+    }
+
+    #[test]
+    fn service_facts_exposes_presence_and_enablement() {
+        let facts = ServiceFacts::new(true, true);
+
+        assert!(facts.is_present());
+        assert!(facts.is_enabled());
     }
 
     #[test]
