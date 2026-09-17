@@ -1457,6 +1457,44 @@ impl fmt::Display for Capability {
     }
 }
 
+/// Desired state for a system service.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ServiceDesiredState {
+    present: bool,
+    enabled: bool,
+    running: bool,
+}
+
+impl ServiceDesiredState {
+    /// Creates a desired service state.
+    #[must_use]
+    pub const fn new(present: bool, enabled: bool, running: bool) -> Self {
+        Self {
+            present,
+            enabled,
+            running,
+        }
+    }
+
+    /// Returns whether the service is required to be present.
+    #[must_use]
+    pub const fn is_present(&self) -> bool {
+        self.present
+    }
+
+    /// Returns whether the service is required to be enabled.
+    #[must_use]
+    pub const fn is_enabled(&self) -> bool {
+        self.enabled
+    }
+
+    /// Returns whether the service is required to be running.
+    #[must_use]
+    pub const fn is_running(&self) -> bool {
+        self.running
+    }
+}
+
 /// An operation that can be included in an execution plan.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Action {
@@ -1747,13 +1785,13 @@ mod tests {
         DesiredGeneration, DiscoveredContent, DiscoveredStorage, DiscoveredStorageId, EvidenceId,
         EvidenceSourceId, ExternalContentItem, ExternalContentItemId, ImportedContentItem,
         InstallationIntent, Observation, ObservationSourceId, ObservationTimestamp,
-        PackageManifest, PlanStep, ProviderId, ResourceId, ResourceType, SchemaVersion, StateBasis,
-        StorageKind, StorageTarget, StorageTargetId, VerificationCondition,
-        VerificationConditionId, VerificationConditionResult, VerificationEvidenceReference,
-        VerificationOverallResult, VerificationPolicyRevision, VerificationProviderId,
-        VerificationProviderVersion, VerificationPurpose, VerificationRequest, VerificationResult,
-        VerificationResultId, VerificationRuleReference, VerificationRuleVersion,
-        VerificationTimestamp,
+        PackageManifest, PlanStep, ProviderId, ResourceId, ResourceType, SchemaVersion,
+        ServiceDesiredState, StateBasis, StorageKind, StorageTarget, StorageTargetId,
+        VerificationCondition, VerificationConditionId, VerificationConditionResult,
+        VerificationEvidenceReference, VerificationOverallResult, VerificationPolicyRevision,
+        VerificationProviderId, VerificationProviderVersion, VerificationPurpose,
+        VerificationRequest, VerificationResult, VerificationResultId, VerificationRuleReference,
+        VerificationRuleVersion, VerificationTimestamp,
     };
     use std::path::{Path, PathBuf};
 
@@ -2487,6 +2525,15 @@ mod tests {
             "Enable service: display-manager"
         );
     }
+    #[test]
+    fn service_desired_state_exposes_requirements() {
+        let desired = ServiceDesiredState::new(true, true, true);
+
+        assert!(desired.is_present());
+        assert!(desired.is_enabled());
+        assert!(desired.is_running());
+    }
+
     #[test]
     fn plan_steps_delegate_display_to_their_actions() {
         let install_step = PlanStep::new(Action::InstallPackageManifest("desktop".to_owned()));
