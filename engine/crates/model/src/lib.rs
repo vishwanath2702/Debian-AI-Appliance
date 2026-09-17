@@ -1457,6 +1457,66 @@ impl fmt::Display for Capability {
     }
 }
 
+/// Desired state declared for one DAIA managed resource.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DesiredResource<T> {
+    resource_id: ResourceId,
+    resource_type: ResourceType,
+    schema_version: SchemaVersion,
+    generation: DesiredGeneration,
+    desired: T,
+}
+
+impl<T> DesiredResource<T> {
+    /// Creates desired state for a managed resource.
+    #[must_use]
+    pub fn new(
+        resource_id: ResourceId,
+        resource_type: ResourceType,
+        schema_version: SchemaVersion,
+        generation: DesiredGeneration,
+        desired: T,
+    ) -> Self {
+        Self {
+            resource_id,
+            resource_type,
+            schema_version,
+            generation,
+            desired,
+        }
+    }
+
+    /// Returns the managed resource identifier.
+    #[must_use]
+    pub fn resource_id(&self) -> &ResourceId {
+        &self.resource_id
+    }
+
+    /// Returns the managed resource type.
+    #[must_use]
+    pub fn resource_type(&self) -> &ResourceType {
+        &self.resource_type
+    }
+
+    /// Returns the schema version used by the desired values.
+    #[must_use]
+    pub const fn schema_version(&self) -> SchemaVersion {
+        self.schema_version
+    }
+
+    /// Returns the Desired State generation.
+    #[must_use]
+    pub const fn generation(&self) -> DesiredGeneration {
+        self.generation
+    }
+
+    /// Returns the desired values.
+    #[must_use]
+    pub fn desired(&self) -> &T {
+        &self.desired
+    }
+}
+
 /// Desired state for a system service.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ServiceDesiredState {
@@ -1782,16 +1842,16 @@ mod tests {
         Action, ApplianceConfiguration, ArchitecturalComponentId, AssetId, Capability,
         CapabilityId, ConditionResult, ContentImportDestination, ContentImportIntent,
         ContentRepository, ContentRepositoryId, ContentSource, ContentSourceId, CurrentRevision,
-        DesiredGeneration, DiscoveredContent, DiscoveredStorage, DiscoveredStorageId, EvidenceId,
-        EvidenceSourceId, ExternalContentItem, ExternalContentItemId, ImportedContentItem,
-        InstallationIntent, Observation, ObservationSourceId, ObservationTimestamp,
-        PackageManifest, PlanStep, ProviderId, ResourceId, ResourceType, SchemaVersion,
-        ServiceDesiredState, StateBasis, StorageKind, StorageTarget, StorageTargetId,
-        VerificationCondition, VerificationConditionId, VerificationConditionResult,
-        VerificationEvidenceReference, VerificationOverallResult, VerificationPolicyRevision,
-        VerificationProviderId, VerificationProviderVersion, VerificationPurpose,
-        VerificationRequest, VerificationResult, VerificationResultId, VerificationRuleReference,
-        VerificationRuleVersion, VerificationTimestamp,
+        DesiredGeneration, DesiredResource, DiscoveredContent, DiscoveredStorage,
+        DiscoveredStorageId, EvidenceId, EvidenceSourceId, ExternalContentItem,
+        ExternalContentItemId, ImportedContentItem, InstallationIntent, Observation,
+        ObservationSourceId, ObservationTimestamp, PackageManifest, PlanStep, ProviderId,
+        ResourceId, ResourceType, SchemaVersion, ServiceDesiredState, StateBasis, StorageKind,
+        StorageTarget, StorageTargetId, VerificationCondition, VerificationConditionId,
+        VerificationConditionResult, VerificationEvidenceReference, VerificationOverallResult,
+        VerificationPolicyRevision, VerificationProviderId, VerificationProviderVersion,
+        VerificationPurpose, VerificationRequest, VerificationResult, VerificationResultId,
+        VerificationRuleReference, VerificationRuleVersion, VerificationTimestamp,
     };
     use std::path::{Path, PathBuf};
 
@@ -2525,6 +2585,25 @@ mod tests {
             "Enable service: display-manager"
         );
     }
+    #[test]
+    fn desired_resource_exposes_service_desired_state() {
+        let desired = DesiredResource::new(
+            ResourceId::new("service/ollama"),
+            ResourceType::new("service"),
+            SchemaVersion::new(1),
+            DesiredGeneration::new(12),
+            ServiceDesiredState::new(true, true, true),
+        );
+
+        assert_eq!(desired.resource_id().as_str(), "service/ollama");
+        assert_eq!(desired.resource_type().as_str(), "service");
+        assert_eq!(desired.schema_version(), SchemaVersion::new(1));
+        assert_eq!(desired.generation(), DesiredGeneration::new(12));
+        assert!(desired.desired().is_present());
+        assert!(desired.desired().is_enabled());
+        assert!(desired.desired().is_running());
+    }
+
     #[test]
     fn service_desired_state_exposes_requirements() {
         let desired = ServiceDesiredState::new(true, true, true);
