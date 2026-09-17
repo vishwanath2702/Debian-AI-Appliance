@@ -1555,6 +1555,44 @@ impl ServiceDesiredState {
     }
 }
 
+/// Accepted Current State for a system service.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ServiceCurrentState {
+    present: bool,
+    enabled: bool,
+    running: bool,
+}
+
+impl ServiceCurrentState {
+    /// Creates accepted Current State for a service.
+    #[must_use]
+    pub const fn new(present: bool, enabled: bool, running: bool) -> Self {
+        Self {
+            present,
+            enabled,
+            running,
+        }
+    }
+
+    /// Returns whether the service is present.
+    #[must_use]
+    pub const fn is_present(&self) -> bool {
+        self.present
+    }
+
+    /// Returns whether the service is enabled.
+    #[must_use]
+    pub const fn is_enabled(&self) -> bool {
+        self.enabled
+    }
+
+    /// Returns whether the service is running.
+    #[must_use]
+    pub const fn is_running(&self) -> bool {
+        self.running
+    }
+}
+
 /// An operation that can be included in an execution plan.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Action {
@@ -1846,12 +1884,13 @@ mod tests {
         DiscoveredStorageId, EvidenceId, EvidenceSourceId, ExternalContentItem,
         ExternalContentItemId, ImportedContentItem, InstallationIntent, Observation,
         ObservationSourceId, ObservationTimestamp, PackageManifest, PlanStep, ProviderId,
-        ResourceId, ResourceType, SchemaVersion, ServiceDesiredState, StateBasis, StorageKind,
-        StorageTarget, StorageTargetId, VerificationCondition, VerificationConditionId,
-        VerificationConditionResult, VerificationEvidenceReference, VerificationOverallResult,
-        VerificationPolicyRevision, VerificationProviderId, VerificationProviderVersion,
-        VerificationPurpose, VerificationRequest, VerificationResult, VerificationResultId,
-        VerificationRuleReference, VerificationRuleVersion, VerificationTimestamp,
+        ResourceId, ResourceType, SchemaVersion, ServiceCurrentState, ServiceDesiredState,
+        StateBasis, StorageKind, StorageTarget, StorageTargetId, VerificationCondition,
+        VerificationConditionId, VerificationConditionResult, VerificationEvidenceReference,
+        VerificationOverallResult, VerificationPolicyRevision, VerificationProviderId,
+        VerificationProviderVersion, VerificationPurpose, VerificationRequest, VerificationResult,
+        VerificationResultId, VerificationRuleReference, VerificationRuleVersion,
+        VerificationTimestamp,
     };
     use std::path::{Path, PathBuf};
 
@@ -2602,6 +2641,15 @@ mod tests {
         assert!(desired.desired().is_present());
         assert!(desired.desired().is_enabled());
         assert!(desired.desired().is_running());
+    }
+
+    #[test]
+    fn service_current_state_exposes_verified_condition() {
+        let current = ServiceCurrentState::new(true, false, false);
+
+        assert!(current.is_present());
+        assert!(!current.is_enabled());
+        assert!(!current.is_running());
     }
 
     #[test]
