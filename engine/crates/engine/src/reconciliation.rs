@@ -126,6 +126,19 @@ where
     Ok(())
 }
 
+fn reconcile_service<E>(
+    service: &str,
+    desired: &ServiceDesiredState,
+    current: &ServiceCurrentState,
+    executor: &mut E,
+) -> Result<(), E::Error>
+where
+    E: ServiceTransitionExecutor,
+{
+    let transitions = service_transitions(desired, current);
+    execute_service_transitions(service, &transitions, executor)
+}
+
 fn service_transitions(
     desired: &ServiceDesiredState,
     current: &ServiceCurrentState,
@@ -170,8 +183,8 @@ pub(crate) fn service_state_differs(
 mod tests {
     use super::{
         ServiceCommandRunner, ServiceStateDifference, ServiceTransition, ServiceTransitionExecutor,
-        SystemServiceTransitionExecutor, execute_service_transitions, service_state_differences,
-        service_state_differs, service_transitions,
+        SystemServiceTransitionExecutor, execute_service_transitions, reconcile_service,
+        service_state_differences, service_state_differs, service_transitions,
     };
     use model::{ServiceCurrentState, ServiceDesiredState};
 
@@ -317,6 +330,26 @@ mod tests {
             vec![
                 std::ffi::OsString::from("start"),
                 std::ffi::OsString::from("ollama"),
+            ]
+        );
+    }
+
+    #[test]
+    fn reconciles_service_by_planning_and_executing_transitions() {
+        let desired = ServiceDesiredState::new(true, true, true);
+        let current = ServiceCurrentState::new(false, false, false);
+        let mut executor = RecordingServiceTransitionExecutor {
+            transitions: Vec::new(),
+        };
+
+        reconcile_service("ollama", &desired, &current, &mut executor).unwrap();
+
+        assert_eq!(
+            executor.transitions,
+            vec![
+                ServiceTransition::Install,
+                ServiceTransition::Enable,
+                ServiceTransition::Start,
             ]
         );
     }
