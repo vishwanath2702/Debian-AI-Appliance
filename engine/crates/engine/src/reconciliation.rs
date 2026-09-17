@@ -75,7 +75,7 @@ pub(crate) fn service_state_differs(
     desired: &ServiceDesiredState,
     current: &ServiceCurrentState,
 ) -> bool {
-    !service_state_differences(desired, current).is_empty()
+    !service_transitions(desired, current).is_empty()
 }
 
 #[cfg(test)]
