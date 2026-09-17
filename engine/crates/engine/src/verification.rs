@@ -1,6 +1,8 @@
 use model::{
-    ConditionResult, ServiceDesiredState, VerificationConditionId, VerificationConditionResult,
-    VerificationOverallResult, VerificationRequest,
+    ConditionResult, SchemaVersion, ServiceDesiredState, VerificationConditionId,
+    VerificationConditionResult, VerificationEvidenceReference, VerificationOverallResult,
+    VerificationProviderId, VerificationProviderVersion, VerificationRequest, VerificationResult,
+    VerificationResultId, VerificationRuleReference, VerificationTimestamp,
 };
 
 fn service_running(active_state: &str) -> Option<bool> {
@@ -75,15 +77,54 @@ pub(crate) fn aggregate_verification_result(
     overall
 }
 
+pub(crate) fn build_verification_result(
+    request: &VerificationRequest,
+    result_id: VerificationResultId,
+    rules: Vec<VerificationRuleReference>,
+    evidence: Vec<VerificationEvidenceReference>,
+    verified_at: VerificationTimestamp,
+    condition_results: Vec<VerificationConditionResult>,
+    reasons: Vec<String>,
+    warnings: Vec<String>,
+    provider_id: VerificationProviderId,
+    provider_version: VerificationProviderVersion,
+) -> VerificationResult {
+    let overall_result = aggregate_verification_result(request, &condition_results);
+
+    VerificationResult::new(
+        result_id,
+        request.resource_id().clone(),
+        request.resource_type().clone(),
+        request.purpose(),
+        request.state_basis(),
+        request.desired_generation(),
+        request.policy_revision().clone(),
+        rules,
+        evidence,
+        verified_at,
+        condition_results,
+        overall_result,
+        reasons,
+        warnings,
+        provider_id,
+        provider_version,
+        SchemaVersion::new(1),
+    )
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{aggregate_verification_result, evaluate_service, service_running};
+    use super::{
+        aggregate_verification_result, build_verification_result, evaluate_service, service_running,
+    };
     use model::{
-        ArchitecturalComponentId, ConditionResult, CurrentRevision, DesiredGeneration,
-        EvidenceSourceId, ResourceId, ResourceType, SchemaVersion, ServiceDesiredState, StateBasis,
-        VerificationCondition, VerificationConditionId, VerificationConditionResult,
-        VerificationOverallResult, VerificationPolicyRevision, VerificationPurpose,
-        VerificationRequest, VerificationTimestamp,
+        ArchitecturalComponentId, ConditionResult, CurrentRevision, DesiredGeneration, EvidenceId,
+        EvidenceSourceId, ObservationTimestamp, ResourceId, ResourceType, SchemaVersion,
+        ServiceDesiredState, StateBasis, VerificationCondition, VerificationConditionId,
+        VerificationConditionResult, VerificationEvidenceReference, VerificationOverallResult,
+        VerificationPolicyRevision, VerificationProviderId, VerificationProviderVersion,
+        VerificationPurpose, VerificationRequest, VerificationResultId, VerificationRuleReference,
+        VerificationRuleVersion, VerificationTimestamp,
     };
 
     fn expected(name: &str, mandatory: bool) -> VerificationCondition {
@@ -109,6 +150,55 @@ mod tests {
             VerificationTimestamp::new("2026-09-17T00:00:00Z"),
             ArchitecturalComponentId::new("test"),
         )
+    }
+
+    #[test]
+    fn builds_verification_result_from_request_and_evaluation() {
+        let request = request(vec![
+            expected("present", true),
+            expected("enabled", true),
+            expected("running", true),
+        ]);
+        let conditions = vec![
+            result("present", ConditionResult::Satisfied),
+            result("enabled", ConditionResult::Unsatisfied),
+            result("running", ConditionResult::Satisfied),
+        ];
+
+        let verification = build_verification_result(
+            &request,
+            VerificationResultId::new("verification/service/ollama/1"),
+            vec![VerificationRuleReference::new(
+                VerificationConditionId::new("running"),
+                VerificationRuleVersion::new("service-running-v1"),
+            )],
+            vec![VerificationEvidenceReference::new(
+                EvidenceId::new("observation/service/1"),
+                ObservationTimestamp::new("2026-09-17T00:00:00Z"),
+            )],
+            VerificationTimestamp::new("2026-09-17T00:01:00Z"),
+            conditions.clone(),
+            vec!["service state evaluated".into()],
+            Vec::new(),
+            VerificationProviderId::new("system-service-verifier"),
+            VerificationProviderVersion::new("system-service-verifier-v1"),
+        );
+
+        assert_eq!(verification.resource_id(), request.resource_id());
+        assert_eq!(verification.resource_type(), request.resource_type());
+        assert_eq!(verification.purpose(), request.purpose());
+        assert_eq!(verification.state_basis(), request.state_basis());
+        assert_eq!(
+            verification.desired_generation(),
+            request.desired_generation()
+        );
+        assert_eq!(verification.policy_revision(), request.policy_revision());
+        assert_eq!(verification.conditions(), conditions);
+        assert_eq!(
+            verification.overall_result(),
+            VerificationOverallResult::Unsatisfied
+        );
+        assert_eq!(verification.result_schema_version(), SchemaVersion::new(1));
     }
 
     #[test]
