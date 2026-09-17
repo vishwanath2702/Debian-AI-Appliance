@@ -712,6 +712,30 @@ impl fmt::Display for ResourceId {
     }
 }
 
+/// Stable identifier for evidence required by a DAIA Verification Rule.
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub struct EvidenceRequirementId(String);
+
+impl EvidenceRequirementId {
+    /// Creates an evidence requirement identifier.
+    #[must_use]
+    pub fn new(value: impl Into<String>) -> Self {
+        Self(value.into())
+    }
+
+    /// Returns the evidence requirement identifier as a string slice.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl fmt::Display for EvidenceRequirementId {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.as_str())
+    }
+}
+
 /// Stable identifier for a source of DAIA verification evidence.
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub struct EvidenceSourceId(String);
@@ -1745,15 +1769,15 @@ mod tests {
         CapabilityId, ConditionResult, ContentImportDestination, ContentImportIntent,
         ContentRepository, ContentRepositoryId, ContentSource, ContentSourceId, CurrentRevision,
         DesiredGeneration, DiscoveredContent, DiscoveredStorage, DiscoveredStorageId, EvidenceId,
-        EvidenceSourceId, ExternalContentItem, ExternalContentItemId, ImportedContentItem,
-        InstallationIntent, Observation, ObservationSourceId, ObservationTimestamp,
-        PackageManifest, PlanStep, ProviderId, ResourceId, ResourceType, SchemaVersion, StateBasis,
-        StorageKind, StorageTarget, StorageTargetId, VerificationCondition,
-        VerificationConditionId, VerificationConditionResult, VerificationEvidenceReference,
-        VerificationOverallResult, VerificationPolicyRevision, VerificationProviderId,
-        VerificationProviderVersion, VerificationPurpose, VerificationRequest, VerificationResult,
-        VerificationResultId, VerificationRuleReference, VerificationRuleVersion,
-        VerificationTimestamp,
+        EvidenceRequirementId, EvidenceSourceId, ExternalContentItem, ExternalContentItemId,
+        ImportedContentItem, InstallationIntent, Observation, ObservationSourceId,
+        ObservationTimestamp, PackageManifest, PlanStep, ProviderId, ResourceId, ResourceType,
+        SchemaVersion, StateBasis, StorageKind, StorageTarget, StorageTargetId,
+        VerificationCondition, VerificationConditionId, VerificationConditionResult,
+        VerificationEvidenceReference, VerificationOverallResult, VerificationPolicyRevision,
+        VerificationProviderId, VerificationProviderVersion, VerificationPurpose,
+        VerificationRequest, VerificationResult, VerificationResultId, VerificationRuleReference,
+        VerificationRuleVersion, VerificationTimestamp,
     };
     use std::path::{Path, PathBuf};
 
@@ -2034,6 +2058,14 @@ mod tests {
 
         assert_eq!(timestamp.as_str(), "2026-07-23T09:05:00Z");
         assert_eq!(timestamp.to_string(), "2026-07-23T09:05:00Z");
+    }
+
+    #[test]
+    fn evidence_requirement_id_exposes_requirement_identity() {
+        let requirement_id = EvidenceRequirementId::new("service-unit-load-state");
+
+        assert_eq!(requirement_id.as_str(), "service-unit-load-state");
+        assert_eq!(requirement_id.to_string(), "service-unit-load-state");
     }
 
     #[test]
