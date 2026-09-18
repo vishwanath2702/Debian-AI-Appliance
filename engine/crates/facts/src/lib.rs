@@ -283,6 +283,38 @@ fn parse_linux_meminfo(meminfo: &str) -> Option<MemoryFacts> {
     Some(MemoryFacts::new(total_kib * 1024))
 }
 
+fn read_linux_gpus(path: &std::path::Path) -> std::io::Result<Vec<GpuFacts>> {
+    let mut gpus = Vec::new();
+
+    for entry in std::fs::read_dir(path)? {
+        let entry = entry?;
+        let device_path = entry.path();
+
+        let class = match std::fs::read_to_string(device_path.join("class")) {
+            Ok(class) => class,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => return Err(error),
+        };
+
+        if !class.trim().starts_with("0x03") {
+            continue;
+        }
+
+        let vendor_id = std::fs::read_to_string(device_path.join("vendor"))?;
+        let device_id = std::fs::read_to_string(device_path.join("device"))?;
+
+        gpus.push(GpuFacts::new(
+            entry.file_name().to_string_lossy(),
+            vendor_id.trim(),
+            device_id.trim(),
+        ));
+    }
+
+    gpus.sort_by(|left, right| left.identifier().cmp(right.identifier()));
+
+    Ok(gpus)
+}
+
 fn read_linux_cpuinfo(path: &std::path::Path) -> std::io::Result<CpuFacts> {
     let cpuinfo = std::fs::read_to_string(path)?;
 
@@ -313,6 +345,16 @@ fn read_linux_meminfo(path: &std::path::Path) -> std::io::Result<MemoryFacts> {
 /// any processor entries.
 pub fn discover_cpu() -> std::io::Result<CpuFacts> {
     read_linux_cpuinfo(std::path::Path::new("/proc/cpuinfo"))
+}
+
+/// Discovers GPU facts for the current Linux system.
+///
+/// # Errors
+///
+/// Returns an error when the PCI sysfs device directory cannot be read or
+/// when a discovered GPU device cannot be inspected.
+pub fn discover_gpus() -> std::io::Result<Vec<GpuFacts>> {
+    read_linux_gpus(std::path::Path::new("/sys/bus/pci/devices"))
 }
 
 /// Discovers hardware facts for the current system.
@@ -354,7 +396,8 @@ mod tests {
     use super::{
         CpuFacts, GpuFacts, HardwareFacts, MemoryFacts, ServiceCommandRunner, ServiceFacts,
         discover_cpu, discover_hardware, discover_memory, parse_linux_cpuinfo, parse_linux_meminfo,
-        parse_systemd_service_show, query_systemd_service, read_linux_cpuinfo, read_linux_meminfo,
+        parse_systemd_service_show, query_systemd_service, read_linux_cpuinfo, read_linux_gpus,
+        read_linux_meminfo,
     };
     use std::{ffi::OsStr, fs, io, process::Command};
 
@@ -404,6 +447,30 @@ mod tests {
         fs::remove_file(&path).expect("remove cpuinfo");
 
         assert_eq!(facts.logical_processor_count(), 3);
+    }
+
+    #[test]
+    fn reads_linux_gpus_from_pci_sysfs() {
+        let root = std::env::temp_dir().join("daia-facts-pci-gpu-test");
+        let gpu = root.join("0000:01:00.0");
+        let other = root.join("0000:02:00.0");
+
+        fs::create_dir_all(&gpu).expect("create GPU sysfs directory");
+        fs::create_dir_all(&other).expect("create non-GPU sysfs directory");
+
+        fs::write(gpu.join("class"), "0x030000\n").expect("write GPU class");
+        fs::write(gpu.join("vendor"), "0x10de\n").expect("write GPU vendor");
+        fs::write(gpu.join("device"), "0x2684\n").expect("write GPU device");
+
+        fs::write(other.join("class"), "0x020000\n").expect("write other class");
+        fs::write(other.join("vendor"), "0x8086\n").expect("write other vendor");
+        fs::write(other.join("device"), "0x1234\n").expect("write other device");
+
+        let facts = read_linux_gpus(&root).expect("read GPU facts");
+
+        fs::remove_dir_all(&root).expect("remove fake PCI sysfs");
+
+        assert_eq!(facts, [GpuFacts::new("0000:01:00.0", "0x10de", "0x2684")]);
     }
 
     #[test]
