@@ -7,6 +7,7 @@ mod dto;
 mod error;
 mod package_manifest;
 mod package_repository;
+mod realization;
 mod registry;
 
 pub use appliance_profile_repository::ApplianceProfileRepository;
