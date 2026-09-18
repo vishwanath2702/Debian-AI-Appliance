@@ -15,7 +15,7 @@ fn service_running(active_state: &str) -> Option<bool> {
     }
 }
 
-fn propose_service_current_state(
+pub(crate) fn propose_service_current_state(
     observation: &Observation<facts::ServiceFacts>,
 ) -> Option<CurrentStateProposal<ServiceCurrentState>> {
     let observed = observation.observed();

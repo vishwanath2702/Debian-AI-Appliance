@@ -32,11 +32,11 @@ use inspector::{ContentInspectError, ContentInspector, StorageInspectError, Stor
 pub use mmdebstrap::{MmdebstrapBootstrapper, MmdebstrapError};
 use model::{
     ApplianceProfile, Capability, ContentImportDestination, ContentImportIntent, ContentRepository,
-    ContentRepositoryId, ContentSource, CurrentResource, DiscoveredContent, DiscoveredStorage,
-    ExternalContentItem, ExternalContentItemId, ImportedContentItem, InstallationIntent,
-    Observation, ObservationSourceId, ObservationTimestamp, Plan, ResourceId, SchemaVersion,
-    ServiceCurrentState, ServiceDesiredState, StorageKind, VerificationConditionResult,
-    VerificationOverallResult, VerificationRequest,
+    ContentRepositoryId, ContentSource, CurrentResource, CurrentStateProposal, DiscoveredContent,
+    DiscoveredStorage, ExternalContentItem, ExternalContentItemId, ImportedContentItem,
+    InstallationIntent, Observation, ObservationSourceId, ObservationTimestamp, Plan, ResourceId,
+    SchemaVersion, ServiceCurrentState, ServiceDesiredState, StorageKind,
+    VerificationConditionResult, VerificationOverallResult, VerificationRequest,
 };
 
 use planner::{PlanError, Planner};
@@ -569,6 +569,15 @@ impl Engine {
         current: &CurrentResource<ServiceCurrentState>,
     ) -> std::io::Result<()> {
         reconciliation::reconcile_service_system(service, desired, current)
+    }
+
+    /// Proposes service Current State from a stable service observation.
+    #[must_use]
+    pub fn propose_service_current_state(
+        &self,
+        observation: &Observation<facts::ServiceFacts>,
+    ) -> Option<CurrentStateProposal<ServiceCurrentState>> {
+        verification::propose_service_current_state(observation)
     }
 
     /// Aggregates evaluated condition results for a verification request.
@@ -2290,6 +2299,44 @@ mod tests {
             &desired,
             &model::ServiceCurrentState::new(true, false, true),
         ));
+    }
+
+    #[test]
+    fn proposes_service_current_state_through_engine() {
+        let engine = Engine::from_registry(desktop_registry());
+        let observation = model::Observation::new(
+            model::ResourceId::new("service/ollama"),
+            model::ObservationSourceId::new("system-service-observer"),
+            model::ObservationTimestamp::new("2026-09-18T00:00:00Z"),
+            model::SchemaVersion::new(1),
+            facts::ServiceFacts::new(true, true, "inactive"),
+        );
+
+        let proposal = engine
+            .propose_service_current_state(&observation)
+            .expect("stable service observation should produce Current State proposal");
+
+        assert_eq!(proposal.resource_id(), observation.resource_id());
+        assert_eq!(proposal.resource_type().as_str(), "service");
+        assert_eq!(proposal.schema_version(), observation.schema_version());
+        assert_eq!(
+            proposal.proposed(),
+            &model::ServiceCurrentState::new(true, true, false)
+        );
+
+        let transitional = model::Observation::new(
+            model::ResourceId::new("service/ollama"),
+            model::ObservationSourceId::new("system-service-observer"),
+            model::ObservationTimestamp::new("2026-09-18T00:00:01Z"),
+            model::SchemaVersion::new(1),
+            facts::ServiceFacts::new(true, true, "deactivating"),
+        );
+
+        assert!(
+            engine
+                .propose_service_current_state(&transitional)
+                .is_none()
+        );
     }
 
     #[test]
