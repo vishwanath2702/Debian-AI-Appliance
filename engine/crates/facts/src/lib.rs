@@ -313,9 +313,15 @@ fn parse_linux_meminfo(meminfo: &str) -> Option<MemoryFacts> {
 }
 
 fn read_linux_accelerators(path: &std::path::Path) -> std::io::Result<Vec<AcceleratorFacts>> {
+    let entries = match std::fs::read_dir(path) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(error) => return Err(error),
+    };
+
     let mut accelerators = Vec::new();
 
-    for entry in std::fs::read_dir(path)? {
+    for entry in entries {
         let entry = entry?;
 
         accelerators.push(AcceleratorFacts::new(entry.file_name().to_string_lossy()));
@@ -507,6 +513,19 @@ mod tests {
         fs::remove_file(&path).expect("remove cpuinfo");
 
         assert_eq!(facts.logical_processor_count(), 3);
+    }
+
+    #[test]
+    fn missing_linux_accelerator_class_means_no_accelerators() {
+        let path = std::env::temp_dir().join("daia-facts-missing-accelerator-class");
+
+        if path.exists() {
+            fs::remove_dir_all(&path).expect("remove stale accelerator test directory");
+        }
+
+        let accelerators = read_linux_accelerators(&path).expect("read missing accelerator class");
+
+        assert!(accelerators.is_empty());
     }
 
     #[test]
