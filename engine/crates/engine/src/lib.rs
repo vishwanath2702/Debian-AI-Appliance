@@ -802,6 +802,14 @@ impl Engine {
     where
         I: ContentInspector,
     {
+        if configuration.profile_name() != profile.name() {
+            return Err(format!(
+                "Error: selected appliance profile \"{}\" does not match resolved profile \"{}\"",
+                configuration.profile_name(),
+                profile.name()
+            ));
+        }
+
         let items = self
             .repository_content_items(content_repository, content_inspector)
             .map_err(|error| format!("Error discovering content: {error}"))?;
@@ -1805,6 +1813,51 @@ mod tests {
             prepared.installation().storage().id(),
             configuration.installation().storage_id()
         );
+    }
+
+    #[test]
+    fn prepare_appliance_configuration_rejects_mismatched_profile() {
+        let engine = Engine::from_registry(desktop_registry());
+
+        let configuration = ApplianceConfiguration::new(
+            "desktop",
+            ContentRepositoryId::new("local-models"),
+            ContentImportIntent::new(Vec::new()),
+            InstallationIntent::new(
+                "desktop",
+                DiscoveredStorageId::new("serial:usb-disk"),
+            ),
+        );
+
+        let profile = ApplianceProfile::new(
+            "different-profile",
+            "Different appliance",
+            vec![Capability::new("desktop")],
+        );
+
+        let repository = ContentRepository::new(
+            "local-models",
+            "Models available on local storage",
+        );
+
+        let storage = vec![DiscoveredStorage::new(
+            "serial:usb-disk",
+            StorageKind::Removable,
+            "/dev/sdb",
+        )];
+
+        let error = engine
+            .prepare_appliance_configuration(
+                &configuration,
+                &profile,
+                &repository,
+                &TestContentInspector,
+                &storage,
+                ContentImportDestination::new("/var/lib/daia/content"),
+            )
+            .expect_err("mismatched appliance profile should fail");
+
+        assert!(error.contains("does not match resolved profile"));
     }
 
     #[test]
