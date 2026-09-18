@@ -32,11 +32,12 @@ use inspector::{ContentInspectError, ContentInspector, StorageInspectError, Stor
 pub use mmdebstrap::{MmdebstrapBootstrapper, MmdebstrapError};
 use model::{
     ApplianceProfile, Capability, ContentImportDestination, ContentImportIntent, ContentRepository,
-    ContentRepositoryId, ContentSource, CurrentResource, CurrentStateProposal, DiscoveredContent,
-    DiscoveredStorage, ExternalContentItem, ExternalContentItemId, ImportedContentItem,
-    InstallationIntent, Observation, ObservationSourceId, ObservationTimestamp, Plan, ResourceId,
-    SchemaVersion, ServiceCurrentState, ServiceDesiredState, StorageKind,
-    VerificationConditionResult, VerificationOverallResult, VerificationRequest,
+    ContentRepositoryId, ContentSource, CurrentResource, CurrentRevision, CurrentStateProposal,
+    DiscoveredContent, DiscoveredStorage, ExternalContentItem, ExternalContentItemId,
+    ImportedContentItem, InstallationIntent, Observation, ObservationSourceId,
+    ObservationTimestamp, Plan, ResourceId, SchemaVersion, ServiceCurrentState,
+    ServiceDesiredState, StorageKind, VerificationConditionResult, VerificationOverallResult,
+    VerificationRequest, VerificationResult,
 };
 
 use planner::{PlanError, Planner};
@@ -569,6 +570,17 @@ impl Engine {
         current: &CurrentResource<ServiceCurrentState>,
     ) -> std::io::Result<()> {
         reconciliation::reconcile_service_system(service, desired, current)
+    }
+
+    /// Accepts a verified Current State proposal at the caller-supplied revision.
+    #[must_use]
+    pub fn accept_current_state_proposal<T>(
+        &self,
+        proposal: CurrentStateProposal<T>,
+        verification: &VerificationResult,
+        revision: CurrentRevision,
+    ) -> Option<CurrentResource<T>> {
+        verification::accept_current_state_proposal(proposal, verification, revision)
     }
 
     /// Proposes service Current State from a stable service observation.
@@ -2299,6 +2311,53 @@ mod tests {
             &desired,
             &model::ServiceCurrentState::new(true, false, true),
         ));
+    }
+
+    #[test]
+    fn accepts_current_state_proposal_through_engine() {
+        let engine = Engine::from_registry(desktop_registry());
+        let proposal = model::CurrentStateProposal::new(
+            model::ResourceId::new("service/ollama"),
+            model::ResourceType::new("service"),
+            model::SchemaVersion::new(3),
+            model::ServiceCurrentState::new(true, true, false),
+        );
+
+        let verification = model::VerificationResult::new(
+            model::VerificationResultId::new("verification/service/ollama/1"),
+            model::ResourceId::new("service/ollama"),
+            model::ResourceType::new("service"),
+            model::VerificationPurpose::CurrentStateEstablishment,
+            model::StateBasis::new(
+                model::DesiredGeneration::new(1),
+                model::CurrentRevision::new(4),
+            ),
+            Some(model::DesiredGeneration::new(1)),
+            model::VerificationPolicyRevision::new("default-v1"),
+            Vec::new(),
+            Vec::new(),
+            model::VerificationTimestamp::new("2026-09-18T00:01:00Z"),
+            Vec::new(),
+            model::VerificationOverallResult::Satisfied,
+            Vec::new(),
+            Vec::new(),
+            model::VerificationProviderId::new("system-service-verifier"),
+            model::VerificationProviderVersion::new("system-service-verifier-v1"),
+            model::SchemaVersion::new(1),
+        );
+
+        let accepted = engine
+            .accept_current_state_proposal(proposal, &verification, model::CurrentRevision::new(5))
+            .expect("verified Current State proposal should be accepted");
+
+        assert_eq!(accepted.resource_id().as_str(), "service/ollama");
+        assert_eq!(accepted.resource_type().as_str(), "service");
+        assert_eq!(accepted.schema_version(), model::SchemaVersion::new(3));
+        assert_eq!(accepted.revision(), model::CurrentRevision::new(5));
+        assert_eq!(
+            accepted.current(),
+            &model::ServiceCurrentState::new(true, true, false)
+        );
     }
 
     #[test]
