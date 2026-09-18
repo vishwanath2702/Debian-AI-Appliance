@@ -27,16 +27,24 @@ impl ServiceCommandRunner for ProcessServiceCommandRunner {
 /// CPU information discovered from the current system.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct CpuFacts {
+    architecture: &'static str,
     logical_processor_count: usize,
 }
 
 impl CpuFacts {
-    /// Creates CPU facts with the discovered logical processor count.
+    /// Creates CPU facts with the discovered architecture and logical processor count.
     #[must_use]
-    pub const fn new(logical_processor_count: usize) -> Self {
+    pub const fn new(architecture: &'static str, logical_processor_count: usize) -> Self {
         Self {
+            architecture,
             logical_processor_count,
         }
+    }
+
+    /// Returns the CPU architecture.
+    #[must_use]
+    pub const fn architecture(self) -> &'static str {
+        self.architecture
     }
 
     /// Returns the number of logical processors.
@@ -198,7 +206,8 @@ fn parse_linux_cpuinfo(cpuinfo: &str) -> Option<CpuFacts> {
         })
         .count();
 
-    (logical_processor_count > 0).then(|| CpuFacts::new(logical_processor_count))
+    (logical_processor_count > 0)
+        .then(|| CpuFacts::new(std::env::consts::ARCH, logical_processor_count))
 }
 
 fn parse_linux_meminfo(meminfo: &str) -> Option<MemoryFacts> {
@@ -288,8 +297,9 @@ mod tests {
 
     #[test]
     fn cpu_facts_exposes_logical_processor_count() {
-        let facts = CpuFacts::new(4);
+        let facts = CpuFacts::new("x86_64", 4);
 
+        assert_eq!(facts.architecture(), "x86_64");
         assert_eq!(facts.logical_processor_count(), 4);
     }
 
@@ -300,6 +310,7 @@ mod tests {
 
         let facts = parse_linux_cpuinfo(cpuinfo).expect("CPU facts");
 
+        assert_eq!(facts.architecture(), std::env::consts::ARCH);
         assert_eq!(facts.logical_processor_count(), 2);
     }
 
@@ -321,8 +332,10 @@ mod tests {
 
     #[test]
     fn hardware_facts_exposes_cpu_and_memory() {
-        let facts = HardwareFacts::new(CpuFacts::new(4), MemoryFacts::new(17_179_869_184));
+        let facts =
+            HardwareFacts::new(CpuFacts::new("x86_64", 4), MemoryFacts::new(17_179_869_184));
 
+        assert_eq!(facts.cpu().architecture(), "x86_64");
         assert_eq!(facts.cpu().logical_processor_count(), 4);
         assert_eq!(facts.memory().total_bytes(), 17_179_869_184);
     }
@@ -435,6 +448,7 @@ mod tests {
     fn discovers_current_system_hardware() {
         let facts = discover_hardware().expect("discover hardware facts");
 
+        assert_eq!(facts.cpu().architecture(), std::env::consts::ARCH);
         assert!(facts.cpu().logical_processor_count() > 0);
         assert!(facts.memory().total_bytes() > 0);
     }
