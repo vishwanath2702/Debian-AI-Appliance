@@ -24,6 +24,28 @@ impl ServiceCommandRunner for ProcessServiceCommandRunner {
     }
 }
 
+/// Compute accelerator information discovered from the current system.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AcceleratorFacts {
+    identifier: String,
+}
+
+impl AcceleratorFacts {
+    /// Creates accelerator facts from the discovered device identifier.
+    #[must_use]
+    pub fn new(identifier: impl Into<String>) -> Self {
+        Self {
+            identifier: identifier.into(),
+        }
+    }
+
+    /// Returns the discovered device identifier.
+    #[must_use]
+    pub fn identifier(&self) -> &str {
+        &self.identifier
+    }
+}
+
 /// CPU information discovered from the current system.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CpuFacts {
@@ -402,12 +424,19 @@ pub fn discover_service(service: &str) -> io::Result<ServiceFacts> {
 #[cfg(test)]
 mod tests {
     use super::{
-        CpuFacts, GpuFacts, HardwareFacts, MemoryFacts, ServiceCommandRunner, ServiceFacts,
-        discover_cpu, discover_hardware, discover_memory, parse_linux_cpuinfo, parse_linux_meminfo,
-        parse_systemd_service_show, query_systemd_service, read_linux_cpuinfo, read_linux_gpus,
-        read_linux_meminfo,
+        AcceleratorFacts, CpuFacts, GpuFacts, HardwareFacts, MemoryFacts, ServiceCommandRunner,
+        ServiceFacts, discover_cpu, discover_hardware, discover_memory, parse_linux_cpuinfo,
+        parse_linux_meminfo, parse_systemd_service_show, query_systemd_service, read_linux_cpuinfo,
+        read_linux_gpus, read_linux_meminfo,
     };
     use std::{ffi::OsStr, fs, io, process::Command};
+
+    #[test]
+    fn accelerator_facts_exposes_device_identity() {
+        let facts = AcceleratorFacts::new("accel0");
+
+        assert_eq!(facts.identifier(), "accel0");
+    }
 
     #[test]
     fn cpu_facts_exposes_logical_processor_count() {
