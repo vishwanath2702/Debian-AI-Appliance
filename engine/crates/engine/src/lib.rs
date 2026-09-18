@@ -818,6 +818,14 @@ impl Engine {
             ));
         }
 
+        if configuration.content_repository_id() != content_repository.id() {
+            return Err(format!(
+                "Error: selected content repository \"{}\" does not match resolved repository \"{}\"",
+                configuration.content_repository_id(),
+                content_repository.id()
+            ));
+        }
+
         let items = self
             .repository_content_items(content_repository, content_inspector)
             .map_err(|error| format!("Error discovering content: {error}"))?;
@@ -1866,6 +1874,48 @@ mod tests {
             .expect_err("mismatched appliance profile should fail");
 
         assert!(error.contains("does not match resolved profile"));
+    }
+
+    #[test]
+    fn prepare_appliance_configuration_rejects_mismatched_content_repository() {
+        let engine = Engine::from_registry(desktop_registry());
+
+        let configuration = ApplianceConfiguration::from_selections(
+            "desktop",
+            ContentRepositoryId::new("local-models"),
+            Vec::new(),
+            DiscoveredStorageId::new("serial:usb-disk"),
+        );
+
+        let profile = ApplianceProfile::new(
+            "desktop",
+            "Desktop appliance",
+            vec![Capability::new("desktop")],
+        );
+
+        let repository = ContentRepository::new(
+            "different-repository",
+            "Different content repository",
+        );
+
+        let storage = vec![DiscoveredStorage::new(
+            "serial:usb-disk",
+            StorageKind::Removable,
+            "/dev/sdb",
+        )];
+
+        let error = engine
+            .prepare_appliance_configuration(
+                &configuration,
+                &profile,
+                &repository,
+                &TestContentInspector,
+                &storage,
+                ContentImportDestination::new("/var/lib/daia/content"),
+            )
+            .expect_err("mismatched content repository should fail");
+
+        assert!(error.contains("does not match resolved repository"));
     }
 
     #[test]
