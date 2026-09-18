@@ -113,13 +113,14 @@ impl GpuFacts {
 pub struct HardwareFacts {
     cpu: CpuFacts,
     memory: MemoryFacts,
+    gpus: Vec<GpuFacts>,
 }
 
 impl HardwareFacts {
-    /// Creates hardware facts from discovered CPU and memory information.
+    /// Creates hardware facts from discovered CPU, memory, and GPU information.
     #[must_use]
-    pub const fn new(cpu: CpuFacts, memory: MemoryFacts) -> Self {
-        Self { cpu, memory }
+    pub fn new(cpu: CpuFacts, memory: MemoryFacts, gpus: Vec<GpuFacts>) -> Self {
+        Self { cpu, memory, gpus }
     }
 
     /// Returns the discovered CPU information.
@@ -132,6 +133,12 @@ impl HardwareFacts {
     #[must_use]
     pub const fn memory(&self) -> MemoryFacts {
         self.memory
+    }
+
+    /// Returns the discovered GPU information.
+    #[must_use]
+    pub fn gpus(&self) -> &[GpuFacts] {
+        &self.gpus
     }
 }
 
@@ -365,8 +372,9 @@ pub fn discover_gpus() -> std::io::Result<Vec<GpuFacts>> {
 pub fn discover_hardware() -> std::io::Result<HardwareFacts> {
     let cpu = discover_cpu()?;
     let memory = discover_memory()?;
+    let gpus = discover_gpus()?;
 
-    Ok(HardwareFacts::new(cpu, memory))
+    Ok(HardwareFacts::new(cpu, memory, gpus))
 }
 
 /// Discovers memory facts for the current Linux system.
@@ -487,11 +495,16 @@ mod tests {
         let facts = HardwareFacts::new(
             CpuFacts::new("x86_64", 4, vec!["avx2".to_owned()]),
             MemoryFacts::new(17_179_869_184),
+            vec![GpuFacts::new("0000:01:00.0", "0x10de", "0x2684")],
         );
 
         assert_eq!(facts.cpu().architecture(), "x86_64");
         assert_eq!(facts.cpu().logical_processor_count(), 4);
         assert_eq!(facts.memory().total_bytes(), 17_179_869_184);
+        assert_eq!(
+            facts.gpus(),
+            [GpuFacts::new("0000:01:00.0", "0x10de", "0x2684")]
+        );
     }
 
     struct RecordingServiceCommandRunner {
