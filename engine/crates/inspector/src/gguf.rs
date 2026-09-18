@@ -6,7 +6,6 @@ use crate::ModelInspectError;
 
 const GGUF_MAGIC: [u8; 4] = *b"GGUF";
 const GGUF_MAX_METADATA_KEY_LENGTH: u64 = 65_535;
-const GGUF_MAX_ARRAY_DEPTH: usize = 32;
 
 const GGUF_TYPE_UINT8: u32 = 0;
 const GGUF_TYPE_INT8: u32 = 1;
@@ -106,7 +105,7 @@ pub fn inspect_gguf(path: impl AsRef<Path>) -> Result<GgufMetadata, ModelInspect
 
             architecture = Some(read_string(&mut file)?);
         } else {
-            skip_value(&mut file, value_type, 0)?;
+            skip_value(&mut file, value_type)?;
         }
     }
 
@@ -200,11 +199,7 @@ fn skip_bytes(reader: &mut impl Read, mut length: u64) -> Result<(), ModelInspec
     Ok(())
 }
 
-fn skip_value(
-    reader: &mut impl Read,
-    value_type: u32,
-    depth: usize,
-) -> Result<(), ModelInspectError> {
+fn skip_value(reader: &mut impl Read, value_type: u32) -> Result<(), ModelInspectError> {
     match value_type {
         GGUF_TYPE_UINT8 | GGUF_TYPE_INT8 => skip_bytes(reader, 1),
         GGUF_TYPE_UINT16 | GGUF_TYPE_INT16 => skip_bytes(reader, 2),
@@ -227,19 +222,20 @@ fn skip_value(
             skip_bytes(reader, length)
         }
         GGUF_TYPE_ARRAY => {
-            if depth >= GGUF_MAX_ARRAY_DEPTH {
+            let element_type = read_u32(reader)?;
+
+            if element_type == GGUF_TYPE_ARRAY {
                 return Err(ModelInspectError::InvalidGguf(
-                    "metadata array nesting is too deep".to_owned(),
+                    "metadata arrays cannot contain arrays".to_owned(),
                 ));
             }
 
-            let element_type = read_u32(reader)?;
             validate_value_type(element_type)?;
 
             let length = read_u64(reader)?;
 
             for _ in 0..length {
-                skip_value(reader, element_type, depth + 1)?;
+                skip_value(reader, element_type)?;
             }
 
             Ok(())
@@ -446,28 +442,21 @@ mod tests {
     }
 
     #[test]
-    fn rejects_excessively_nested_metadata_arrays() {
+    fn rejects_nested_metadata_arrays() {
         let directory = tempfile::tempdir().expect("temporary directory should exist");
         let path = directory.path().join("model.bin");
 
         let mut bytes = gguf_with_metadata_count(2);
         push_string(&mut bytes, "custom.nested");
         bytes.extend_from_slice(&super::GGUF_TYPE_ARRAY.to_le_bytes());
-
-        for _ in 0..super::GGUF_MAX_ARRAY_DEPTH {
-            bytes.extend_from_slice(&super::GGUF_TYPE_ARRAY.to_le_bytes());
-            bytes.extend_from_slice(&1_u64.to_le_bytes());
-        }
-
-        bytes.extend_from_slice(&super::GGUF_TYPE_UINT8.to_le_bytes());
+        bytes.extend_from_slice(&super::GGUF_TYPE_ARRAY.to_le_bytes());
         bytes.extend_from_slice(&1_u64.to_le_bytes());
-        bytes.push(0);
 
         push_metadata_string(&mut bytes, "general.architecture", "llama");
 
         fs::write(&path, bytes).expect("GGUF test artifact should be written");
 
-        let error = inspect_gguf(&path).expect_err("excessive nesting should fail");
+        let error = inspect_gguf(&path).expect_err("nested array should fail");
 
         assert!(matches!(error, ModelInspectError::InvalidGguf(_)));
     }
