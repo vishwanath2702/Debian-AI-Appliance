@@ -1,9 +1,9 @@
 use model::{
-    ConditionResult, CurrentResource, CurrentRevision, CurrentStateProposal, SchemaVersion,
-    ServiceDesiredState, VerificationConditionId, VerificationConditionResult,
-    VerificationEvidenceReference, VerificationOverallResult, VerificationProviderId,
-    VerificationProviderVersion, VerificationPurpose, VerificationRequest, VerificationResult,
-    VerificationResultId, VerificationRuleReference, VerificationTimestamp,
+    ConditionResult, CurrentResource, CurrentRevision, CurrentStateProposal, Observation,
+    ResourceType, SchemaVersion, ServiceCurrentState, ServiceDesiredState, VerificationConditionId,
+    VerificationConditionResult, VerificationEvidenceReference, VerificationOverallResult,
+    VerificationProviderId, VerificationProviderVersion, VerificationPurpose, VerificationRequest,
+    VerificationResult, VerificationResultId, VerificationRuleReference, VerificationTimestamp,
 };
 
 fn service_running(active_state: &str) -> Option<bool> {
@@ -13,6 +13,20 @@ fn service_running(active_state: &str) -> Option<bool> {
         "activating" | "deactivating" => None,
         _ => None,
     }
+}
+
+fn propose_service_current_state(
+    observation: &Observation<facts::ServiceFacts>,
+) -> Option<CurrentStateProposal<ServiceCurrentState>> {
+    let observed = observation.observed();
+    let running = service_running(observed.active_state())?;
+
+    Some(CurrentStateProposal::new(
+        observation.resource_id().clone(),
+        ResourceType::new("service"),
+        observation.schema_version(),
+        ServiceCurrentState::new(observed.is_present(), observed.is_enabled(), running),
+    ))
 }
 
 pub(crate) fn evaluate_service(
@@ -161,18 +175,19 @@ pub(crate) fn accept_current_state_proposal<T>(
 mod tests {
     use super::{
         accept_current_state_proposal, aggregate_verification_result, build_verification_result,
-        current_state_proposal_is_acceptable, evaluate_service, service_running,
-        verification_eligible_for_current_state, verification_matches_current_state_proposal,
+        current_state_proposal_is_acceptable, evaluate_service, propose_service_current_state,
+        service_running, verification_eligible_for_current_state,
+        verification_matches_current_state_proposal,
     };
     use model::{
         ArchitecturalComponentId, ConditionResult, CurrentRevision, CurrentStateProposal,
-        DesiredGeneration, EvidenceId, EvidenceSourceId, ObservationTimestamp, ResourceId,
-        ResourceType, SchemaVersion, ServiceCurrentState, ServiceDesiredState, StateBasis,
-        VerificationCondition, VerificationConditionId, VerificationConditionResult,
-        VerificationEvidenceReference, VerificationOverallResult, VerificationPolicyRevision,
-        VerificationProviderId, VerificationProviderVersion, VerificationPurpose,
-        VerificationRequest, VerificationResult, VerificationResultId, VerificationRuleReference,
-        VerificationRuleVersion, VerificationTimestamp,
+        DesiredGeneration, EvidenceId, EvidenceSourceId, Observation, ObservationSourceId,
+        ObservationTimestamp, ResourceId, ResourceType, SchemaVersion, ServiceCurrentState,
+        ServiceDesiredState, StateBasis, VerificationCondition, VerificationConditionId,
+        VerificationConditionResult, VerificationEvidenceReference, VerificationOverallResult,
+        VerificationPolicyRevision, VerificationProviderId, VerificationProviderVersion,
+        VerificationPurpose, VerificationRequest, VerificationResult, VerificationResultId,
+        VerificationRuleReference, VerificationRuleVersion, VerificationTimestamp,
     };
 
     fn expected(name: &str, mandatory: bool) -> VerificationCondition {
@@ -476,6 +491,48 @@ mod tests {
             VerificationOverallResult::Unsatisfied
         );
         assert_eq!(verification.result_schema_version(), SchemaVersion::new(1));
+    }
+
+    #[test]
+    fn proposes_service_current_state_from_stable_observation() {
+        let observation = Observation::new(
+            ResourceId::new("service/ollama"),
+            ObservationSourceId::new("system-service-observer"),
+            ObservationTimestamp::new("2026-09-18T00:00:00Z"),
+            SchemaVersion::new(7),
+            facts::ServiceFacts::new(true, false, "active"),
+        );
+
+        let proposal = propose_service_current_state(&observation)
+            .expect("stable service observation should produce Current State proposal");
+
+        assert_eq!(proposal.resource_id(), observation.resource_id());
+        assert_eq!(proposal.resource_type().as_str(), "service");
+        assert_eq!(proposal.schema_version(), SchemaVersion::new(7));
+        assert_eq!(
+            proposal.proposed(),
+            &ServiceCurrentState::new(true, false, true)
+        );
+
+        let transitional = Observation::new(
+            ResourceId::new("service/ollama"),
+            ObservationSourceId::new("system-service-observer"),
+            ObservationTimestamp::new("2026-09-18T00:00:01Z"),
+            SchemaVersion::new(7),
+            facts::ServiceFacts::new(true, false, "activating"),
+        );
+
+        assert!(propose_service_current_state(&transitional).is_none());
+
+        let unrecognized = Observation::new(
+            ResourceId::new("service/ollama"),
+            ObservationSourceId::new("system-service-observer"),
+            ObservationTimestamp::new("2026-09-18T00:00:02Z"),
+            SchemaVersion::new(7),
+            facts::ServiceFacts::new(true, false, "maintenance"),
+        );
+
+        assert!(propose_service_current_state(&unrecognized).is_none());
     }
 
     #[test]
