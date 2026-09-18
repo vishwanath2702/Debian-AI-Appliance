@@ -118,6 +118,11 @@ impl<T> CurrentState<T> {
     pub const fn current(&self) -> &model::CurrentResource<T> {
         &self.current
     }
+
+    /// Replaces Current State with another already accepted resource.
+    pub fn replace(&mut self, current: model::CurrentResource<T>) {
+        self.current = current;
+    }
 }
 
 #[cfg(test)]
@@ -137,6 +142,29 @@ mod tests {
         let state = CurrentState::new(resource.clone());
 
         assert_eq!(state.current(), &resource);
+    }
+
+    #[test]
+    fn replaces_current_state_with_accepted_resource() {
+        let initial = model::CurrentResource::new(
+            model::ResourceId::new("service/ollama"),
+            model::ResourceType::new("service"),
+            model::SchemaVersion::new(1),
+            model::CurrentRevision::new(2),
+            model::ServiceCurrentState::new(true, false, false),
+        );
+        let replacement = model::CurrentResource::new(
+            model::ResourceId::new("service/ollama"),
+            model::ResourceType::new("service"),
+            model::SchemaVersion::new(1),
+            model::CurrentRevision::new(7),
+            model::ServiceCurrentState::new(true, true, true),
+        );
+        let mut state = CurrentState::new(initial);
+
+        state.replace(replacement.clone());
+
+        assert_eq!(state.current(), &replacement);
     }
 
     #[test]
