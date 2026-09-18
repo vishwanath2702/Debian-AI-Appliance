@@ -312,6 +312,20 @@ fn parse_linux_meminfo(meminfo: &str) -> Option<MemoryFacts> {
     Some(MemoryFacts::new(total_kib * 1024))
 }
 
+fn read_linux_accelerators(path: &std::path::Path) -> std::io::Result<Vec<AcceleratorFacts>> {
+    let mut accelerators = Vec::new();
+
+    for entry in std::fs::read_dir(path)? {
+        let entry = entry?;
+
+        accelerators.push(AcceleratorFacts::new(entry.file_name().to_string_lossy()));
+    }
+
+    accelerators.sort_by(|left, right| left.identifier().cmp(right.identifier()));
+
+    Ok(accelerators)
+}
+
 fn read_linux_gpus(path: &std::path::Path) -> std::io::Result<Vec<GpuFacts>> {
     let mut gpus = Vec::new();
 
@@ -376,6 +390,15 @@ pub fn discover_cpu() -> std::io::Result<CpuFacts> {
     read_linux_cpuinfo(std::path::Path::new("/proc/cpuinfo"))
 }
 
+/// Discovers compute accelerator facts for the current Linux system.
+///
+/// # Errors
+///
+/// Returns an error when the Linux accelerator class cannot be read.
+pub fn discover_accelerators() -> std::io::Result<Vec<AcceleratorFacts>> {
+    read_linux_accelerators(std::path::Path::new("/sys/class/accel"))
+}
+
 /// Discovers GPU facts for the current Linux system.
 ///
 /// # Errors
@@ -426,8 +449,8 @@ mod tests {
     use super::{
         AcceleratorFacts, CpuFacts, GpuFacts, HardwareFacts, MemoryFacts, ServiceCommandRunner,
         ServiceFacts, discover_cpu, discover_hardware, discover_memory, parse_linux_cpuinfo,
-        parse_linux_meminfo, parse_systemd_service_show, query_systemd_service, read_linux_cpuinfo,
-        read_linux_gpus, read_linux_meminfo,
+        parse_linux_meminfo, parse_systemd_service_show, query_systemd_service,
+        read_linux_accelerators, read_linux_cpuinfo, read_linux_gpus, read_linux_meminfo,
     };
     use std::{ffi::OsStr, fs, io, process::Command};
 
@@ -484,6 +507,26 @@ mod tests {
         fs::remove_file(&path).expect("remove cpuinfo");
 
         assert_eq!(facts.logical_processor_count(), 3);
+    }
+
+    #[test]
+    fn reads_linux_accelerators_from_sysfs_class() {
+        let root = std::env::temp_dir().join("daia-facts-accelerator-test");
+
+        fs::create_dir_all(root.join("accel1")).expect("create accelerator sysfs directory");
+        fs::create_dir_all(root.join("accel0")).expect("create accelerator sysfs directory");
+
+        let accelerators = read_linux_accelerators(&root).expect("read accelerator facts");
+
+        fs::remove_dir_all(&root).expect("remove fake accelerator sysfs");
+
+        assert_eq!(
+            accelerators,
+            [
+                AcceleratorFacts::new("accel0"),
+                AcceleratorFacts::new("accel1"),
+            ]
+        );
     }
 
     #[test]
