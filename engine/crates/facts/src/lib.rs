@@ -25,37 +25,49 @@ impl ServiceCommandRunner for ProcessServiceCommandRunner {
 }
 
 /// CPU information discovered from the current system.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CpuFacts {
     architecture: &'static str,
     logical_processor_count: usize,
+    features: Vec<String>,
 }
 
 impl CpuFacts {
     /// Creates CPU facts with the discovered architecture and logical processor count.
     #[must_use]
-    pub const fn new(architecture: &'static str, logical_processor_count: usize) -> Self {
+    pub fn new(
+        architecture: &'static str,
+        logical_processor_count: usize,
+        features: Vec<String>,
+    ) -> Self {
         Self {
             architecture,
             logical_processor_count,
+            features,
         }
     }
 
     /// Returns the CPU architecture.
     #[must_use]
-    pub const fn architecture(self) -> &'static str {
+    pub const fn architecture(&self) -> &'static str {
         self.architecture
     }
 
     /// Returns the number of logical processors.
     #[must_use]
-    pub const fn logical_processor_count(self) -> usize {
+    pub const fn logical_processor_count(&self) -> usize {
         self.logical_processor_count
+    }
+
+    /// Returns the discovered CPU feature identifiers.
+    #[must_use]
+    pub fn features(&self) -> &[String] {
+        &self.features
     }
 }
 
 /// Hardware information discovered from the current system.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct HardwareFacts {
     cpu: CpuFacts,
     memory: MemoryFacts,
@@ -70,13 +82,13 @@ impl HardwareFacts {
 
     /// Returns the discovered CPU information.
     #[must_use]
-    pub const fn cpu(self) -> CpuFacts {
-        self.cpu
+    pub const fn cpu(&self) -> &CpuFacts {
+        &self.cpu
     }
 
     /// Returns the discovered memory information.
     #[must_use]
-    pub const fn memory(self) -> MemoryFacts {
+    pub const fn memory(&self) -> MemoryFacts {
         self.memory
     }
 }
@@ -206,8 +218,17 @@ fn parse_linux_cpuinfo(cpuinfo: &str) -> Option<CpuFacts> {
         })
         .count();
 
+    let features = cpuinfo
+        .lines()
+        .find_map(|line| {
+            let (field, value) = line.split_once(':')?;
+            matches!(field.trim(), "flags" | "Features")
+                .then(|| value.split_whitespace().map(str::to_owned).collect())
+        })
+        .unwrap_or_default();
+
     (logical_processor_count > 0)
-        .then(|| CpuFacts::new(std::env::consts::ARCH, logical_processor_count))
+        .then(|| CpuFacts::new(std::env::consts::ARCH, logical_processor_count, features))
 }
 
 fn parse_linux_meminfo(meminfo: &str) -> Option<MemoryFacts> {
@@ -297,21 +318,34 @@ mod tests {
 
     #[test]
     fn cpu_facts_exposes_logical_processor_count() {
-        let facts = CpuFacts::new("x86_64", 4);
+        let facts = CpuFacts::new("x86_64", 4, vec!["sse4_2".to_owned(), "avx2".to_owned()]);
 
         assert_eq!(facts.architecture(), "x86_64");
         assert_eq!(facts.logical_processor_count(), 4);
+        assert_eq!(facts.features(), ["sse4_2", "avx2"]);
     }
 
     #[test]
     fn parses_linux_cpuinfo_logical_processor_count() {
-        let cpuinfo =
-            "processor\t: 0\nmodel name\t: Test CPU\n\nprocessor\t: 1\nmodel name\t: Test CPU\n";
+        let cpuinfo = "processor\t: 0\nmodel name\t: Test CPU\nflags\t\t: sse4_2 avx avx2\n\nprocessor\t: 1\nmodel name\t: Test CPU\n";
 
         let facts = parse_linux_cpuinfo(cpuinfo).expect("CPU facts");
 
         assert_eq!(facts.architecture(), std::env::consts::ARCH);
         assert_eq!(facts.logical_processor_count(), 2);
+        assert_eq!(facts.features(), ["sse4_2", "avx", "avx2"]);
+    }
+
+    #[test]
+    fn parses_linux_cpuinfo_features_field() {
+        let cpuinfo = "processor\t: 0\nFeatures\t: fp asimd aes sha1 sha2 crc32\n";
+
+        let facts = parse_linux_cpuinfo(cpuinfo).expect("CPU facts");
+
+        assert_eq!(
+            facts.features(),
+            ["fp", "asimd", "aes", "sha1", "sha2", "crc32"]
+        );
     }
 
     #[test]
@@ -319,7 +353,7 @@ mod tests {
         let path = std::env::temp_dir().join("daia-facts-cpuinfo-test");
         fs::write(
             &path,
-            "processor\t: 0\n\nprocessor\t: 1\n\nprocessor\t: 2\n",
+            "processor\t: 0\nflags\t\t: avx2\n\nprocessor\t: 1\n\nprocessor\t: 2\n",
         )
         .expect("write cpuinfo");
 
@@ -332,8 +366,10 @@ mod tests {
 
     #[test]
     fn hardware_facts_exposes_cpu_and_memory() {
-        let facts =
-            HardwareFacts::new(CpuFacts::new("x86_64", 4), MemoryFacts::new(17_179_869_184));
+        let facts = HardwareFacts::new(
+            CpuFacts::new("x86_64", 4, vec!["avx2".to_owned()]),
+            MemoryFacts::new(17_179_869_184),
+        );
 
         assert_eq!(facts.cpu().architecture(), "x86_64");
         assert_eq!(facts.cpu().logical_processor_count(), 4);
