@@ -768,6 +768,14 @@ impl Engine {
         profile: &ApplianceProfile,
         storage: &[DiscoveredStorage],
     ) -> Result<PreparedInstallation, String> {
+        if intent.profile_name() != profile.name() {
+            return Err(format!(
+                "selected installation profile \"{}\" does not match resolved profile \"{}\"",
+                intent.profile_name(),
+                profile.name()
+            ));
+        }
+
         let selected = self
             .validate_installation_storage(&intent, storage)?
             .clone();
@@ -2217,6 +2225,32 @@ mod tests {
                     content: content.clone(),
                 }
         }));
+    }
+
+    #[test]
+    fn prepare_installation_rejects_mismatched_profile() {
+        let engine = Engine::from_registry(desktop_registry());
+
+        let intent =
+            InstallationIntent::new("desktop", DiscoveredStorageId::new("serial:usb-disk"));
+
+        let profile = ApplianceProfile::new(
+            "different-profile",
+            "Different appliance",
+            vec![Capability::new("desktop")],
+        );
+
+        let storage = vec![DiscoveredStorage::new(
+            "serial:usb-disk",
+            StorageKind::Removable,
+            "/dev/sdb",
+        )];
+
+        let error = engine
+            .prepare_installation(intent, &profile, &storage)
+            .expect_err("mismatched installation profile should fail");
+
+        assert!(error.contains("does not match resolved profile"));
     }
 
     #[test]
