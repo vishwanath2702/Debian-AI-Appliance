@@ -1,4 +1,4 @@
-use model::{ServiceCurrentState, ServiceDesiredState};
+use model::{CurrentResource, ServiceCurrentState, ServiceDesiredState};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ServiceStateDifference {
@@ -129,13 +129,13 @@ where
 fn reconcile_service<E>(
     service: &str,
     desired: &ServiceDesiredState,
-    current: &ServiceCurrentState,
+    current: &CurrentResource<ServiceCurrentState>,
     executor: &mut E,
 ) -> Result<(), E::Error>
 where
     E: ServiceTransitionExecutor,
 {
-    let transitions = service_transitions(desired, current);
+    let transitions = service_transitions(desired, current.current());
     execute_service_transitions(service, &transitions, executor)
 }
 
@@ -182,7 +182,7 @@ pub(crate) fn service_state_differs(
 pub(crate) fn reconcile_service_system(
     service: &str,
     desired: &ServiceDesiredState,
-    current: &ServiceCurrentState,
+    current: &CurrentResource<ServiceCurrentState>,
 ) -> std::io::Result<()> {
     let mut executor = SystemServiceTransitionExecutor::new(ProcessServiceCommandRunner);
     reconcile_service(service, desired, current, &mut executor)
@@ -195,7 +195,7 @@ mod tests {
         SystemServiceTransitionExecutor, execute_service_transitions, reconcile_service,
         service_state_differences, service_state_differs, service_transitions,
     };
-    use model::{ServiceCurrentState, ServiceDesiredState};
+    use model::{CurrentResource, ServiceCurrentState, ServiceDesiredState};
 
     struct RecordingServiceTransitionExecutor {
         transitions: Vec<ServiceTransition>,
@@ -346,7 +346,13 @@ mod tests {
     #[test]
     fn reconciles_service_by_planning_and_executing_transitions() {
         let desired = ServiceDesiredState::new(true, true, true);
-        let current = ServiceCurrentState::new(false, false, false);
+        let current = CurrentResource::new(
+            model::ResourceId::new("service/ollama"),
+            model::ResourceType::new("service"),
+            model::SchemaVersion::new(1),
+            model::CurrentRevision::new(1),
+            ServiceCurrentState::new(false, false, false),
+        );
         let mut executor = RecordingServiceTransitionExecutor {
             transitions: Vec::new(),
         };

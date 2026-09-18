@@ -32,9 +32,9 @@ use inspector::{ContentInspectError, ContentInspector, StorageInspectError, Stor
 pub use mmdebstrap::{MmdebstrapBootstrapper, MmdebstrapError};
 use model::{
     ApplianceProfile, Capability, ContentImportDestination, ContentImportIntent, ContentRepository,
-    ContentRepositoryId, ContentSource, DiscoveredContent, DiscoveredStorage, ExternalContentItem,
-    ExternalContentItemId, ImportedContentItem, InstallationIntent, Observation,
-    ObservationSourceId, ObservationTimestamp, Plan, ResourceId, SchemaVersion,
+    ContentRepositoryId, ContentSource, CurrentResource, DiscoveredContent, DiscoveredStorage,
+    ExternalContentItem, ExternalContentItemId, ImportedContentItem, InstallationIntent,
+    Observation, ObservationSourceId, ObservationTimestamp, Plan, ResourceId, SchemaVersion,
     ServiceCurrentState, ServiceDesiredState, StorageKind, VerificationConditionResult,
     VerificationOverallResult, VerificationRequest,
 };
@@ -566,7 +566,7 @@ impl Engine {
         &self,
         service: &str,
         desired: &ServiceDesiredState,
-        current: &ServiceCurrentState,
+        current: &CurrentResource<ServiceCurrentState>,
     ) -> std::io::Result<()> {
         reconciliation::reconcile_service_system(service, desired, current)
     }
