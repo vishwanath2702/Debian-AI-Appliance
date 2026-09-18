@@ -113,6 +113,14 @@ impl PackageRepository {
             .iter()
             .find(|manifest| manifest.name() == name)
     }
+
+    #[must_use]
+    pub(crate) fn manifest_for_realization(
+        &self,
+        realization: &model::PackageManifestRealization,
+    ) -> Option<&PackageManifest> {
+        self.manifest(realization.package_manifest())
+    }
 }
 
 #[cfg(test)]
@@ -163,6 +171,31 @@ assert_eq!(
     ]
 );
     }
+    #[test]
+    fn resolves_package_manifest_realization() {
+        let repository = PackageRepository::from_manifests(vec![PackageManifest::new(
+            "desktop",
+            vec!["gdm3".to_owned()],
+        )])
+        .expect("valid package repository");
+        let realization = model::PackageManifestRealization::new("desktop");
+
+        let manifest = repository
+            .manifest_for_realization(&realization)
+            .expect("package manifest realization should resolve");
+
+        assert_eq!(manifest.name(), "desktop");
+        assert_eq!(manifest.packages(), &["gdm3".to_owned()]);
+    }
+
+    #[test]
+    fn missing_package_manifest_realization_does_not_resolve() {
+        let repository = PackageRepository::new();
+        let realization = model::PackageManifestRealization::new("desktop");
+
+        assert!(repository.manifest_for_realization(&realization).is_none());
+    }
+
     #[test]
     fn new_repository_is_empty() {
         let repository = PackageRepository::new();
