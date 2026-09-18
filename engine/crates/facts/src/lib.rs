@@ -136,13 +136,24 @@ pub struct HardwareFacts {
     cpu: CpuFacts,
     memory: MemoryFacts,
     gpus: Vec<GpuFacts>,
+    accelerators: Vec<AcceleratorFacts>,
 }
 
 impl HardwareFacts {
-    /// Creates hardware facts from discovered CPU, memory, and GPU information.
+    /// Creates hardware facts from discovered CPU, memory, GPU, and accelerator information.
     #[must_use]
-    pub fn new(cpu: CpuFacts, memory: MemoryFacts, gpus: Vec<GpuFacts>) -> Self {
-        Self { cpu, memory, gpus }
+    pub fn new(
+        cpu: CpuFacts,
+        memory: MemoryFacts,
+        gpus: Vec<GpuFacts>,
+        accelerators: Vec<AcceleratorFacts>,
+    ) -> Self {
+        Self {
+            cpu,
+            memory,
+            gpus,
+            accelerators,
+        }
     }
 
     /// Returns the discovered CPU information.
@@ -161,6 +172,12 @@ impl HardwareFacts {
     #[must_use]
     pub fn gpus(&self) -> &[GpuFacts] {
         &self.gpus
+    }
+
+    /// Returns the discovered compute accelerator information.
+    #[must_use]
+    pub fn accelerators(&self) -> &[AcceleratorFacts] {
+        &self.accelerators
     }
 }
 
@@ -424,8 +441,9 @@ pub fn discover_hardware() -> std::io::Result<HardwareFacts> {
     let cpu = discover_cpu()?;
     let memory = discover_memory()?;
     let gpus = discover_gpus()?;
+    let accelerators = discover_accelerators()?;
 
-    Ok(HardwareFacts::new(cpu, memory, gpus))
+    Ok(HardwareFacts::new(cpu, memory, gpus, accelerators))
 }
 
 /// Discovers memory facts for the current Linux system.
@@ -587,6 +605,7 @@ mod tests {
             CpuFacts::new("x86_64", 4, vec!["avx2".to_owned()]),
             MemoryFacts::new(17_179_869_184),
             vec![GpuFacts::new("0000:01:00.0", "0x10de", "0x2684")],
+            vec![AcceleratorFacts::new("accel0")],
         );
 
         assert_eq!(facts.cpu().architecture(), "x86_64");
@@ -596,6 +615,7 @@ mod tests {
             facts.gpus(),
             [GpuFacts::new("0000:01:00.0", "0x10de", "0x2684")]
         );
+        assert_eq!(facts.accelerators(), [AcceleratorFacts::new("accel0")]);
     }
 
     struct RecordingServiceCommandRunner {
