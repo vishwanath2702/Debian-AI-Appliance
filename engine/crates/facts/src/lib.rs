@@ -66,6 +66,48 @@ impl CpuFacts {
     }
 }
 
+/// GPU information discovered from the current system.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct GpuFacts {
+    identifier: String,
+    vendor_id: String,
+    device_id: String,
+}
+
+impl GpuFacts {
+    /// Creates GPU facts from the discovered device identity.
+    #[must_use]
+    pub fn new(
+        identifier: impl Into<String>,
+        vendor_id: impl Into<String>,
+        device_id: impl Into<String>,
+    ) -> Self {
+        Self {
+            identifier: identifier.into(),
+            vendor_id: vendor_id.into(),
+            device_id: device_id.into(),
+        }
+    }
+
+    /// Returns the discovered device identifier.
+    #[must_use]
+    pub fn identifier(&self) -> &str {
+        &self.identifier
+    }
+
+    /// Returns the discovered vendor identifier.
+    #[must_use]
+    pub fn vendor_id(&self) -> &str {
+        &self.vendor_id
+    }
+
+    /// Returns the discovered device identifier assigned by the vendor.
+    #[must_use]
+    pub fn device_id(&self) -> &str {
+        &self.device_id
+    }
+}
+
 /// Hardware information discovered from the current system.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct HardwareFacts {
@@ -310,8 +352,8 @@ pub fn discover_service(service: &str) -> io::Result<ServiceFacts> {
 #[cfg(test)]
 mod tests {
     use super::{
-        CpuFacts, HardwareFacts, MemoryFacts, ServiceCommandRunner, ServiceFacts, discover_cpu,
-        discover_hardware, discover_memory, parse_linux_cpuinfo, parse_linux_meminfo,
+        CpuFacts, GpuFacts, HardwareFacts, MemoryFacts, ServiceCommandRunner, ServiceFacts,
+        discover_cpu, discover_hardware, discover_memory, parse_linux_cpuinfo, parse_linux_meminfo,
         parse_systemd_service_show, query_systemd_service, read_linux_cpuinfo, read_linux_meminfo,
     };
     use std::{ffi::OsStr, fs, io, process::Command};
@@ -362,6 +404,15 @@ mod tests {
         fs::remove_file(&path).expect("remove cpuinfo");
 
         assert_eq!(facts.logical_processor_count(), 3);
+    }
+
+    #[test]
+    fn gpu_facts_exposes_device_identity() {
+        let facts = GpuFacts::new("0000:01:00.0", "0x10de", "0x2684");
+
+        assert_eq!(facts.identifier(), "0000:01:00.0");
+        assert_eq!(facts.vendor_id(), "0x10de");
+        assert_eq!(facts.device_id(), "0x2684");
     }
 
     #[test]
