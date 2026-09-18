@@ -28,7 +28,7 @@ pub struct GgufMetadata {
     tensor_count: u64,
     metadata_kv_count: u64,
     architecture: String,
-    first_tensor_type: Option<u32>,
+    tensor_types: Vec<u32>,
 }
 
 impl GgufMetadata {
@@ -56,10 +56,10 @@ impl GgufMetadata {
         &self.architecture
     }
 
-    /// Returns the raw ggml type of the first tensor, when one is declared.
+    /// Returns the raw ggml types declared by the tensor table.
     #[must_use]
-    pub const fn first_tensor_type(&self) -> Option<u32> {
-        self.first_tensor_type
+    pub fn tensor_types(&self) -> &[u32] {
+        &self.tensor_types
     }
 }
 
@@ -120,46 +120,58 @@ pub fn inspect_gguf(path: impl AsRef<Path>) -> Result<GgufMetadata, ModelInspect
         ModelInspectError::InvalidGguf("missing general.architecture metadata".to_owned())
     })?;
 
-    let first_tensor_type = if tensor_count == 0 {
-        None
-    } else {
-        Some(read_tensor_type(&mut file)?)
-    };
+    let tensor_types = read_tensor_types(&mut file, tensor_count)?;
 
     Ok(GgufMetadata {
         version,
         tensor_count,
         metadata_kv_count,
         architecture,
-        first_tensor_type,
+        tensor_types,
     })
 }
 
-fn read_tensor_type(reader: &mut impl Read) -> Result<u32, ModelInspectError> {
-    let name = read_string(reader)?;
+fn read_tensor_types(
+    reader: &mut impl Read,
+    tensor_count: u64,
+) -> Result<Vec<u32>, ModelInspectError> {
+    let tensor_count = usize::try_from(tensor_count).map_err(|_| {
+        ModelInspectError::InvalidGguf("tensor count cannot be represented".to_owned())
+    })?;
 
-    if name.len() >= 64 {
-        return Err(ModelInspectError::InvalidGguf(
-            "tensor name is too long".to_owned(),
-        ));
-    }
+    let mut tensor_types = Vec::new();
+    tensor_types
+        .try_reserve_exact(tensor_count)
+        .map_err(|_| ModelInspectError::InvalidGguf("tensor count is too large".to_owned()))?;
 
-    let dimension_count = read_u32(reader)?;
+    for _ in 0..tensor_count {
+        let name = read_string(reader)?;
 
-    if dimension_count > 4 {
-        return Err(ModelInspectError::InvalidGguf(
-            "tensor has too many dimensions".to_owned(),
-        ));
-    }
+        if name.len() >= 64 {
+            return Err(ModelInspectError::InvalidGguf(
+                "tensor name is too long".to_owned(),
+            ));
+        }
 
-    for _ in 0..dimension_count {
+        let dimension_count = read_u32(reader)?;
+
+        if dimension_count > 4 {
+            return Err(ModelInspectError::InvalidGguf(
+                "tensor has too many dimensions".to_owned(),
+            ));
+        }
+
+        for _ in 0..dimension_count {
+            read_u64(reader)?;
+        }
+
+        let tensor_type = read_u32(reader)?;
         read_u64(reader)?;
+
+        tensor_types.push(tensor_type);
     }
 
-    let tensor_type = read_u32(reader)?;
-    read_u64(reader)?;
-
-    Ok(tensor_type)
+    Ok(tensor_types)
 }
 
 fn read_u32(reader: &mut impl Read) -> Result<u32, ModelInspectError> {
@@ -339,16 +351,16 @@ mod tests {
         assert_eq!(metadata.tensor_count(), 0);
         assert_eq!(metadata.metadata_kv_count(), 1);
         assert_eq!(metadata.architecture(), "llama");
-        assert_eq!(metadata.first_tensor_type(), None);
+        assert!(metadata.tensor_types().is_empty());
     }
 
     #[test]
-    fn inspects_first_tensor_type() {
+    fn inspects_all_tensor_types() {
         let directory = tempfile::tempdir().expect("temporary directory should exist");
         let path = directory.path().join("model.bin");
 
         let mut bytes = gguf_with_metadata_count(1);
-        bytes[8..16].copy_from_slice(&1_u64.to_le_bytes());
+        bytes[8..16].copy_from_slice(&2_u64.to_le_bytes());
         push_metadata_string(&mut bytes, "general.architecture", "llama");
 
         push_string(&mut bytes, "token_embd.weight");
@@ -358,12 +370,19 @@ mod tests {
         bytes.extend_from_slice(&7_u32.to_le_bytes());
         bytes.extend_from_slice(&0_u64.to_le_bytes());
 
+        push_string(&mut bytes, "output.weight");
+        bytes.extend_from_slice(&2_u32.to_le_bytes());
+        bytes.extend_from_slice(&32000_u64.to_le_bytes());
+        bytes.extend_from_slice(&4096_u64.to_le_bytes());
+        bytes.extend_from_slice(&12_u32.to_le_bytes());
+        bytes.extend_from_slice(&4096_u64.to_le_bytes());
+
         fs::write(&path, bytes).expect("GGUF test artifact should be written");
 
-        let metadata = inspect_gguf(&path).expect("GGUF tensor descriptor should be recognized");
+        let metadata = inspect_gguf(&path).expect("GGUF tensor descriptors should be recognized");
 
-        assert_eq!(metadata.tensor_count(), 1);
-        assert_eq!(metadata.first_tensor_type(), Some(7));
+        assert_eq!(metadata.tensor_count(), 2);
+        assert_eq!(metadata.tensor_types(), [7, 12]);
     }
 
     #[test]
