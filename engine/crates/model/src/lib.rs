@@ -1423,6 +1423,28 @@ impl fmt::Display for ProviderId {
         formatter.write_str(self.as_str())
     }
 }
+/// Realizes a managed resource through a DAIA package manifest.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PackageManifestRealization {
+    package_manifest: String,
+}
+
+impl PackageManifestRealization {
+    /// Creates a package-manifest realization.
+    #[must_use]
+    pub fn new(package_manifest: impl Into<String>) -> Self {
+        Self {
+            package_manifest: package_manifest.into(),
+        }
+    }
+
+    /// Returns the package manifest used to realize the resource.
+    #[must_use]
+    pub fn package_manifest(&self) -> &str {
+        &self.package_manifest
+    }
+}
+
 /// A capability requested through desired state.
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub struct Capability {
@@ -1993,6 +2015,13 @@ impl InstallationIntent {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn stores_package_manifest_realization() {
+        let realization = crate::PackageManifestRealization::new("desktop");
+
+        assert_eq!(realization.package_manifest(), "desktop");
+    }
+
     use super::{
         Action, ApplianceConfiguration, ArchitecturalComponentId, AssetId, Capability,
         CapabilityId, ConditionResult, ContentImportDestination, ContentImportIntent,
