@@ -36,8 +36,10 @@ use model::{
     DiscoveredContent, DiscoveredStorage, ExternalContentItem, ExternalContentItemId,
     ImportedContentItem, InstallationIntent, Observation, ObservationSourceId,
     ObservationTimestamp, Plan, ResourceId, SchemaVersion, ServiceCurrentState,
-    ServiceDesiredState, StorageKind, VerificationConditionResult, VerificationOverallResult,
-    VerificationRequest, VerificationResult,
+    ServiceDesiredState, StorageKind, VerificationConditionResult, VerificationEvidenceReference,
+    VerificationOverallResult, VerificationProviderId, VerificationProviderVersion,
+    VerificationRequest, VerificationResult, VerificationResultId, VerificationRuleReference,
+    VerificationTimestamp,
 };
 
 use planner::{PlanError, Planner};
@@ -599,6 +601,35 @@ impl Engine {
         condition_results: &[VerificationConditionResult],
     ) -> VerificationOverallResult {
         verification::aggregate_verification_result(request, condition_results)
+    }
+
+    /// Builds a verification result from a request and caller-supplied verification metadata.
+    #[allow(clippy::too_many_arguments)]
+    pub fn build_verification_result(
+        &self,
+        request: &VerificationRequest,
+        result_id: VerificationResultId,
+        rules: Vec<VerificationRuleReference>,
+        evidence: Vec<VerificationEvidenceReference>,
+        verified_at: VerificationTimestamp,
+        condition_results: Vec<VerificationConditionResult>,
+        reasons: Vec<String>,
+        warnings: Vec<String>,
+        provider_id: VerificationProviderId,
+        provider_version: VerificationProviderVersion,
+    ) -> VerificationResult {
+        verification::build_verification_result(
+            request,
+            result_id,
+            rules,
+            evidence,
+            verified_at,
+            condition_results,
+            reasons,
+            warnings,
+            provider_id,
+            provider_version,
+        )
     }
 
     /// Evaluates desired service state against observed service facts.
@@ -2420,6 +2451,58 @@ mod tests {
                     model::ConditionResult::Satisfied,
                 ),
             ]
+        );
+    }
+
+    #[test]
+    fn builds_verification_result_through_engine() {
+        let engine = Engine::from_registry(desktop_registry());
+        let request = model::VerificationRequest::new(
+            model::ResourceId::new("service/ollama"),
+            model::ResourceType::new("service"),
+            model::SchemaVersion::new(1),
+            model::VerificationPurpose::CurrentStateEstablishment,
+            model::StateBasis::new(
+                model::DesiredGeneration::new(1),
+                model::CurrentRevision::new(4),
+            ),
+            Some(model::DesiredGeneration::new(1)),
+            vec![model::VerificationCondition::new(
+                model::VerificationConditionId::new("present"),
+                true,
+            )],
+            Vec::new(),
+            vec![model::EvidenceSourceId::new("systemd")],
+            model::VerificationPolicyRevision::new("default-v1"),
+            model::VerificationTimestamp::new("2026-09-18T00:00:00Z"),
+            model::ArchitecturalComponentId::new("runtime"),
+        );
+        let conditions = vec![model::VerificationConditionResult::new(
+            model::VerificationConditionId::new("present"),
+            model::ConditionResult::Satisfied,
+        )];
+
+        let verification = engine.build_verification_result(
+            &request,
+            model::VerificationResultId::new("verification/service/ollama/1"),
+            Vec::new(),
+            Vec::new(),
+            model::VerificationTimestamp::new("2026-09-18T00:01:00Z"),
+            conditions.clone(),
+            Vec::new(),
+            Vec::new(),
+            model::VerificationProviderId::new("system-service-verifier"),
+            model::VerificationProviderVersion::new("system-service-verifier-v1"),
+        );
+
+        assert_eq!(verification.resource_id(), request.resource_id());
+        assert_eq!(verification.resource_type(), request.resource_type());
+        assert_eq!(verification.purpose(), request.purpose());
+        assert_eq!(verification.state_basis(), request.state_basis());
+        assert_eq!(verification.conditions(), conditions);
+        assert_eq!(
+            verification.overall_result(),
+            model::VerificationOverallResult::Satisfied
         );
     }
 
