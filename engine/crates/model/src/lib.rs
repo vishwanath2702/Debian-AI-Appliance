@@ -1445,6 +1445,36 @@ impl PackageManifestRealization {
     }
 }
 
+/// Binds a managed resource to its package-manifest realization.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ResourceRealization {
+    resource_id: ResourceId,
+    realization: PackageManifestRealization,
+}
+
+impl ResourceRealization {
+    /// Creates a realization binding for a managed resource.
+    #[must_use]
+    pub fn new(resource_id: ResourceId, realization: PackageManifestRealization) -> Self {
+        Self {
+            resource_id,
+            realization,
+        }
+    }
+
+    /// Returns the managed resource identifier.
+    #[must_use]
+    pub const fn resource_id(&self) -> &ResourceId {
+        &self.resource_id
+    }
+
+    /// Returns the package-manifest realization.
+    #[must_use]
+    pub const fn realization(&self) -> &PackageManifestRealization {
+        &self.realization
+    }
+}
+
 /// A capability requested through desired state.
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub struct Capability {
@@ -2020,6 +2050,20 @@ mod tests {
         let realization = crate::PackageManifestRealization::new("desktop");
 
         assert_eq!(realization.package_manifest(), "desktop");
+    }
+
+    #[test]
+    fn binds_resource_to_package_manifest_realization() {
+        let binding = crate::ResourceRealization::new(
+            crate::ResourceId::new("service/display-manager"),
+            crate::PackageManifestRealization::new("desktop"),
+        );
+
+        assert_eq!(
+            binding.resource_id(),
+            &crate::ResourceId::new("service/display-manager")
+        );
+        assert_eq!(binding.realization().package_manifest(), "desktop");
     }
 
     use super::{
