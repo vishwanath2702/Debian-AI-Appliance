@@ -427,9 +427,10 @@ fn format_external_content_item(
 
     match model {
         Some(metadata) => {
-            let engine = match engine
-                .external_model_inference_engine_support(&metadata, &InferenceEngineId::llama_cpp())
-            {
+            let engine = match engine.inference_engine_supports_architecture(
+                metadata.architecture(),
+                &InferenceEngineId::llama_cpp(),
+            ) {
                 InferenceEngineArchitectureSupport::Supported => " engine=llama.cpp",
                 InferenceEngineArchitectureSupport::Unknown => "",
             };
