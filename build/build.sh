@@ -11,31 +11,35 @@ echo "      DAIA BUILD PIPELINE"
 echo "========================================"
 echo
 
-echo "[1/7] Validating project..."
+echo "[1/8] Validating project..."
 "$SCRIPT_DIR/check.sh"
 
 echo
-echo "[2/7] Cleaning workspace..."
+echo "[2/8] Cleaning workspace..."
 "$SCRIPT_DIR/clean.sh"
 
 echo
-echo "[3/7] Extracting Debian ISO..."
+echo "[3/8] Extracting Debian ISO..."
 "$SCRIPT_DIR/extract.sh"
 
 echo
-echo "[4/7] Patching boot configuration..."
+echo "[4/8] Patching boot configuration..."
 "$SCRIPT_DIR/patch.sh"
 
 echo
-echo "[5/7] Injecting DAIA..."
+echo "[5/8] Building DAIA payload..."
+"$SCRIPT_DIR/build-payload.sh"
+
+echo
+echo "[6/8] Injecting DAIA..."
 "$SCRIPT_DIR/inject.sh"
 
 echo
-echo "[6/7] Verifying injection..."
+echo "[7/8] Verifying injection..."
 "$SCRIPT_DIR/verify.sh"
 
 echo
-echo "[7/7] Building ISO..."
+echo "[8/8] Building ISO..."
 "$SCRIPT_DIR/rebuild.sh"
 
 echo
