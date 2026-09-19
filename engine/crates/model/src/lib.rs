@@ -1223,6 +1223,30 @@ impl ExternalContentItem {
     }
 }
 
+/// Stable identifier for an inference engine known to DAIA.
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub struct InferenceEngineId(String);
+
+impl InferenceEngineId {
+    /// Creates an inference engine identifier.
+    #[must_use]
+    pub fn new(value: impl Into<String>) -> Self {
+        Self(value.into())
+    }
+
+    /// Returns the inference engine identifier as a string slice.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl fmt::Display for InferenceEngineId {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.as_str())
+    }
+}
+
 /// Stable identifier for storage discovered by DAIA.
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub struct DiscoveredStorageId(String);
@@ -2072,15 +2096,15 @@ mod tests {
         ContentRepository, ContentRepositoryId, ContentSource, ContentSourceId, CurrentResource,
         CurrentRevision, CurrentStateProposal, DesiredGeneration, DesiredResource,
         DiscoveredContent, DiscoveredStorage, DiscoveredStorageId, EvidenceId, EvidenceSourceId,
-        ExternalContentItem, ExternalContentItemId, ImportedContentItem, InstallationIntent,
-        Observation, ObservationSourceId, ObservationTimestamp, PackageManifest, PlanStep,
-        ProviderId, ResourceId, ResourceType, SchemaVersion, ServiceCurrentState,
-        ServiceDesiredState, StateBasis, StorageKind, StorageTarget, StorageTargetId,
-        VerificationCondition, VerificationConditionId, VerificationConditionResult,
-        VerificationEvidenceReference, VerificationOverallResult, VerificationPolicyRevision,
-        VerificationProviderId, VerificationProviderVersion, VerificationPurpose,
-        VerificationRequest, VerificationResult, VerificationResultId, VerificationRuleReference,
-        VerificationRuleVersion, VerificationTimestamp,
+        ExternalContentItem, ExternalContentItemId, ImportedContentItem, InferenceEngineId,
+        InstallationIntent, Observation, ObservationSourceId, ObservationTimestamp,
+        PackageManifest, PlanStep, ProviderId, ResourceId, ResourceType, SchemaVersion,
+        ServiceCurrentState, ServiceDesiredState, StateBasis, StorageKind, StorageTarget,
+        StorageTargetId, VerificationCondition, VerificationConditionId,
+        VerificationConditionResult, VerificationEvidenceReference, VerificationOverallResult,
+        VerificationPolicyRevision, VerificationProviderId, VerificationProviderVersion,
+        VerificationPurpose, VerificationRequest, VerificationResult, VerificationResultId,
+        VerificationRuleReference, VerificationRuleVersion, VerificationTimestamp,
     };
     use std::path::{Path, PathBuf};
 
@@ -2885,6 +2909,14 @@ mod tests {
         assert!(desired.is_present());
         assert!(desired.is_enabled());
         assert!(desired.is_running());
+    }
+
+    #[test]
+    fn inference_engine_id_exposes_identifier() {
+        let engine_id = InferenceEngineId::new("llama.cpp");
+
+        assert_eq!(engine_id.as_str(), "llama.cpp");
+        assert_eq!(engine_id.to_string(), "llama.cpp");
     }
 
     #[test]
