@@ -60,3 +60,21 @@ ai_install() {
 
     return 0
 }
+
+ai_verify() {
+    local install_root="${DAIA_OLLAMA_INSTALL_ROOT:-/usr/local}"
+    local ollama_binary="${install_root}/bin/ollama"
+    local ollama_library_directory="${install_root}/lib/ollama"
+
+    if [[ ! -x "$ollama_binary" ]]; then
+        echo "Ollama runtime binary is missing or not executable: $ollama_binary" >&2
+        return 1
+    fi
+
+    if [[ ! -d "$ollama_library_directory" ]]; then
+        echo "Ollama runtime library directory is missing: $ollama_library_directory" >&2
+        return 1
+    fi
+
+    return 0
+}
