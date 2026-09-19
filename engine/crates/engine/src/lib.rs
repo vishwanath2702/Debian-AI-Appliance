@@ -28,7 +28,10 @@ pub use bootstrap::BootstrapConfig;
 pub use bootstrapper::Bootstrapper;
 pub use context::BuildContext;
 use executor::{ExecuteError, RootfsRunError};
-use inspector::{ContentInspectError, ContentInspector, StorageInspectError, StorageInspector};
+use inspector::{
+    ContentInspectError, ContentInspector, GgufMetadata, ModelInspectError, StorageInspectError,
+    StorageInspector, inspect_model_artifact,
+};
 pub use mmdebstrap::{MmdebstrapBootstrapper, MmdebstrapError};
 use model::{
     ApplianceProfile, Capability, ContentImportDestination, ContentImportIntent, ContentRepository,
@@ -525,6 +528,19 @@ impl Engine {
 
         Ok(items)
     }
+    /// Inspects an external content item when it is a recognized AI model artifact.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`ModelInspectError`] when the item cannot be read or a recognized
+    /// model artifact is malformed.
+    pub fn inspect_external_model(
+        &self,
+        item: &ExternalContentItem,
+    ) -> Result<Option<GgufMetadata>, ModelInspectError> {
+        inspect_model_artifact(item.path())
+    }
+
     /// Prepares confirmed external content for later import.
     #[must_use]
     pub fn prepare_content_import(
@@ -966,6 +982,39 @@ mod tests {
             )])
         }
     }
+    #[test]
+    fn inspects_external_model_artifact() {
+        let directory = tempfile::tempdir().expect("temporary directory should exist");
+        let path = directory.path().join("model.bin");
+
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(b"GGUF");
+        bytes.extend_from_slice(&3_u32.to_le_bytes());
+        bytes.extend_from_slice(&0_u64.to_le_bytes());
+        bytes.extend_from_slice(&1_u64.to_le_bytes());
+
+        let key = b"general.architecture";
+        bytes.extend_from_slice(&(key.len() as u64).to_le_bytes());
+        bytes.extend_from_slice(key);
+        bytes.extend_from_slice(&8_u32.to_le_bytes());
+
+        let architecture = b"llama";
+        bytes.extend_from_slice(&(architecture.len() as u64).to_le_bytes());
+        bytes.extend_from_slice(architecture);
+
+        std::fs::write(&path, bytes).expect("GGUF test artifact should be written");
+
+        let item = ExternalContentItem::new(ContentSourceId::new("local-models-directory"), path);
+
+        let engine = Engine::from_registry(desktop_registry());
+        let metadata = engine
+            .inspect_external_model(&item)
+            .expect("external model inspection should succeed")
+            .expect("GGUF should be recognized");
+
+        assert_eq!(metadata.architecture(), "llama");
+    }
+
     struct TestStorageInspector;
 
     impl StorageInspector for TestStorageInspector {
