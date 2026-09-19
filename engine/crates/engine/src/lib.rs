@@ -37,7 +37,7 @@ use model::{
     ApplianceProfile, Capability, ContentImportDestination, ContentImportIntent, ContentRepository,
     ContentRepositoryId, ContentSource, CurrentResource, CurrentRevision, CurrentStateProposal,
     DiscoveredContent, DiscoveredStorage, ExternalContentItem, ExternalContentItemId,
-    ImportedContentItem, InstallationIntent, Observation, ObservationSourceId,
+    ImportedContentItem, InferenceEngineId, InstallationIntent, Observation, ObservationSourceId,
     ObservationTimestamp, Plan, ResourceId, SchemaVersion, ServiceCurrentState,
     ServiceDesiredState, StorageKind, VerificationConditionResult, VerificationEvidenceReference,
     VerificationOverallResult, VerificationProviderId, VerificationProviderVersion,
@@ -541,6 +541,17 @@ impl Engine {
         inspect_model_artifact(item.path())
     }
 
+    /// Returns whether the recognized model artifact has a known association with an inference
+    /// engine.
+    #[must_use]
+    pub fn gguf_engine_candidate(
+        &self,
+        _model: &GgufMetadata,
+        engine_id: &InferenceEngineId,
+    ) -> bool {
+        engine_id.as_str() == "llama.cpp"
+    }
+
     /// Prepares confirmed external content for later import.
     #[must_use]
     pub fn prepare_content_import(
@@ -944,7 +955,8 @@ mod tests {
         Action, ApplianceConfiguration, ApplianceProfile, Capability, CapabilityId,
         ContentImportDestination, ContentImportIntent, ContentRepository, ContentRepositoryId,
         ContentSourceId, DiscoveredStorage, DiscoveredStorageId, ExternalContentItem,
-        ExternalContentItemId, InstallationIntent, PlanStep, Provider, ProviderId, StorageKind,
+        ExternalContentItemId, InferenceEngineId, InstallationIntent, PlanStep, Provider,
+        ProviderId, StorageKind,
     };
     use registry::{PackageRepository, Registry};
 
@@ -1013,6 +1025,8 @@ mod tests {
             .expect("GGUF should be recognized");
 
         assert_eq!(metadata.architecture(), "llama");
+        assert!(engine.gguf_engine_candidate(&metadata, &InferenceEngineId::new("llama.cpp")));
+        assert!(!engine.gguf_engine_candidate(&metadata, &InferenceEngineId::new("vllm")));
     }
 
     struct TestStorageInspector;
