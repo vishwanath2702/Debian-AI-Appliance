@@ -33,3 +33,30 @@ ai_validate() {
 
     return 0
 }
+
+ai_install() {
+    local payload_root="${DAIA_PAYLOAD_ROOT:-/opt/daia/payload}"
+    local install_root="${DAIA_OLLAMA_INSTALL_ROOT:-/usr/local}"
+
+    ai_validate || return 1
+
+    if [[ ! -d "$install_root" ]]; then
+        echo "Ollama install root is not a directory: $install_root" >&2
+        return 1
+    fi
+
+    local ollama_archive_name="ollama-linux-${DAIA_ARCHITECTURE}.tar.zst"
+    local ollama_archive="${payload_root}/packages/ollama/${ollama_archive_name}"
+
+    if ! tar \
+        --use-compress-program=zstd \
+        --extract \
+        --file "$ollama_archive" \
+        --directory "$install_root"
+    then
+        echo "Failed to install Ollama runtime archive: $ollama_archive" >&2
+        return 1
+    fi
+
+    return 0
+}
