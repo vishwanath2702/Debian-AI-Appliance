@@ -1234,6 +1234,12 @@ impl InferenceEngineId {
         Self(value.into())
     }
 
+    /// Returns the canonical identifier for llama.cpp.
+    #[must_use]
+    pub fn llama_cpp() -> Self {
+        Self::new("llama.cpp")
+    }
+
     /// Returns the inference engine identifier as a string slice.
     #[must_use]
     pub fn as_str(&self) -> &str {
@@ -2917,6 +2923,7 @@ mod tests {
 
         assert_eq!(engine_id.as_str(), "llama.cpp");
         assert_eq!(engine_id.to_string(), "llama.cpp");
+        assert_eq!(InferenceEngineId::llama_cpp(), engine_id);
     }
 
     #[test]
