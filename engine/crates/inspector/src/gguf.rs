@@ -166,12 +166,26 @@ fn read_tensor_types(
         }
 
         let tensor_type = read_u32(reader)?;
+
+        if !is_supported_tensor_type(tensor_type) {
+            return Err(ModelInspectError::InvalidGguf(
+                "tensor has unsupported ggml type".to_owned(),
+            ));
+        }
+
         read_u64(reader)?;
 
         tensor_types.push(tensor_type);
     }
 
     Ok(tensor_types)
+}
+
+fn is_supported_tensor_type(tensor_type: u32) -> bool {
+    matches!(
+        tensor_type,
+        0..=3 | 6..=30 | 34..=35 | 39..=42
+    )
 }
 
 fn read_u32(reader: &mut impl Read) -> Result<u32, ModelInspectError> {
@@ -383,6 +397,31 @@ mod tests {
 
         assert_eq!(metadata.tensor_count(), 2);
         assert_eq!(metadata.tensor_types(), [7, 12]);
+    }
+
+    #[test]
+    fn rejects_unsupported_tensor_types() {
+        for tensor_type in [4_u32, 43_u32] {
+            let directory = tempfile::tempdir().expect("temporary directory should exist");
+            let path = directory.path().join("model.bin");
+
+            let mut bytes = gguf_with_metadata_count(1);
+            bytes[8..16].copy_from_slice(&1_u64.to_le_bytes());
+            push_metadata_string(&mut bytes, "general.architecture", "llama");
+
+            push_string(&mut bytes, "token_embd.weight");
+            bytes.extend_from_slice(&2_u32.to_le_bytes());
+            bytes.extend_from_slice(&32000_u64.to_le_bytes());
+            bytes.extend_from_slice(&4096_u64.to_le_bytes());
+            bytes.extend_from_slice(&tensor_type.to_le_bytes());
+            bytes.extend_from_slice(&0_u64.to_le_bytes());
+
+            fs::write(&path, bytes).expect("GGUF test artifact should be written");
+
+            let error = inspect_gguf(&path).expect_err("unsupported tensor type should fail");
+
+            assert!(matches!(error, ModelInspectError::InvalidGguf(_)));
+        }
     }
 
     #[test]
