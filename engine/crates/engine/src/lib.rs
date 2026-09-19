@@ -544,7 +544,7 @@ impl Engine {
     /// Returns whether the recognized model artifact has a known association with an inference
     /// engine.
     #[must_use]
-    pub fn gguf_engine_candidate(
+    pub fn gguf_engine_supports_architecture(
         &self,
         model: &GgufMetadata,
         engine_id: &InferenceEngineId,
@@ -1027,8 +1027,8 @@ mod tests {
             .expect("GGUF should be recognized");
 
         assert_eq!(metadata.architecture(), "llama");
-        assert!(engine.gguf_engine_candidate(&metadata, &InferenceEngineId::new("llama.cpp")));
-        assert!(!engine.gguf_engine_candidate(&metadata, &InferenceEngineId::new("vllm")));
+        assert!(engine.gguf_engine_supports_architecture(&metadata, &InferenceEngineId::new("llama.cpp")));
+        assert!(!engine.gguf_engine_supports_architecture(&metadata, &InferenceEngineId::new("vllm")));
 
         std::fs::write(&path, gguf_with_architecture(b"unknown"))
             .expect("GGUF test artifact should be rewritten");
@@ -1039,7 +1039,7 @@ mod tests {
             .expect("GGUF should be recognized");
 
         assert_eq!(metadata.architecture(), "unknown");
-        assert!(!engine.gguf_engine_candidate(&metadata, &InferenceEngineId::llama_cpp()));
+        assert!(!engine.gguf_engine_supports_architecture(&metadata, &InferenceEngineId::llama_cpp()));
     }
 
     struct TestStorageInspector;
