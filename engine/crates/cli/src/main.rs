@@ -426,12 +426,21 @@ fn format_external_content_item(
     })?;
 
     match model {
-        Some(metadata) => Ok(format!(
-            "{}  {}  model architecture={}",
-            item.id(),
-            item.path().display(),
-            metadata.architecture()
-        )),
+        Some(metadata) => match metadata.name() {
+            Some(name) => Ok(format!(
+                "{}  {}  model name={} architecture={}",
+                item.id(),
+                item.path().display(),
+                name,
+                metadata.architecture()
+            )),
+            None => Ok(format!(
+                "{}  {}  model architecture={}",
+                item.id(),
+                item.path().display(),
+                metadata.architecture()
+            )),
+        },
         None => Ok(format!("{}  {}", item.id(), item.path().display())),
     }
 }
@@ -1293,6 +1302,68 @@ mod tests {
 
         assert_eq!(state.external_content_items().len(), 1);
         assert_eq!(state.external_content_items()[0].path(), model_path);
+
+        std::fs::remove_dir_all(&directory).expect("test directory should be removed");
+    }
+
+    #[test]
+    fn formats_named_external_model_content() {
+        let directory = std::env::temp_dir().join(format!(
+            "daia-named-model-presentation-test-{}",
+            std::process::id()
+        ));
+
+        if directory.exists() {
+            std::fs::remove_dir_all(&directory).expect("existing test directory should be removed");
+        }
+
+        std::fs::create_dir(&directory).expect("temporary directory should be created");
+
+        let path = directory.join("model.bin");
+
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(b"GGUF");
+        bytes.extend_from_slice(&3_u32.to_le_bytes());
+        bytes.extend_from_slice(&0_u64.to_le_bytes());
+        bytes.extend_from_slice(&2_u64.to_le_bytes());
+
+        let architecture_key = b"general.architecture";
+        bytes.extend_from_slice(&(architecture_key.len() as u64).to_le_bytes());
+        bytes.extend_from_slice(architecture_key);
+        bytes.extend_from_slice(&8_u32.to_le_bytes());
+
+        let architecture = b"llama";
+        bytes.extend_from_slice(&(architecture.len() as u64).to_le_bytes());
+        bytes.extend_from_slice(architecture);
+
+        let name_key = b"general.name";
+        bytes.extend_from_slice(&(name_key.len() as u64).to_le_bytes());
+        bytes.extend_from_slice(name_key);
+        bytes.extend_from_slice(&8_u32.to_le_bytes());
+
+        let name = b"Tiny Llama";
+        bytes.extend_from_slice(&(name.len() as u64).to_le_bytes());
+        bytes.extend_from_slice(name);
+
+        std::fs::write(&path, bytes).expect("GGUF test artifact should be written");
+
+        let item = model::ExternalContentItem::new(
+            model::ContentSourceId::new("local-models-directory"),
+            path.clone(),
+        );
+        let engine = engine::Engine::from_registry(registry::Registry::new());
+
+        let formatted = super::format_external_content_item(&engine, &item)
+            .expect("recognized named model should format");
+
+        assert_eq!(
+            formatted,
+            format!(
+                "{}  {}  model name=Tiny Llama architecture=llama",
+                item.id(),
+                path.display()
+            )
+        );
 
         std::fs::remove_dir_all(&directory).expect("test directory should be removed");
     }
