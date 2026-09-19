@@ -37,7 +37,8 @@ use model::{
     ApplianceProfile, Capability, ContentImportDestination, ContentImportIntent, ContentRepository,
     ContentRepositoryId, ContentSource, CurrentResource, CurrentRevision, CurrentStateProposal,
     DiscoveredContent, DiscoveredStorage, ExternalContentItem, ExternalContentItemId,
-    ImportedContentItem, InferenceEngineId, InstallationIntent, Observation, ObservationSourceId,
+    ImportedContentItem, InferenceEngineArchitectureSupport, InferenceEngineId, InstallationIntent,
+    Observation, ObservationSourceId,
     ObservationTimestamp, Plan, ResourceId, SchemaVersion, ServiceCurrentState,
     ServiceDesiredState, StorageKind, VerificationConditionResult, VerificationEvidenceReference,
     VerificationOverallResult, VerificationProviderId, VerificationProviderVersion,
@@ -541,15 +542,18 @@ impl Engine {
         inspect_model_artifact(item.path())
     }
 
-    /// Returns whether the recognized model artifact has a known association with an inference
-    /// engine.
+    /// Returns DAIA's known architecture support for the inference engine.
     #[must_use]
     pub fn gguf_engine_supports_architecture(
         &self,
         model: &GgufMetadata,
         engine_id: &InferenceEngineId,
-    ) -> bool {
-        engine_id == &InferenceEngineId::llama_cpp() && model.architecture() == "llama"
+    ) -> InferenceEngineArchitectureSupport {
+        if engine_id == &InferenceEngineId::llama_cpp() && model.architecture() == "llama" {
+            InferenceEngineArchitectureSupport::Supported
+        } else {
+            InferenceEngineArchitectureSupport::Unknown
+        }
     }
 
     /// Prepares confirmed external content for later import.
@@ -955,8 +959,8 @@ mod tests {
         Action, ApplianceConfiguration, ApplianceProfile, Capability, CapabilityId,
         ContentImportDestination, ContentImportIntent, ContentRepository, ContentRepositoryId,
         ContentSourceId, DiscoveredStorage, DiscoveredStorageId, ExternalContentItem,
-        ExternalContentItemId, InferenceEngineId, InstallationIntent, PlanStep, Provider,
-        ProviderId, StorageKind,
+        ExternalContentItemId, InferenceEngineArchitectureSupport, InferenceEngineId,
+        InstallationIntent, PlanStep, Provider, ProviderId, StorageKind,
     };
     use registry::{PackageRepository, Registry};
 
@@ -1027,8 +1031,20 @@ mod tests {
             .expect("GGUF should be recognized");
 
         assert_eq!(metadata.architecture(), "llama");
-        assert!(engine.gguf_engine_supports_architecture(&metadata, &InferenceEngineId::new("llama.cpp")));
-        assert!(!engine.gguf_engine_supports_architecture(&metadata, &InferenceEngineId::new("vllm")));
+        assert_eq!(
+            engine.gguf_engine_supports_architecture(
+                &metadata,
+                &InferenceEngineId::new("llama.cpp"),
+            ),
+            InferenceEngineArchitectureSupport::Supported
+        );
+        assert_eq!(
+            engine.gguf_engine_supports_architecture(
+                &metadata,
+                &InferenceEngineId::new("vllm"),
+            ),
+            InferenceEngineArchitectureSupport::Unknown
+        );
 
         std::fs::write(&path, gguf_with_architecture(b"unknown"))
             .expect("GGUF test artifact should be rewritten");
@@ -1039,7 +1055,13 @@ mod tests {
             .expect("GGUF should be recognized");
 
         assert_eq!(metadata.architecture(), "unknown");
-        assert!(!engine.gguf_engine_supports_architecture(&metadata, &InferenceEngineId::llama_cpp()));
+        assert_eq!(
+            engine.gguf_engine_supports_architecture(
+                &metadata,
+                &InferenceEngineId::llama_cpp(),
+            ),
+            InferenceEngineArchitectureSupport::Unknown
+        );
     }
 
     struct TestStorageInspector;
