@@ -27,6 +27,7 @@ pub struct GgufMetadata {
     version: u32,
     tensor_count: u64,
     metadata_kv_count: u64,
+    size_bytes: u64,
     architecture: String,
     name: Option<String>,
     tensor_types: Vec<u32>,
@@ -49,6 +50,12 @@ impl GgufMetadata {
     #[must_use]
     pub const fn metadata_kv_count(&self) -> u64 {
         self.metadata_kv_count
+    }
+
+    /// Returns the size of the model artifact in bytes.
+    #[must_use]
+    pub const fn size_bytes(&self) -> u64 {
+        self.size_bytes
     }
 
     /// Returns the model architecture declared by the artifact.
@@ -78,6 +85,7 @@ impl GgufMetadata {
 /// valid GGUF header.
 pub fn inspect_gguf(path: impl AsRef<Path>) -> Result<GgufMetadata, ModelInspectError> {
     let mut file = File::open(path)?;
+    let size_bytes = file.metadata()?.len();
     let mut header = [0_u8; 24];
 
     file.read_exact(&mut header)?;
@@ -142,6 +150,7 @@ pub fn inspect_gguf(path: impl AsRef<Path>) -> Result<GgufMetadata, ModelInspect
         version,
         tensor_count,
         metadata_kv_count,
+        size_bytes,
         architecture,
         name,
         tensor_types,
@@ -381,6 +390,12 @@ mod tests {
         assert_eq!(metadata.version(), 3);
         assert_eq!(metadata.tensor_count(), 0);
         assert_eq!(metadata.metadata_kv_count(), 1);
+        assert_eq!(
+            metadata.size_bytes(),
+            fs::metadata(&path)
+                .expect("GGUF test artifact metadata should be readable")
+                .len()
+        );
         assert_eq!(metadata.architecture(), "llama");
         assert!(metadata.tensor_types().is_empty());
     }
