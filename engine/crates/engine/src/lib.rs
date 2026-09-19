@@ -549,7 +549,7 @@ impl Engine {
         _model: &GgufMetadata,
         engine_id: &InferenceEngineId,
     ) -> bool {
-        engine_id.as_str() == "llama.cpp"
+        engine_id == &InferenceEngineId::llama_cpp()
     }
 
     /// Prepares confirmed external content for later import.
