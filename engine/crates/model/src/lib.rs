@@ -1223,6 +1223,16 @@ impl ExternalContentItem {
     }
 }
 
+/// Known support for a model architecture by an inference engine.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub enum InferenceEngineArchitectureSupport {
+    /// DAIA has established that the inference engine supports the architecture.
+    Supported,
+
+    /// DAIA has not established whether the inference engine supports the architecture.
+    Unknown,
+}
+
 /// Stable identifier for an inference engine known to DAIA.
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub struct InferenceEngineId(String);
