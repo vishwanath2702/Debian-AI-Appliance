@@ -28,6 +28,7 @@ pub struct GgufMetadata {
     tensor_count: u64,
     metadata_kv_count: u64,
     architecture: String,
+    name: Option<String>,
     tensor_types: Vec<u32>,
 }
 
@@ -54,6 +55,12 @@ impl GgufMetadata {
     #[must_use]
     pub fn architecture(&self) -> &str {
         &self.architecture
+    }
+
+    /// Returns the model name declared by the artifact, when present.
+    #[must_use]
+    pub fn name(&self) -> Option<&str> {
+        self.name.as_deref()
     }
 
     /// Returns the raw ggml types declared by the tensor table.
@@ -98,6 +105,7 @@ pub fn inspect_gguf(path: impl AsRef<Path>) -> Result<GgufMetadata, ModelInspect
     );
 
     let mut architecture = None;
+    let mut name = None;
 
     for _ in 0..metadata_kv_count {
         let key = read_metadata_key(&mut file)?;
@@ -111,6 +119,14 @@ pub fn inspect_gguf(path: impl AsRef<Path>) -> Result<GgufMetadata, ModelInspect
             }
 
             architecture = Some(read_string(&mut file)?);
+        } else if key == "general.name" {
+            if value_type != GGUF_TYPE_STRING {
+                return Err(ModelInspectError::InvalidGguf(
+                    "general.name is not a string".to_owned(),
+                ));
+            }
+
+            name = Some(read_string(&mut file)?);
         } else {
             skip_value(&mut file, value_type)?;
         }
@@ -127,6 +143,7 @@ pub fn inspect_gguf(path: impl AsRef<Path>) -> Result<GgufMetadata, ModelInspect
         tensor_count,
         metadata_kv_count,
         architecture,
+        name,
         tensor_types,
     })
 }
@@ -366,6 +383,59 @@ mod tests {
         assert_eq!(metadata.metadata_kv_count(), 1);
         assert_eq!(metadata.architecture(), "llama");
         assert!(metadata.tensor_types().is_empty());
+    }
+
+    #[test]
+    fn inspects_optional_model_name() {
+        let directory = tempfile::tempdir().expect("temporary directory should exist");
+        let path = directory.path().join("model.bin");
+
+        let mut bytes = gguf_with_metadata_count(2);
+        push_metadata_string(&mut bytes, "general.architecture", "llama");
+        push_metadata_string(&mut bytes, "general.name", "Tiny Llama");
+
+        fs::write(&path, bytes).expect("GGUF test artifact should be written");
+
+        let metadata = inspect_gguf(&path).expect("GGUF metadata should be recognized");
+
+        assert_eq!(metadata.name(), Some("Tiny Llama"));
+    }
+
+    #[test]
+    fn rejects_non_string_model_name() {
+        let directory = tempfile::tempdir().expect("temporary directory should exist");
+        let path = directory.path().join("model.bin");
+
+        let mut bytes = gguf_with_metadata_count(2);
+        push_metadata_string(&mut bytes, "general.architecture", "llama");
+        push_string(&mut bytes, "general.name");
+        bytes.extend_from_slice(&super::GGUF_TYPE_UINT32.to_le_bytes());
+        bytes.extend_from_slice(&1_u32.to_le_bytes());
+
+        fs::write(&path, bytes).expect("GGUF test artifact should be written");
+
+        let error = inspect_gguf(&path).expect_err("non-string model name should be rejected");
+
+        assert!(matches!(
+            error,
+            ModelInspectError::InvalidGguf(message)
+                if message == "general.name is not a string"
+        ));
+    }
+
+    #[test]
+    fn model_name_is_optional() {
+        let directory = tempfile::tempdir().expect("temporary directory should exist");
+        let path = directory.path().join("model.bin");
+
+        let mut bytes = gguf_with_metadata_count(1);
+        push_metadata_string(&mut bytes, "general.architecture", "llama");
+
+        fs::write(&path, bytes).expect("GGUF test artifact should be written");
+
+        let metadata = inspect_gguf(&path).expect("GGUF metadata should be recognized");
+
+        assert_eq!(metadata.name(), None);
     }
 
     #[test]
