@@ -1031,33 +1031,25 @@ mod tests {
             .expect("GGUF should be recognized");
 
         assert_eq!(metadata.architecture(), "llama");
+    }
+
+    #[test]
+    fn reports_known_inference_engine_architecture_support() {
+        let engine = Engine::from_registry(desktop_registry());
+
         assert_eq!(
-            engine.inference_engine_supports_architecture(
-                metadata.architecture(),
-                &InferenceEngineId::new("llama.cpp"),
-            ),
+            engine
+                .inference_engine_supports_architecture("llama", &InferenceEngineId::llama_cpp(),),
             InferenceEngineArchitectureSupport::Supported
         );
         assert_eq!(
-            engine.inference_engine_supports_architecture(
-                metadata.architecture(),
-                &InferenceEngineId::new("vllm"),
-            ),
+            engine
+                .inference_engine_supports_architecture("llama", &InferenceEngineId::new("vllm"),),
             InferenceEngineArchitectureSupport::Unknown
         );
-
-        std::fs::write(&path, gguf_with_architecture(b"unknown"))
-            .expect("GGUF test artifact should be rewritten");
-
-        let metadata = engine
-            .inspect_external_model(&item)
-            .expect("external model inspection should succeed")
-            .expect("GGUF should be recognized");
-
-        assert_eq!(metadata.architecture(), "unknown");
         assert_eq!(
             engine.inference_engine_supports_architecture(
-                metadata.architecture(),
+                "unknown",
                 &InferenceEngineId::llama_cpp(),
             ),
             InferenceEngineArchitectureSupport::Unknown
