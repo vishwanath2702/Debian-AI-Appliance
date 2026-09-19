@@ -669,7 +669,12 @@ fn format_memory_capacity(total_bytes: u64) -> String {
     format!("{:.1} GiB", total_bytes as f64 / BYTES_PER_GIB)
 }
 
-fn review_wizard_state(state: &WizardState, logical_processor_count: usize, memory_bytes: u64) {
+fn review_wizard_state(
+    engine: &Engine,
+    state: &WizardState,
+    logical_processor_count: usize,
+    memory_bytes: u64,
+) -> Result<(), String> {
     println!();
     println!("Review:");
     println!(
@@ -690,7 +695,13 @@ fn review_wizard_state(state: &WizardState, logical_processor_count: usize, memo
     } else {
         println!("  External content   :");
         for item_id in state.selected_external_content() {
-            println!("    {item_id}");
+            let item = state
+                .external_content_items()
+                .iter()
+                .find(|item| item.id() == item_id)
+                .expect("selected external content should exist");
+
+            println!("    {}", format_external_content_item(engine, item)?);
         }
     }
 
@@ -707,6 +718,8 @@ fn review_wizard_state(state: &WizardState, logical_processor_count: usize, memo
                 .expect("storage should be selected before review"),
         )
     );
+
+    Ok(())
 }
 fn parse_wizard_confirmation(input: &str) -> bool {
     matches!(input.trim().to_ascii_lowercase().as_str(), "y" | "yes")
@@ -977,7 +990,11 @@ fn run_install() -> ExitCode {
         }
     };
 
-    review_wizard_state(&state, logical_processor_count, memory_bytes);
+    if let Err(error) = review_wizard_state(&engine, &state, logical_processor_count, memory_bytes)
+    {
+        eprintln!("{error}");
+        return ExitCode::FAILURE;
+    }
 
     let Some(config) = state.into_config() else {
         eprintln!("Error: installer configuration is incomplete");
@@ -1074,7 +1091,11 @@ fn run_wizard() -> ExitCode {
         }
     };
 
-    review_wizard_state(&state, logical_processor_count, memory_bytes);
+    if let Err(error) = review_wizard_state(&engine, &state, logical_processor_count, memory_bytes)
+    {
+        eprintln!("{error}");
+        return ExitCode::FAILURE;
+    }
 
     match confirm_wizard_state("Continue with this configuration? [y/N]: ") {
         Ok(true) => match execute_confirmed_wizard(&engine, state) {
