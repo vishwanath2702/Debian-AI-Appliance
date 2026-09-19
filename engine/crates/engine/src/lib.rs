@@ -544,12 +544,12 @@ impl Engine {
 
     /// Returns DAIA's known architecture support for the inference engine.
     #[must_use]
-    pub fn gguf_engine_supports_architecture(
+    pub fn inference_engine_supports_architecture(
         &self,
-        model: &GgufMetadata,
+        architecture: &str,
         engine_id: &InferenceEngineId,
     ) -> InferenceEngineArchitectureSupport {
-        if engine_id == &InferenceEngineId::llama_cpp() && model.architecture() == "llama" {
+        if engine_id == &InferenceEngineId::llama_cpp() && architecture == "llama" {
             InferenceEngineArchitectureSupport::Supported
         } else {
             InferenceEngineArchitectureSupport::Unknown
@@ -1032,15 +1032,15 @@ mod tests {
 
         assert_eq!(metadata.architecture(), "llama");
         assert_eq!(
-            engine.gguf_engine_supports_architecture(
-                &metadata,
+            engine.inference_engine_supports_architecture(
+                metadata.architecture(),
                 &InferenceEngineId::new("llama.cpp"),
             ),
             InferenceEngineArchitectureSupport::Supported
         );
         assert_eq!(
-            engine.gguf_engine_supports_architecture(
-                &metadata,
+            engine.inference_engine_supports_architecture(
+                metadata.architecture(),
                 &InferenceEngineId::new("vllm"),
             ),
             InferenceEngineArchitectureSupport::Unknown
@@ -1056,8 +1056,8 @@ mod tests {
 
         assert_eq!(metadata.architecture(), "unknown");
         assert_eq!(
-            engine.gguf_engine_supports_architecture(
-                &metadata,
+            engine.inference_engine_supports_architecture(
+                metadata.architecture(),
                 &InferenceEngineId::llama_cpp(),
             ),
             InferenceEngineArchitectureSupport::Unknown
