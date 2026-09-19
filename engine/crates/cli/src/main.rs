@@ -428,15 +428,10 @@ fn format_external_content_item(
     match model {
         Some(metadata) => {
             let engine = match engine
-                .external_model_inference_engine_support(&item, &InferenceEngineId::llama_cpp())
-                .map_err(|error| {
-                    format!(
-                        "Error inspecting external content {}: {error}",
-                        item.path().display()
-                    )
-                })? {
-                Some(InferenceEngineArchitectureSupport::Supported) => " engine=llama.cpp",
-                Some(InferenceEngineArchitectureSupport::Unknown) | None => "",
+                .external_model_inference_engine_support(&metadata, &InferenceEngineId::llama_cpp())
+            {
+                InferenceEngineArchitectureSupport::Supported => " engine=llama.cpp",
+                InferenceEngineArchitectureSupport::Unknown => "",
             };
 
             match metadata.name() {

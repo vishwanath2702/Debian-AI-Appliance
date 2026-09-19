@@ -556,26 +556,14 @@ impl Engine {
         }
     }
 
-    /// Inspects a recognized external model and returns DAIA's known support
-    /// for the requested inference engine.
-    ///
-    /// # Errors
-    ///
-    /// Returns a [`ModelInspectError`] when the item cannot be read or a recognized
-    /// model artifact is malformed.
+    /// Returns DAIA's known inference engine support for an inspected external model.
+    #[must_use]
     pub fn external_model_inference_engine_support(
         &self,
-        item: &ExternalContentItem,
+        metadata: &GgufMetadata,
         engine_id: &InferenceEngineId,
-    ) -> Result<Option<InferenceEngineArchitectureSupport>, ModelInspectError> {
-        let Some(metadata) = self.inspect_external_model(item)? else {
-            return Ok(None);
-        };
-
-        Ok(Some(self.inference_engine_supports_architecture(
-            metadata.architecture(),
-            engine_id,
-        )))
+    ) -> InferenceEngineArchitectureSupport {
+        self.inference_engine_supports_architecture(metadata.architecture(), engine_id)
     }
 
     /// Prepares confirmed external content for later import.
@@ -1079,25 +1067,6 @@ mod tests {
     }
 
     #[test]
-    fn reports_no_inference_engine_support_for_unrecognized_external_content() {
-        let directory = tempfile::tempdir().expect("temporary directory should exist");
-        let path = directory.path().join("notes.txt");
-
-        std::fs::write(&path, b"not a recognized model artifact")
-            .expect("test artifact should be written");
-
-        let item = ExternalContentItem::new(ContentSourceId::new("local-models-directory"), &path);
-        let engine = Engine::from_registry(desktop_registry());
-
-        assert_eq!(
-            engine
-                .external_model_inference_engine_support(&item, &InferenceEngineId::llama_cpp())
-                .expect("unrecognized external content should not fail inspection"),
-            None
-        );
-    }
-
-    #[test]
     fn reports_external_model_inference_engine_support() {
         let directory = tempfile::tempdir().expect("temporary directory should exist");
         let path = directory.path().join("model.bin");
@@ -1122,11 +1091,17 @@ mod tests {
         let item = ExternalContentItem::new(ContentSourceId::new("local-models-directory"), &path);
         let engine = Engine::from_registry(desktop_registry());
 
+        let metadata = engine
+            .inspect_external_model(&item)
+            .expect("external model inspection should succeed")
+            .expect("GGUF should be recognized");
+
         assert_eq!(
-            engine
-                .external_model_inference_engine_support(&item, &InferenceEngineId::llama_cpp())
-                .expect("external model support inspection should succeed"),
-            Some(InferenceEngineArchitectureSupport::Supported)
+            engine.external_model_inference_engine_support(
+                &metadata,
+                &InferenceEngineId::llama_cpp(),
+            ),
+            InferenceEngineArchitectureSupport::Supported
         );
     }
 
