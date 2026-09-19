@@ -816,6 +816,14 @@ fn installation_operation_name(operation: &InstallationOperation) -> String {
             format!("Unmount {} installation filesystems", mounts.len())
         }
         InstallationOperation::ImportContent { .. } => "Import content".to_string(),
+
+        InstallationOperation::DeployRuntime { root } => {
+            format!("Deploy DAIA runtime to {}", root.display())
+        }
+
+        InstallationOperation::EnableFirstBoot { root } => {
+            format!("Enable DAIA first boot in {}", root.display())
+        }
     }
 }
 
@@ -1090,9 +1098,25 @@ fn run_wizard() -> ExitCode {
 }
 #[cfg(test)]
 mod tests {
-    use super::{BuildOptions, run};
+    use super::{BuildOptions, InstallationOperation, installation_operation_name, run};
     use std::path::PathBuf;
     use std::process::ExitCode;
+
+    #[test]
+    fn names_runtime_installation_operations() {
+        let root = PathBuf::from("/target");
+
+        assert_eq!(
+            installation_operation_name(&InstallationOperation::DeployRuntime {
+                root: root.clone(),
+            }),
+            "Deploy DAIA runtime to /target"
+        );
+        assert_eq!(
+            installation_operation_name(&InstallationOperation::EnableFirstBoot { root }),
+            "Enable DAIA first boot in /target"
+        );
+    }
     #[test]
     fn discovers_wizard_hardware() {
         let engine = engine::Engine::from_registry(registry::Registry::new());
