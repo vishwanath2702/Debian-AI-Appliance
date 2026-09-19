@@ -352,6 +352,20 @@ fn parse_content_repository_selection(input: &str, item_count: usize) -> Result<
         .ok_or_else(|| "Error: invalid content repository selection".to_owned())
 }
 
+fn format_selected_content_repository(state: &WizardState) -> String {
+    let selected_id = state
+        .selected_content_repository()
+        .expect("content repository should be selected before review");
+
+    let repository = state
+        .content_repositories()
+        .iter()
+        .find(|repository| repository.id() == selected_id)
+        .expect("selected content repository should exist");
+
+    format!("{} - {}", repository.id(), repository.description())
+}
+
 fn select_content_repository(state: &mut WizardState) -> Result<(), String> {
     let repositories = state.content_repositories();
 
@@ -696,9 +710,7 @@ fn review_wizard_state(
     );
     println!(
         "  Content repository : {}",
-        state
-            .selected_content_repository()
-            .expect("content repository should be selected before review")
+        format_selected_content_repository(state)
     );
 
     if state.selected_external_content().is_empty() {
@@ -1240,6 +1252,21 @@ mod tests {
             Err("Error: invalid content repository selection".to_owned())
         );
     }
+    #[test]
+    fn formats_selected_content_repository_for_review() {
+        let mut state = super::WizardState::new();
+        state.set_content_repositories(vec![model::ContentRepository::new(
+            "local-models",
+            "Models available on local storage",
+        )]);
+        state.select_content_repository(model::ContentRepositoryId::new("local-models"));
+
+        assert_eq!(
+            super::format_selected_content_repository(&state),
+            "local-models - Models available on local storage"
+        );
+    }
+
     #[test]
     fn parses_content_repository_selection() {
         let selection = super::parse_content_repository_selection("2", 3)
