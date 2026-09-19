@@ -414,7 +414,29 @@ fn parse_external_content_selection(input: &str, item_count: usize) -> Result<Ve
     Ok(selections)
 }
 
-fn select_external_content(state: &mut WizardState) -> Result<(), String> {
+fn format_external_content_item(
+    engine: &Engine,
+    item: &model::ExternalContentItem,
+) -> Result<String, String> {
+    let model = engine.inspect_external_model(item).map_err(|error| {
+        format!(
+            "Error inspecting external content {}: {error}",
+            item.path().display()
+        )
+    })?;
+
+    match model {
+        Some(metadata) => Ok(format!(
+            "{}  {}  model architecture={}",
+            item.id(),
+            item.path().display(),
+            metadata.architecture()
+        )),
+        None => Ok(format!("{}  {}", item.id(), item.path().display())),
+    }
+}
+
+fn select_external_content(engine: &Engine, state: &mut WizardState) -> Result<(), String> {
     let items = state.external_content_items();
 
     if items.is_empty() {
@@ -426,7 +448,11 @@ fn select_external_content(state: &mut WizardState) -> Result<(), String> {
     println!("External content:");
 
     for (index, item) in items.iter().enumerate() {
-        println!("  {}. {}  {}", index + 1, item.id(), item.path().display());
+        println!(
+            "  {}. {}",
+            index + 1,
+            format_external_content_item(engine, item)?
+        );
     }
 
     print!(
@@ -500,7 +526,7 @@ where
 {
     discover_external_content(engine, state, inspector)?;
 
-    select_external_content(state)
+    select_external_content(engine, state)
 }
 fn format_storage_size(size_bytes: Option<u64>) -> String {
     match size_bytes {
@@ -1267,6 +1293,59 @@ mod tests {
 
         assert_eq!(state.external_content_items().len(), 1);
         assert_eq!(state.external_content_items()[0].path(), model_path);
+
+        std::fs::remove_dir_all(&directory).expect("test directory should be removed");
+    }
+
+    #[test]
+    fn formats_recognized_external_model_content() {
+        let directory = std::env::temp_dir().join(format!(
+            "daia-model-presentation-test-{}",
+            std::process::id()
+        ));
+
+        if directory.exists() {
+            std::fs::remove_dir_all(&directory).expect("existing test directory should be removed");
+        }
+
+        std::fs::create_dir(&directory).expect("temporary directory should be created");
+
+        let path = directory.join("model.bin");
+
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(b"GGUF");
+        bytes.extend_from_slice(&3_u32.to_le_bytes());
+        bytes.extend_from_slice(&0_u64.to_le_bytes());
+        bytes.extend_from_slice(&1_u64.to_le_bytes());
+
+        let key = b"general.architecture";
+        bytes.extend_from_slice(&(key.len() as u64).to_le_bytes());
+        bytes.extend_from_slice(key);
+        bytes.extend_from_slice(&8_u32.to_le_bytes());
+
+        let architecture = b"llama";
+        bytes.extend_from_slice(&(architecture.len() as u64).to_le_bytes());
+        bytes.extend_from_slice(architecture);
+
+        std::fs::write(&path, bytes).expect("GGUF test artifact should be written");
+
+        let item = model::ExternalContentItem::new(
+            model::ContentSourceId::new("local-models-directory"),
+            path.clone(),
+        );
+        let engine = engine::Engine::from_registry(registry::Registry::new());
+
+        let formatted = super::format_external_content_item(&engine, &item)
+            .expect("recognized model should format");
+
+        assert_eq!(
+            formatted,
+            format!(
+                "{}  {}  model architecture=llama",
+                item.id(),
+                path.display()
+            )
+        );
 
         std::fs::remove_dir_all(&directory).expect("test directory should be removed");
     }
