@@ -546,10 +546,10 @@ impl Engine {
     #[must_use]
     pub fn gguf_engine_candidate(
         &self,
-        _model: &GgufMetadata,
+        model: &GgufMetadata,
         engine_id: &InferenceEngineId,
     ) -> bool {
-        engine_id == &InferenceEngineId::llama_cpp()
+        engine_id == &InferenceEngineId::llama_cpp() && model.architecture() == "llama"
     }
 
     /// Prepares confirmed external content for later import.
@@ -999,24 +999,26 @@ mod tests {
         let directory = tempfile::tempdir().expect("temporary directory should exist");
         let path = directory.path().join("model.bin");
 
-        let mut bytes = Vec::new();
-        bytes.extend_from_slice(b"GGUF");
-        bytes.extend_from_slice(&3_u32.to_le_bytes());
-        bytes.extend_from_slice(&0_u64.to_le_bytes());
-        bytes.extend_from_slice(&1_u64.to_le_bytes());
+        let gguf_with_architecture = |architecture: &[u8]| {
+            let mut bytes = Vec::new();
+            bytes.extend_from_slice(b"GGUF");
+            bytes.extend_from_slice(&3_u32.to_le_bytes());
+            bytes.extend_from_slice(&0_u64.to_le_bytes());
+            bytes.extend_from_slice(&1_u64.to_le_bytes());
 
-        let key = b"general.architecture";
-        bytes.extend_from_slice(&(key.len() as u64).to_le_bytes());
-        bytes.extend_from_slice(key);
-        bytes.extend_from_slice(&8_u32.to_le_bytes());
+            let key = b"general.architecture";
+            bytes.extend_from_slice(&(key.len() as u64).to_le_bytes());
+            bytes.extend_from_slice(key);
+            bytes.extend_from_slice(&8_u32.to_le_bytes());
+            bytes.extend_from_slice(&(architecture.len() as u64).to_le_bytes());
+            bytes.extend_from_slice(architecture);
+            bytes
+        };
 
-        let architecture = b"llama";
-        bytes.extend_from_slice(&(architecture.len() as u64).to_le_bytes());
-        bytes.extend_from_slice(architecture);
+        std::fs::write(&path, gguf_with_architecture(b"llama"))
+            .expect("GGUF test artifact should be written");
 
-        std::fs::write(&path, bytes).expect("GGUF test artifact should be written");
-
-        let item = ExternalContentItem::new(ContentSourceId::new("local-models-directory"), path);
+        let item = ExternalContentItem::new(ContentSourceId::new("local-models-directory"), &path);
 
         let engine = Engine::from_registry(desktop_registry());
         let metadata = engine
@@ -1027,6 +1029,17 @@ mod tests {
         assert_eq!(metadata.architecture(), "llama");
         assert!(engine.gguf_engine_candidate(&metadata, &InferenceEngineId::new("llama.cpp")));
         assert!(!engine.gguf_engine_candidate(&metadata, &InferenceEngineId::new("vllm")));
+
+        std::fs::write(&path, gguf_with_architecture(b"unknown"))
+            .expect("GGUF test artifact should be rewritten");
+
+        let metadata = engine
+            .inspect_external_model(&item)
+            .expect("external model inspection should succeed")
+            .expect("GGUF should be recognized");
+
+        assert_eq!(metadata.architecture(), "unknown");
+        assert!(!engine.gguf_engine_candidate(&metadata, &InferenceEngineId::llama_cpp()));
     }
 
     struct TestStorageInspector;
