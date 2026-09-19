@@ -292,7 +292,18 @@ fn format_selected_appliance_profile(state: &WizardState) -> Result<String, Stri
     Ok(format_appliance_profile(profile))
 }
 
+fn validate_appliance_profile(
+    engine: &Engine,
+    profile: &model::ApplianceProfile,
+) -> Result<(), String> {
+    engine
+        .plan_profile(profile)
+        .map(|_| ())
+        .map_err(|error| format!("Error: selected appliance profile cannot be planned: {error}"))
+}
+
 fn select_appliance_profile(
+    engine: &Engine,
     state: &mut WizardState,
     repository: &registry::ApplianceProfileRepository,
 ) -> Result<(), String> {
@@ -324,6 +335,8 @@ fn select_appliance_profile(
     let selection = parse_appliance_profile_selection(&input, repository.profiles().len())?;
     let selected_profile = &repository.profiles()[selection - 1];
 
+    validate_appliance_profile(engine, selected_profile)?;
+
     state.set_profile_name(selected_profile.name());
 
     println!(
@@ -337,10 +350,13 @@ fn select_appliance_profile(
     Ok(())
 }
 
-fn configure_wizard_appliance_profile(state: &mut WizardState) -> Result<(), String> {
+fn configure_wizard_appliance_profile(
+    engine: &Engine,
+    state: &mut WizardState,
+) -> Result<(), String> {
     let repository = load_wizard_appliance_profiles()?;
 
-    select_appliance_profile(state, &repository)
+    select_appliance_profile(engine, state, &repository)
 }
 
 fn parse_content_repository_selection(input: &str, item_count: usize) -> Result<usize, String> {
@@ -666,7 +682,7 @@ where
 }
 
 fn configure_wizard_state(engine: &Engine, state: &mut WizardState) -> Result<(), String> {
-    configure_wizard_appliance_profile(state)?;
+    configure_wizard_appliance_profile(engine, state)?;
     configure_wizard_content_repository(state)?;
 
     let content_inspector = LocalFilesystemContentInspector::new();
@@ -1308,10 +1324,30 @@ mod tests {
         let mut state = super::WizardState::new();
         let repository = registry::ApplianceProfileRepository::new();
 
-        let result = super::select_appliance_profile(&mut state, &repository);
+        let engine = engine::Engine::from_registry(registry::Registry::new());
+        let result = super::select_appliance_profile(&engine, &mut state, &repository);
 
         assert_eq!(result, Err("No appliance profiles found.".to_owned()));
         assert_eq!(state.profile_name(), None);
+    }
+
+    #[test]
+    fn rejects_appliance_profile_with_unavailable_capability() {
+        let engine = engine::Engine::from_registry(registry::Registry::new());
+        let profile = model::ApplianceProfile::new(
+            "desktop",
+            "Graphical Debian desktop appliance",
+            vec![model::Capability::new("desktop")],
+        );
+
+        assert_eq!(
+            super::validate_appliance_profile(&engine, &profile),
+            Err(concat!(
+                "Error: selected appliance profile cannot be planned: ",
+                "no provider found for capability \"desktop\""
+            )
+            .to_owned())
+        );
     }
 
     #[test]
