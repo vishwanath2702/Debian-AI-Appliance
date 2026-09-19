@@ -279,6 +279,19 @@ fn format_appliance_profile(profile: &model::ApplianceProfile) -> String {
     )
 }
 
+fn format_selected_appliance_profile(state: &WizardState) -> Result<String, String> {
+    let profile_name = state
+        .profile_name()
+        .expect("profile should be selected before review");
+
+    let repository = load_wizard_appliance_profiles()?;
+    let profile = repository.profile(profile_name).ok_or_else(|| {
+        format!("Error: selected appliance profile \"{profile_name}\" no longer exists")
+    })?;
+
+    Ok(format_appliance_profile(profile))
+}
+
 fn select_appliance_profile(
     state: &mut WizardState,
     repository: &registry::ApplianceProfileRepository,
@@ -679,9 +692,7 @@ fn review_wizard_state(
     println!("Review:");
     println!(
         "  Profile            : {}",
-        state
-            .profile_name()
-            .expect("profile should be selected before review")
+        format_selected_appliance_profile(state)?
     );
     println!(
         "  Content repository : {}",
@@ -1250,6 +1261,18 @@ mod tests {
         assert_eq!(
             super::format_appliance_profile(&profile),
             "desktop - Graphical Debian desktop appliance [desktop, remote-access]"
+        );
+    }
+
+    #[test]
+    fn formats_selected_appliance_profile_for_review() {
+        let mut state = super::WizardState::new();
+        state.set_profile_name("desktop");
+
+        assert_eq!(
+            super::format_selected_appliance_profile(&state)
+                .expect("selected appliance profile should format"),
+            "desktop - Graphical Debian desktop appliance [desktop]"
         );
     }
 
