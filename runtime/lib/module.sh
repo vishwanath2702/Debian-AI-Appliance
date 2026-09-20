@@ -14,6 +14,7 @@
 # Public API
 # ----------
 # - module_contract_validate
+# - module_operation_run
 #
 # Module Contract
 # ---------------
@@ -78,6 +79,43 @@ module_contract_validate()
     done
 
     return 0
+}
+
+############################################################
+# module_operation_run
+#
+# Run one lifecycle operation for a named module.
+#
+# Arguments:
+#   $1 - Module name
+#   $2 - Lifecycle operation: validate, install, or verify
+#
+# Returns:
+#   The lifecycle function's return status.
+#   1 when the module contract or operation is invalid.
+############################################################
+
+module_operation_run()
+{
+    local module_name="${1:-}"
+    local lifecycle_operation="${2:-}"
+    local function_name
+
+    module_contract_validate "$module_name" || return 1
+
+    case "$lifecycle_operation" in
+        validate|install|verify)
+            ;;
+        *)
+            printf 'ERROR: Unsupported module lifecycle operation: %s\n' \
+                "$lifecycle_operation" >&2
+            return 1
+            ;;
+    esac
+
+    function_name="${module_name}_${lifecycle_operation}"
+
+    "$function_name"
 }
 
 ############################################################
