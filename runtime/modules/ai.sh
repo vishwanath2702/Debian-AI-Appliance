@@ -44,6 +44,11 @@ ai_install() {
 
     ai_validate || return 1
 
+    if ! command -v systemd-sysusers >/dev/null 2>&1; then
+        echo "Required command is unavailable: systemd-sysusers" >&2
+        return 1
+    fi
+
     if [[ ! -d "$install_root" ]]; then
         echo "Ollama install root is not a directory: $install_root" >&2
         return 1
@@ -79,6 +84,11 @@ ai_install() {
 
     if ! chmod 0644 "$sysusers_destination"; then
         echo "Failed to set Ollama system user definition permissions: $sysusers_destination" >&2
+        return 1
+    fi
+
+    if ! systemd-sysusers "$sysusers_destination"; then
+        echo "Failed to create Ollama system user from: $sysusers_destination" >&2
         return 1
     fi
 
