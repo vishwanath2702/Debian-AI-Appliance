@@ -132,8 +132,11 @@ ai_install() {
 
 ai_verify() {
     local install_root="${DAIA_OLLAMA_INSTALL_ROOT:-/usr/local}"
+    local systemd_system_directory="${DAIA_SYSTEMD_SYSTEM_DIRECTORY:-/etc/systemd/system}"
     local ollama_binary="${install_root}/bin/ollama"
     local ollama_library_directory="${install_root}/lib/ollama"
+    local service_destination="${systemd_system_directory}/ollama.service"
+    local service_wants_link="${systemd_system_directory}/multi-user.target.wants/ollama.service"
 
     if [[ ! -x "$ollama_binary" ]]; then
         echo "Ollama runtime binary is missing or not executable: $ollama_binary" >&2
@@ -142,6 +145,21 @@ ai_verify() {
 
     if [[ ! -d "$ollama_library_directory" ]]; then
         echo "Ollama runtime library directory is missing: $ollama_library_directory" >&2
+        return 1
+    fi
+
+    if [[ ! -s "$service_destination" ]]; then
+        echo "Ollama service definition is missing or empty: $service_destination" >&2
+        return 1
+    fi
+
+    if [[ ! -L "$service_wants_link" ]]; then
+        echo "Ollama service enablement link is missing: $service_wants_link" >&2
+        return 1
+    fi
+
+    if [[ "$(readlink "$service_wants_link")" != "/etc/systemd/system/ollama.service" ]]; then
+        echo "Ollama service enablement link has an unexpected target: $service_wants_link" >&2
         return 1
     fi
 
