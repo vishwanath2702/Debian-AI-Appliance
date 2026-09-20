@@ -136,6 +136,7 @@ DAIA_CONFIG_TARGET="$DAIA_ROOT_TARGET/config"
 DAIA_LIB_TARGET="$DAIA_ROOT_TARGET/lib"
 DAIA_MODULES_TARGET="$DAIA_ROOT_TARGET/modules"
 DAIA_SERVICES_TARGET="$DAIA_ROOT_TARGET/services"
+DAIA_SYSUSERS_TARGET="$DAIA_ROOT_TARGET/sysusers.d"
 
 DAIA_PAYLOAD_TARGET="$DAIA_ROOT_TARGET/payload"
 DAIA_PACKAGES_TARGET="$DAIA_PAYLOAD_TARGET/packages"
@@ -364,6 +365,11 @@ stage_runtime()
         "Runtime service definitions" \
         "$DAIA_RUNTIME_SOURCE/services" \
         "$DAIA_SERVICES_TARGET"
+
+    stage_runtime_directory \
+        "Runtime system user definitions" \
+        "$DAIA_RUNTIME_SOURCE/sysusers.d" \
+        "$DAIA_SYSUSERS_TARGET"
 
     if [[ -f "$DAIA_RUNTIME_SOURCE/bootstrap.sh" ]]
     then
