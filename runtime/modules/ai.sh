@@ -36,7 +36,11 @@ ai_validate() {
 
 ai_install() {
     local payload_root="${DAIA_PAYLOAD_ROOT:-/opt/daia/payload}"
+    local runtime_root="${DAIA_RUNTIME_ROOT:-/opt/daia}"
     local install_root="${DAIA_OLLAMA_INSTALL_ROOT:-/usr/local}"
+    local sysusers_directory="${DAIA_SYSUSERS_DIRECTORY:-/etc/sysusers.d}"
+    local sysusers_source="${runtime_root}/sysusers.d/ollama.conf"
+    local sysusers_destination="${sysusers_directory}/ollama.conf"
 
     ai_validate || return 1
 
@@ -55,6 +59,26 @@ ai_install() {
         --directory "$install_root"
     then
         echo "Failed to install Ollama runtime archive: $ollama_archive" >&2
+        return 1
+    fi
+
+    if [[ ! -s "$sysusers_source" ]]; then
+        echo "Ollama system user definition is missing or empty: $sysusers_source" >&2
+        return 1
+    fi
+
+    if ! mkdir -p "$sysusers_directory"; then
+        echo "Failed to create system user definition directory: $sysusers_directory" >&2
+        return 1
+    fi
+
+    if ! cp "$sysusers_source" "$sysusers_destination"; then
+        echo "Failed to install Ollama system user definition: $sysusers_destination" >&2
+        return 1
+    fi
+
+    if ! chmod 0644 "$sysusers_destination"; then
+        echo "Failed to set Ollama system user definition permissions: $sysusers_destination" >&2
         return 1
     fi
 
