@@ -44,6 +44,8 @@ ai_install() {
     local sysusers_destination="${sysusers_directory}/ollama.conf"
     local service_source="${runtime_root}/services/ollama.service"
     local service_destination="${systemd_system_directory}/ollama.service"
+    local service_wants_directory="${systemd_system_directory}/multi-user.target.wants"
+    local service_wants_link="${service_wants_directory}/ollama.service"
 
     ai_validate || return 1
 
@@ -112,6 +114,16 @@ ai_install() {
 
     if ! chmod 0644 "$service_destination"; then
         echo "Failed to set Ollama service definition permissions: $service_destination" >&2
+        return 1
+    fi
+
+    if ! mkdir -p "$service_wants_directory"; then
+        echo "Failed to create Ollama service enablement directory: $service_wants_directory" >&2
+        return 1
+    fi
+
+    if ! ln -sf /etc/systemd/system/ollama.service "$service_wants_link"; then
+        echo "Failed to enable Ollama service: $service_wants_link" >&2
         return 1
     fi
 
