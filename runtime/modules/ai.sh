@@ -39,8 +39,11 @@ ai_install() {
     local runtime_root="${DAIA_RUNTIME_ROOT:-/opt/daia}"
     local install_root="${DAIA_OLLAMA_INSTALL_ROOT:-/usr/local}"
     local sysusers_directory="${DAIA_SYSUSERS_DIRECTORY:-/etc/sysusers.d}"
+    local systemd_system_directory="${DAIA_SYSTEMD_SYSTEM_DIRECTORY:-/etc/systemd/system}"
     local sysusers_source="${runtime_root}/sysusers.d/ollama.conf"
     local sysusers_destination="${sysusers_directory}/ollama.conf"
+    local service_source="${runtime_root}/services/ollama.service"
+    local service_destination="${systemd_system_directory}/ollama.service"
 
     ai_validate || return 1
 
@@ -89,6 +92,26 @@ ai_install() {
 
     if ! systemd-sysusers "$sysusers_destination"; then
         echo "Failed to create Ollama system user from: $sysusers_destination" >&2
+        return 1
+    fi
+
+    if [[ ! -s "$service_source" ]]; then
+        echo "Ollama service definition is missing or empty: $service_source" >&2
+        return 1
+    fi
+
+    if ! mkdir -p "$systemd_system_directory"; then
+        echo "Failed to create systemd system directory: $systemd_system_directory" >&2
+        return 1
+    fi
+
+    if ! cp "$service_source" "$service_destination"; then
+        echo "Failed to install Ollama service definition: $service_destination" >&2
+        return 1
+    fi
+
+    if ! chmod 0644 "$service_destination"; then
+        echo "Failed to set Ollama service definition permissions: $service_destination" >&2
         return 1
     fi
 
