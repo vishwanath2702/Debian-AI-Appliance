@@ -130,6 +130,33 @@ ai_install() {
     return 0
 }
 
+_ai_verify_ollama_account() {
+    local passwd_entry
+    local group_entry
+    local user_gid
+    local group_gid
+
+    if ! passwd_entry="$(getent passwd ollama)"; then
+        echo "Ollama service user does not exist: ollama" >&2
+        return 1
+    fi
+
+    if ! group_entry="$(getent group ollama)"; then
+        echo "Ollama service group does not exist: ollama" >&2
+        return 1
+    fi
+
+    user_gid="$(printf '%s\n' "$passwd_entry" | cut -d: -f4)"
+    group_gid="$(printf '%s\n' "$group_entry" | cut -d: -f3)"
+
+    if [[ -z "$user_gid" || "$user_gid" != "$group_gid" ]]; then
+        echo "Ollama service user's primary group is not ollama" >&2
+        return 1
+    fi
+
+    return 0
+}
+
 ai_verify() {
     local install_root="${DAIA_OLLAMA_INSTALL_ROOT:-/usr/local}"
     local systemd_system_directory="${DAIA_SYSTEMD_SYSTEM_DIRECTORY:-/etc/systemd/system}"
@@ -137,6 +164,16 @@ ai_verify() {
     local ollama_library_directory="${install_root}/lib/ollama"
     local service_destination="${systemd_system_directory}/ollama.service"
     local service_wants_link="${systemd_system_directory}/multi-user.target.wants/ollama.service"
+
+    if ! command -v getent >/dev/null 2>&1; then
+        echo "Required command is unavailable: getent" >&2
+        return 1
+    fi
+
+    if ! command -v cut >/dev/null 2>&1; then
+        echo "Required command is unavailable: cut" >&2
+        return 1
+    fi
 
     if [[ ! -x "$ollama_binary" ]]; then
         echo "Ollama runtime binary is missing or not executable: $ollama_binary" >&2
@@ -162,6 +199,8 @@ ai_verify() {
         echo "Ollama service enablement link has an unexpected target: $service_wants_link" >&2
         return 1
     fi
+
+    _ai_verify_ollama_account || return 1
 
     return 0
 }
