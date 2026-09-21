@@ -371,6 +371,17 @@ stage_runtime()
         "$DAIA_RUNTIME_SOURCE/sysusers.d" \
         "$DAIA_SYSUSERS_TARGET"
 
+    if [[ -f "$DAIA_RUNTIME_SOURCE/runtime.sh" ]]
+    then
+        copy_file \
+            "$DAIA_RUNTIME_SOURCE/runtime.sh" \
+            "$DAIA_ROOT_TARGET/runtime.sh" \
+            0755
+
+        record_staged_component \
+            "Runtime orchestrator staged successfully."
+    fi
+
     if [[ -f "$DAIA_RUNTIME_SOURCE/bootstrap.sh" ]]
     then
         copy_file \

@@ -74,6 +74,7 @@ source "${DAIA_LIB_DIR}/logging.sh"
 ############################################################
 
 readonly INSTALL_BOOTSTRAP_SCRIPT="${DAIA_HOME}/bootstrap.sh"
+readonly INSTALL_RUNTIME_SCRIPT="${DAIA_HOME}/runtime.sh"
 readonly INSTALL_FIRSTBOOT_SERVICE="daia-firstboot.service"
 
 ############################################################
@@ -104,6 +105,13 @@ _install_runtime_validate()
     then
         log_error \
             "Bootstrap script is missing or not executable: ${INSTALL_BOOTSTRAP_SCRIPT}"
+        return "$DAIA_NOT_FOUND"
+    fi
+
+    if [[ ! -x "$INSTALL_RUNTIME_SCRIPT" ]]
+    then
+        log_error \
+            "Runtime script is missing or not executable: ${INSTALL_RUNTIME_SCRIPT}"
         return "$DAIA_NOT_FOUND"
     fi
 
@@ -147,6 +155,37 @@ _install_bootstrap()
 
     log_success \
         "Bootstrap completed successfully."
+
+    return "$DAIA_SUCCESS"
+}
+
+############################################################
+# _install_runtime_modules
+############################################################
+
+_install_runtime_modules()
+{
+    local status
+
+    log_info "Executing DAIA runtime modules."
+
+    if bash "$INSTALL_RUNTIME_SCRIPT"
+    then
+        status="$DAIA_SUCCESS"
+    else
+        status=$?
+    fi
+
+    if (( status != DAIA_SUCCESS ))
+    then
+        log_error \
+            "Runtime modules failed with status ${status}."
+
+        return "$status"
+    fi
+
+    log_success \
+        "Runtime modules completed successfully."
 
     return "$DAIA_SUCCESS"
 }
@@ -230,6 +269,14 @@ main()
     require_root
 
     if _install_bootstrap
+    then
+        :
+    else
+        status=$?
+        return "$status"
+    fi
+
+    if _install_runtime_modules
     then
         :
     else
