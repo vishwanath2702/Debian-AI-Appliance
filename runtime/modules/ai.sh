@@ -190,6 +190,11 @@ ai_verify() {
         return 1
     fi
 
+    if ! command -v systemctl >/dev/null 2>&1; then
+        echo "Required command is unavailable: systemctl" >&2
+        return 1
+    fi
+
     if [[ ! -x "$ollama_binary" ]]; then
         echo "Ollama runtime binary is missing or not executable: $ollama_binary" >&2
         return 1
@@ -216,6 +221,11 @@ ai_verify() {
     fi
 
     _ai_verify_ollama_account || return 1
+
+    if ! systemctl is-active --quiet ollama.service; then
+        echo "Ollama service is not active: ollama.service" >&2
+        return 1
+    fi
 
     return 0
 }
