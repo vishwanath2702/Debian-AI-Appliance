@@ -353,7 +353,7 @@ stage_runtime()
 
     copy_file \
         "$DAIA_CONFIG_FILE" \
-        "$DAIA_CONFIG_TARGET/daia.conf" \
+        "$DAIA_CONFIG_TARGET/pragna.conf" \
         0644
 
     stage_runtime_directory \

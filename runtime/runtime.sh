@@ -36,7 +36,7 @@ RUNTIME_DIRECTORY="$(
 )"
 readonly RUNTIME_DIRECTORY
 
-readonly RUNTIME_CONFIG_FILE="${RUNTIME_DIRECTORY}/config/daia.conf"
+readonly RUNTIME_CONFIG_FILE="${RUNTIME_DIRECTORY}/config/pragna.conf"
 readonly RUNTIME_LIFECYCLE_LIBRARY="${RUNTIME_DIRECTORY}/lib/lifecycle.sh"
 
 ############################################################
