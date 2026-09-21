@@ -5,7 +5,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
-TARGET_STATUS="$PROJECT_ROOT/work/rootfs/var/lib/dpkg/status"
+TARGET_STATUS="$PROJECT_ROOT/work/package-state-rootfs/var/lib/dpkg/status"
 DOCKER_PACKAGE_DIR="$PROJECT_ROOT/payload/packages/docker"
 
 if [[ ! -f "$TARGET_STATUS" ]]; then
