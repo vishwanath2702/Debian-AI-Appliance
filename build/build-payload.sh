@@ -351,6 +351,11 @@ stage_runtime()
         "$DAIA_RUNTIME_SOURCE/config" \
         "$DAIA_CONFIG_TARGET"
 
+    copy_file \
+        "$DAIA_CONFIG_FILE" \
+        "$DAIA_CONFIG_TARGET/daia.conf" \
+        0644
+
     stage_runtime_directory \
         "Runtime libraries" \
         "$DAIA_RUNTIME_SOURCE/lib" \
