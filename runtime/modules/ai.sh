@@ -54,6 +54,11 @@ ai_install() {
         return 1
     fi
 
+    if ! command -v systemctl >/dev/null 2>&1; then
+        echo "Required command is unavailable: systemctl" >&2
+        return 1
+    fi
+
     if [[ ! -d "$install_root" ]]; then
         echo "Ollama install root is not a directory: $install_root" >&2
         return 1
@@ -124,6 +129,11 @@ ai_install() {
 
     if ! ln -sf /etc/systemd/system/ollama.service "$service_wants_link"; then
         echo "Failed to enable Ollama service: $service_wants_link" >&2
+        return 1
+    fi
+
+    if ! systemctl daemon-reload; then
+        echo "Failed to reload systemd after installing Ollama service" >&2
         return 1
     fi
 
