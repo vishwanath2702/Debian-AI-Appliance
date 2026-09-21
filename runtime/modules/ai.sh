@@ -137,6 +137,11 @@ ai_install() {
         return 1
     fi
 
+    if ! systemctl start ollama.service; then
+        echo "Failed to start Ollama service" >&2
+        return 1
+    fi
+
     return 0
 }
 
