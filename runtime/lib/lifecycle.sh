@@ -3,7 +3,7 @@
 # ==========================================================
 # DAIA - Debian AI Assistant
 #
-# File       : runtime/lib/module.sh
+# File       : runtime/lib/lifecycle.sh
 # Purpose    : Provide the DAIA runtime module lifecycle
 #              contract.
 #
@@ -13,7 +13,9 @@
 #
 # Public API
 # ----------
+# - module_path
 # - module_contract_validate
+# - module_load
 # - module_operation_run
 #
 # Module Contract
@@ -39,6 +41,56 @@ then
 
     exit 1
 fi
+
+############################################################
+# module_path
+#
+# Return the path to a named runtime module.
+#
+# The module directory is derived from this library's own
+# location so the same layout works in the source tree and in
+# the installed /opt/daia runtime.
+#
+# Arguments:
+#   $1 - Module name
+#
+# Returns:
+#   The module path on standard output.
+#   1 when the module name is empty.
+############################################################
+
+module_path()
+{
+    local module_name="${1:-}"
+    local library_directory
+    local runtime_directory
+
+    if [[ -z "$module_name" ]]
+    then
+        printf 'ERROR: module_path requires a module name.\n' >&2
+        return 1
+    fi
+
+    if [[ ! "$module_name" =~ ^[a-z][a-z0-9_-]*$ ]]
+    then
+        printf 'ERROR: Invalid module name: %s\n' "$module_name" >&2
+        return 1
+    fi
+
+    library_directory="$(
+        cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &&
+        pwd
+    )" || return 1
+
+    runtime_directory="$(
+        cd -- "${library_directory}/.." &&
+        pwd
+    )" || return 1
+
+    printf '%s/modules/%s.sh\n' \
+        "$runtime_directory" \
+        "$module_name"
+}
 
 ############################################################
 # module_contract_validate
@@ -79,6 +131,44 @@ module_contract_validate()
     done
 
     return 0
+}
+
+############################################################
+# module_load
+#
+# Load a named runtime module and validate its lifecycle
+# contract.
+#
+# Arguments:
+#   $1 - Module name
+#
+# Returns:
+#   0 when the module was loaded and satisfies the contract.
+#   1 otherwise.
+############################################################
+
+module_load()
+{
+    local module_name="${1:-}"
+    local module_file
+
+    module_file="$(module_path "$module_name")" || return 1
+
+    if [[ ! -f "$module_file" ]]
+    then
+        printf 'ERROR: Runtime module is unavailable: %s\n' \
+            "$module_file" >&2
+        return 1
+    fi
+
+    if ! source "$module_file"
+    then
+        printf 'ERROR: Failed to load runtime module: %s\n' \
+            "$module_file" >&2
+        return 1
+    fi
+
+    module_contract_validate "$module_name"
 }
 
 ############################################################
