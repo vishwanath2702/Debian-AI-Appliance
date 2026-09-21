@@ -36,7 +36,22 @@ RUNTIME_DIRECTORY="$(
 )"
 readonly RUNTIME_DIRECTORY
 
+readonly RUNTIME_CONFIG_FILE="${RUNTIME_DIRECTORY}/config/daia.conf"
 readonly RUNTIME_LIFECYCLE_LIBRARY="${RUNTIME_DIRECTORY}/lib/lifecycle.sh"
+
+############################################################
+# Load configuration
+############################################################
+
+if [[ ! -f "$RUNTIME_CONFIG_FILE" ]]
+then
+    printf 'ERROR: Runtime configuration file does not exist: %s\n' \
+        "$RUNTIME_CONFIG_FILE" >&2
+    exit 1
+fi
+
+# shellcheck source=/dev/null
+source "$RUNTIME_CONFIG_FILE"
 
 ############################################################
 # Load lifecycle library
