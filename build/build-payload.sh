@@ -387,16 +387,6 @@ stage_runtime()
             "Runtime orchestrator staged successfully."
     fi
 
-    if [[ -f "$DAIA_RUNTIME_SOURCE/bootstrap.sh" ]]
-    then
-        copy_file \
-            "$DAIA_RUNTIME_SOURCE/bootstrap.sh" \
-            "$DAIA_ROOT_TARGET/bootstrap.sh" \
-            0755
-
-        record_staged_component \
-            "Runtime bootstrap staged successfully."
-    fi
 }
 
 ############################################################
