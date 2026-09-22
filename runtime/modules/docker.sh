@@ -42,6 +42,21 @@ docker_install() {
         return 1
     fi
 
+    if ! command -v systemctl >/dev/null 2>&1; then
+        echo "Required command is unavailable: systemctl" >&2
+        return 1
+    fi
+
+    if ! systemctl enable containerd.service docker.socket docker.service; then
+        echo "Failed to enable Docker runtime services" >&2
+        return 1
+    fi
+
+    if ! systemctl start containerd.service docker.socket docker.service; then
+        echo "Failed to start Docker runtime services" >&2
+        return 1
+    fi
+
     return 0
 }
 
