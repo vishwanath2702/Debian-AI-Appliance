@@ -4,7 +4,7 @@
 # DAIA - Debian AI Assistant
 #
 # File       : install.sh
-# Purpose    : Execute the DAIA bootstrap installer and
+# Purpose    : Execute the DAIA runtime lifecycle and
 #              disable the first-boot service after successful
 
 #              completion.
@@ -18,13 +18,13 @@
 # - Load the DAIA configuration.
 # - Load shared installer libraries.
 # - Require root privileges.
-# - Execute bootstrap.sh.
+# - Execute the DAIA runtime lifecycle.
 # - Disable the first-boot systemd service.
 #
 # Non-Responsibilities
 # --------------------
-# - Reading enabled modules.
-# - Loading modules.
+# - Reading runtime module configuration.
+# - Loading runtime modules.
 # - Installing packages directly.
 # - Managing module lifecycle.
 # - Configuring AI components.
@@ -73,7 +73,6 @@ source "${DAIA_LIB_DIR}/logging.sh"
 # Constants
 ############################################################
 
-readonly INSTALL_BOOTSTRAP_SCRIPT="${DAIA_HOME}/bootstrap.sh"
 readonly INSTALL_RUNTIME_SCRIPT="${DAIA_HOME}/runtime.sh"
 readonly INSTALL_FIRSTBOOT_SERVICE="daia-firstboot.service"
 
@@ -101,13 +100,6 @@ _install_runtime_validate()
         fi
     done
 
-    if [[ ! -x "$INSTALL_BOOTSTRAP_SCRIPT" ]]
-    then
-        log_error \
-            "Bootstrap script is missing or not executable: ${INSTALL_BOOTSTRAP_SCRIPT}"
-        return "$DAIA_NOT_FOUND"
-    fi
-
     if [[ ! -x "$INSTALL_RUNTIME_SCRIPT" ]]
     then
         log_error \
@@ -124,37 +116,6 @@ _install_runtime_validate()
             return "$DAIA_NOT_FOUND"
         fi
     done
-
-    return "$DAIA_SUCCESS"
-}
-
-############################################################
-# _install_bootstrap
-############################################################
-
-_install_bootstrap()
-{
-    local status
-
-    log_info "Executing DAIA bootstrap."
-
-    if bash "$INSTALL_BOOTSTRAP_SCRIPT"
-    then
-        status="$DAIA_SUCCESS"
-    else
-        status=$?
-    fi
-
-    if (( status != DAIA_SUCCESS ))
-    then
-        log_error \
-            "Bootstrap failed with status ${status}."
-
-        return "$status"
-    fi
-
-    log_success \
-        "Bootstrap completed successfully."
 
     return "$DAIA_SUCCESS"
 }
@@ -267,14 +228,6 @@ main()
     fi
 
     require_root
-
-    if _install_bootstrap
-    then
-        :
-    else
-        status=$?
-        return "$status"
-    fi
 
     if _install_runtime_modules
     then
