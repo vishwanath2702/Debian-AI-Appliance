@@ -37,6 +37,9 @@ RUNTIME_DIRECTORY="$(
 readonly RUNTIME_DIRECTORY
 
 readonly RUNTIME_CONFIG_FILE="${RUNTIME_DIRECTORY}/config/pragna.conf"
+readonly RUNTIME_COMMON_LIBRARY="${RUNTIME_DIRECTORY}/lib/common.sh"
+readonly RUNTIME_LOGGING_LIBRARY="${RUNTIME_DIRECTORY}/lib/logging.sh"
+readonly RUNTIME_PACKAGES_LIBRARY="${RUNTIME_DIRECTORY}/lib/packages.sh"
 readonly RUNTIME_LIFECYCLE_LIBRARY="${RUNTIME_DIRECTORY}/lib/lifecycle.sh"
 
 ############################################################
@@ -54,24 +57,48 @@ fi
 source "$RUNTIME_CONFIG_FILE"
 
 ############################################################
-# Load lifecycle library
+# Load runtime libraries
 ############################################################
 
-if [[ ! -r "$RUNTIME_LIFECYCLE_LIBRARY" ]]
-then
-    printf 'ERROR: Runtime lifecycle library is unavailable: %s\n' \
-        "$RUNTIME_LIFECYCLE_LIBRARY" >&2
-    exit 1
-fi
+for runtime_library in \
+    "$RUNTIME_COMMON_LIBRARY" \
+    "$RUNTIME_LOGGING_LIBRARY" \
+    "$RUNTIME_PACKAGES_LIBRARY" \
+    "$RUNTIME_LIFECYCLE_LIBRARY"
+do
+    if [[ ! -r "$runtime_library" ]]
+    then
+        printf 'ERROR: Runtime library is unavailable: %s\n' \
+            "$runtime_library" >&2
+        exit 1
+    fi
 
-# shellcheck source=/dev/null
-source "$RUNTIME_LIFECYCLE_LIBRARY"
+    # shellcheck source=/dev/null
+    source "$runtime_library"
+done
 
 ############################################################
 # Runtime module selection
 ############################################################
 
-readonly -a RUNTIME_MODULES=("ai")
+RUNTIME_MODULES=()
+
+if [[ "${DAIA_DESKTOP_ENABLED:-false}" == "true" ]]
+then
+    RUNTIME_MODULES+=("desktop")
+fi
+
+if [[ "${DAIA_ENABLE_DOCKER:-false}" == "true" ]]
+then
+    RUNTIME_MODULES+=("docker")
+fi
+
+if [[ "${DAIA_ENABLE_OLLAMA:-false}" == "true" ]]
+then
+    RUNTIME_MODULES+=("ai")
+fi
+
+readonly RUNTIME_MODULES
 
 ############################################################
 # runtime_module_execute
