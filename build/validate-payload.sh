@@ -4,8 +4,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
-MANIFEST="${1:-$PROJECT_ROOT/payload/manifests/pragna.yaml}"
-PAYLOAD_DIR="$PROJECT_ROOT/payload"
+PAYLOAD_DIR="${1:-$PROJECT_ROOT/payload}"
 
 passed=0
 failed=0
@@ -45,12 +44,16 @@ echo " DAIA Payload Validation"
 echo "========================================"
 echo
 
-check_file "$MANIFEST"
-
 check_directory "$PAYLOAD_DIR/packages/docker"
 check_directory "$PAYLOAD_DIR/packages/ollama"
 check_directory "$PAYLOAD_DIR/packages/dependencies"
 check_directory "$PAYLOAD_DIR/images"
+
+if [[ "${DAIA_ENABLE_OPEN_WEBUI:-false}" == "true" ]]
+then
+    check_file "$PAYLOAD_DIR/images/open-webui.tar"
+fi
+
 check_directory "$PAYLOAD_DIR/models/default"
 check_directory "$PAYLOAD_DIR/branding/wallpapers"
 check_directory "$PAYLOAD_DIR/branding/icons"

@@ -98,8 +98,12 @@ then
     RUNTIME_MODULES+=("ai")
 fi
 
-readonly RUNTIME_MODULES
+if [[ "${DAIA_ENABLE_OPEN_WEBUI:-false}" == "true" ]]
+then
+    RUNTIME_MODULES+=("openwebui")
+fi
 
+readonly RUNTIME_MODULES
 ############################################################
 # runtime_module_execute
 ############################################################
