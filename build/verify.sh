@@ -31,8 +31,6 @@ check "$EXTRACT_DIR/preseed.cfg"
 
 check "$EXTRACT_DIR/daia/opt/daia/install.sh"
 
-check "$EXTRACT_DIR/daia/opt/daia/bootstrap.sh"
-
 check "$EXTRACT_DIR/daia/opt/daia/config/daia.conf"
 
 check "$EXTRACT_DIR/daia/opt/daia/lib/logging.sh"

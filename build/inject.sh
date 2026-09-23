@@ -31,7 +31,7 @@
 #
 #   installer/files/
 #       Contains the proven installation runtime, including
-#       install.sh, bootstrap.sh, and the first-boot service.
+#       install.sh and the first-boot service.
 #
 #   work/payload/daia/
 #       Contains the newly assembled distribution payload,
@@ -80,7 +80,7 @@
 #
 # Future Migration
 # ----------------
-# Once install.sh, bootstrap.sh, systemd services, and all
+# Once install.sh, systemd services, and all
 # installer runtime files have moved into runtime/ and are
 # assembled entirely by build-payload.sh, the direct copy from
 # installer/files/ can be removed in a dedicated migration
@@ -280,10 +280,6 @@ validate_injection_inputs()
         "$INSTALLER_FILES_SOURCE/opt/daia/install.sh"
 
     require_nonempty_file \
-        "First-boot bootstrap" \
-        "$INSTALLER_FILES_SOURCE/opt/daia/bootstrap.sh"
-
-    require_nonempty_file \
         "First-boot systemd service" \
         "$INSTALLER_FILES_SOURCE/etc/systemd/system/daia-firstboot.service"
 
@@ -367,9 +363,12 @@ inject_established_runtime()
 {
     log_section "Injecting established DAIA installer runtime"
 
-    copy_directory \
-        "$INSTALLER_FILES_SOURCE" \
-        "$ISO_DAIA_TARGET"
+    rsync \
+        --archive \
+        --exclude='opt/daia/bootstrap.sh' \
+        "$INSTALLER_FILES_SOURCE/" \
+        "$ISO_DAIA_TARGET/opt/"
+
 
     log_success "Established installer runtime injected."
 }
@@ -460,8 +459,7 @@ apply_injected_permissions()
 
     chmod 0755 \
         "$ISO_HOOKS_TARGET/late-install.sh" \
-        "$ISO_DAIA_TARGET/opt/daia/install.sh" \
-        "$ISO_DAIA_TARGET/opt/daia/bootstrap.sh"
+        "$ISO_DAIA_TARGET/opt/daia/install.sh"
 
     if [[ -d "$ISO_DAIA_TARGET/opt/daia/modules" ]]
     then
@@ -541,10 +539,6 @@ verify_injected_content()
     verify_injected_file \
         "DAIA installer entry point" \
         "$ISO_DAIA_TARGET/opt/daia/install.sh"
-
-    verify_injected_file \
-        "DAIA first-boot bootstrap" \
-        "$ISO_DAIA_TARGET/opt/daia/bootstrap.sh"
 
     verify_injected_file \
         "DAIA first-boot service" \
