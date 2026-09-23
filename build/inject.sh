@@ -363,11 +363,12 @@ inject_established_runtime()
 {
     log_section "Injecting established DAIA installer runtime"
 
+    ensure_directory "$ISO_DAIA_TARGET"
+
     rsync \
         --archive \
-        --exclude='opt/daia/bootstrap.sh' \
         "$INSTALLER_FILES_SOURCE/" \
-        "$ISO_DAIA_TARGET/opt/"
+        "$ISO_DAIA_TARGET/"
 
 
     log_success "Established installer runtime injected."

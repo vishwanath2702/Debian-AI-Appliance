@@ -58,7 +58,6 @@ echo "Checking required files..."
 check_file "$INSTALLER_DIR/preseed.cfg"
 
 check_file "$INSTALLER_DIR/files/opt/daia/install.sh"
-check_file "$INSTALLER_DIR/files/opt/daia/bootstrap.sh"
 check_file "$INSTALLER_DIR/files/opt/daia/VERSION"
 
 check_file "$INSTALLER_DIR/files/opt/daia/config/daia.conf"
