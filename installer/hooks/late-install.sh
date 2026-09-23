@@ -14,7 +14,6 @@ date
 # Verify required source files.
 test -d "$SOURCE_ROOT/opt/daia"
 test -f "$SOURCE_ROOT/opt/daia/install.sh"
-test -f "$SOURCE_ROOT/opt/daia/bootstrap.sh"
 test -f "$SOURCE_ROOT/etc/systemd/system/daia-firstboot.service"
 
 # Create target locations.
@@ -32,7 +31,6 @@ cp "$SOURCE_ROOT/etc/systemd/system/daia-firstboot.service" \
    "$TARGET_ROOT/etc/systemd/system/daia-firstboot.service"
 
 chmod 0755 "$TARGET_ROOT/opt/daia/install.sh"
-chmod 0755 "$TARGET_ROOT/opt/daia/bootstrap.sh"
 
 ln -sf /etc/systemd/system/daia-firstboot.service \
    "$TARGET_ROOT/etc/systemd/system/multi-user.target.wants/daia-firstboot.service"
