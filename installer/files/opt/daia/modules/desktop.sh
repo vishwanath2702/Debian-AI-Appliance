@@ -4,7 +4,7 @@
 # DAIA - Debian AI Assistant
 #
 # File       : modules/desktop.sh
-# Purpose    : Install and configure the DAIA XFCE desktop
+# Purpose    : Install and configure the DAIA KDE Plasma desktop
 #              environment.
 #
 # Version    : 1.0.0
@@ -16,7 +16,7 @@
 # - Declare metadata for the desktop module.
 # - Validate desktop-specific runtime requirements.
 # - Install the desktop package manifest.
-# - Enable and start the LightDM display manager.
+# - Enable and start the SDDM display manager.
 # - Verify desktop packages and services.
 #
 # Non-Responsibilities
@@ -62,14 +62,14 @@
 
 MODULE_NAME="desktop"
 
-MODULE_DESCRIPTION="XFCE desktop environment"
+MODULE_DESCRIPTION="KDE Plasma desktop environment"
 
 MODULE_VERSION="1.0.0"
 
 MODULE_MANIFEST="${DAIA_MANIFEST_DIR}/desktop.lst"
 
 MODULE_SERVICES=(
-    "lightdm"
+    "sddm"
 )
 
 ############################################################
@@ -335,7 +335,7 @@ module_install()
     local install_status
 
     _desktop_log_info \
-        "Installing the XFCE desktop environment."
+        "Installing the KDE Plasma desktop environment."
 
     framework_install
     install_status=$?
@@ -361,7 +361,7 @@ module_install()
 #
 # The generic framework enables and starts every service
 # declared in MODULE_SERVICES. For this module, that service
-# is LightDM.
+# is SDDM.
 #
 # Arguments:
 #   None

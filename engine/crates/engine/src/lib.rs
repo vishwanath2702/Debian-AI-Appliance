@@ -38,12 +38,11 @@ use model::{
     ContentRepositoryId, ContentSource, CurrentResource, CurrentRevision, CurrentStateProposal,
     DiscoveredContent, DiscoveredStorage, ExternalContentItem, ExternalContentItemId,
     ImportedContentItem, InferenceEngineArchitectureSupport, InferenceEngineId, InstallationIntent,
-    Observation, ObservationSourceId,
-    ObservationTimestamp, Plan, ResourceId, SchemaVersion, ServiceCurrentState,
-    ServiceDesiredState, StorageKind, VerificationConditionResult, VerificationEvidenceReference,
-    VerificationOverallResult, VerificationProviderId, VerificationProviderVersion,
-    VerificationRequest, VerificationResult, VerificationResultId, VerificationRuleReference,
-    VerificationTimestamp,
+    Observation, ObservationSourceId, ObservationTimestamp, Plan, ResourceId, SchemaVersion,
+    ServiceCurrentState, ServiceDesiredState, StorageKind, VerificationConditionResult,
+    VerificationEvidenceReference, VerificationOverallResult, VerificationProviderId,
+    VerificationProviderVersion, VerificationRequest, VerificationResult, VerificationResultId,
+    VerificationRuleReference, VerificationTimestamp,
 };
 
 use planner::{PlanError, Planner};
@@ -1853,8 +1852,11 @@ mod tests {
     fn dry_run_executor_records_executed_operations_in_order() {
         let engine = Engine::from_registry(desktop_registry());
 
-        let intent =
-            InstallationIntent::new("desktop", DiscoveredStorageId::new("serial:usb-disk"));
+        let intent = InstallationIntent::new(
+            "desktop",
+            DiscoveredStorageId::new("serial:usb-disk"),
+            model::UserConfiguration::new("admin", "DAIA Administrator"),
+        );
 
         let storage = DiscoveredStorage::new("serial:usb-disk", StorageKind::Removable, "/dev/sdb");
 
@@ -1889,6 +1891,7 @@ mod tests {
             ContentRepositoryId::new("local-models"),
             Vec::new(),
             DiscoveredStorageId::new("serial:usb-disk"),
+            model::UserConfiguration::new("admin", "DAIA Administrator"),
         );
 
         let storage = vec![DiscoveredStorage::new(
@@ -1932,6 +1935,7 @@ mod tests {
             InstallationIntent::new(
                 "desktop",
                 DiscoveredStorageId::new("serial:usb-disk"),
+                model::UserConfiguration::new("admin", "DAIA Administrator"),
             ),
         );
 
@@ -1941,10 +1945,8 @@ mod tests {
             vec![Capability::new("desktop")],
         );
 
-        let repository = ContentRepository::new(
-            "local-models",
-            "Models available on local storage",
-        );
+        let repository =
+            ContentRepository::new("local-models", "Models available on local storage");
 
         let storage = vec![DiscoveredStorage::new(
             "serial:usb-disk",
@@ -1975,6 +1977,7 @@ mod tests {
             ContentRepositoryId::new("local-models"),
             Vec::new(),
             DiscoveredStorageId::new("serial:usb-disk"),
+            model::UserConfiguration::new("admin", "DAIA Administrator"),
         );
 
         let profile = ApplianceProfile::new(
@@ -1983,10 +1986,8 @@ mod tests {
             vec![Capability::new("desktop")],
         );
 
-        let repository = ContentRepository::new(
-            "different-repository",
-            "Different content repository",
-        );
+        let repository =
+            ContentRepository::new("different-repository", "Different content repository");
 
         let storage = vec![DiscoveredStorage::new(
             "serial:usb-disk",
@@ -2012,8 +2013,11 @@ mod tests {
     fn prepares_appliance_installation_from_prepared_components() {
         let engine = Engine::from_registry(desktop_registry());
 
-        let intent =
-            InstallationIntent::new("desktop", DiscoveredStorageId::new("serial:usb-disk"));
+        let intent = InstallationIntent::new(
+            "desktop",
+            DiscoveredStorageId::new("serial:usb-disk"),
+            model::UserConfiguration::new("admin", "DAIA Administrator"),
+        );
 
         let storage = DiscoveredStorage::new("serial:usb-disk", StorageKind::Removable, "/dev/sdb");
 
@@ -2099,8 +2103,11 @@ mod tests {
     fn dry_run_executor_records_installation_operations() {
         let engine = Engine::from_registry(desktop_registry());
 
-        let intent =
-            InstallationIntent::new("desktop", DiscoveredStorageId::new("serial:usb-disk"));
+        let intent = InstallationIntent::new(
+            "desktop",
+            DiscoveredStorageId::new("serial:usb-disk"),
+            model::UserConfiguration::new("admin", "DAIA Administrator"),
+        );
 
         let storage = DiscoveredStorage::new("serial:usb-disk", StorageKind::Removable, "/dev/sdb");
 
@@ -2140,6 +2147,10 @@ mod tests {
                 InstallationOperation::BootstrapSystem {
                     root: "/target".into(),
                     bootstrap: BootstrapConfig::default(),
+                },
+                InstallationOperation::CreateAdministrator {
+                    root: "/target".into(),
+                    user: model::UserConfiguration::new("admin", "DAIA Administrator"),
                 },
                 InstallationOperation::ApplyPlans { plans: Vec::new() },
                 InstallationOperation::ConfigureFstab {
@@ -2222,8 +2233,11 @@ mod tests {
     fn dry_run_executor_records_installation_summary() {
         let engine = Engine::from_registry(desktop_registry());
 
-        let intent =
-            InstallationIntent::new("desktop", DiscoveredStorageId::new("serial:usb-disk"));
+        let intent = InstallationIntent::new(
+            "desktop",
+            DiscoveredStorageId::new("serial:usb-disk"),
+            model::UserConfiguration::new("admin", "DAIA Administrator"),
+        );
 
         let storage = DiscoveredStorage::new("serial:usb-disk", StorageKind::Removable, "/dev/sdb");
 
@@ -2248,8 +2262,11 @@ mod tests {
     fn executes_prepared_installation_through_executor() {
         let engine = Engine::from_registry(desktop_registry());
 
-        let intent =
-            InstallationIntent::new("desktop", DiscoveredStorageId::new("serial:usb-disk"));
+        let intent = InstallationIntent::new(
+            "desktop",
+            DiscoveredStorageId::new("serial:usb-disk"),
+            model::UserConfiguration::new("admin", "DAIA Administrator"),
+        );
 
         let storage = DiscoveredStorage::new("serial:usb-disk", StorageKind::Removable, "/dev/sdb");
 
@@ -2267,8 +2284,11 @@ mod tests {
 
     #[test]
     fn prepared_installation_exposes_dry_run_summary() {
-        let intent =
-            InstallationIntent::new("desktop", DiscoveredStorageId::new("serial:usb-disk"));
+        let intent = InstallationIntent::new(
+            "desktop",
+            DiscoveredStorageId::new("serial:usb-disk"),
+            model::UserConfiguration::new("admin", "DAIA Administrator"),
+        );
 
         let storage = DiscoveredStorage::new("serial:usb-disk", StorageKind::Removable, "/dev/sdb");
 
@@ -2282,8 +2302,11 @@ mod tests {
     }
     #[test]
     fn prepared_appliance_installation_exposes_prepared_components() {
-        let intent =
-            InstallationIntent::new("desktop", DiscoveredStorageId::new("serial:usb-disk"));
+        let intent = InstallationIntent::new(
+            "desktop",
+            DiscoveredStorageId::new("serial:usb-disk"),
+            model::UserConfiguration::new("admin", "DAIA Administrator"),
+        );
 
         let storage = DiscoveredStorage::new("serial:usb-disk", StorageKind::Removable, "/dev/sdb");
 
@@ -2303,8 +2326,11 @@ mod tests {
     }
     #[test]
     fn prepared_appliance_installation_omits_empty_content_import() {
-        let intent =
-            InstallationIntent::new("desktop", DiscoveredStorageId::new("serial:usb-disk"));
+        let intent = InstallationIntent::new(
+            "desktop",
+            DiscoveredStorageId::new("serial:usb-disk"),
+            model::UserConfiguration::new("admin", "DAIA Administrator"),
+        );
 
         let storage = DiscoveredStorage::new("serial:usb-disk", StorageKind::Removable, "/dev/sdb");
 
@@ -2330,8 +2356,11 @@ mod tests {
     #[test]
     fn executes_prepared_appliance_installation_through_operation_executor() {
         let engine = Engine::from_registry(desktop_registry());
-        let intent =
-            InstallationIntent::new("desktop", DiscoveredStorageId::new("serial:usb-disk"));
+        let intent = InstallationIntent::new(
+            "desktop",
+            DiscoveredStorageId::new("serial:usb-disk"),
+            model::UserConfiguration::new("admin", "DAIA Administrator"),
+        );
 
         let storage = DiscoveredStorage::new("serial:usb-disk", StorageKind::Removable, "/dev/sdb");
 
@@ -2371,8 +2400,11 @@ mod tests {
     fn prepare_installation_rejects_mismatched_profile() {
         let engine = Engine::from_registry(desktop_registry());
 
-        let intent =
-            InstallationIntent::new("desktop", DiscoveredStorageId::new("serial:usb-disk"));
+        let intent = InstallationIntent::new(
+            "desktop",
+            DiscoveredStorageId::new("serial:usb-disk"),
+            model::UserConfiguration::new("admin", "DAIA Administrator"),
+        );
 
         let profile = ApplianceProfile::new(
             "different-profile",
@@ -2403,8 +2435,11 @@ mod tests {
             vec![Capability::new("desktop")],
         );
 
-        let intent =
-            InstallationIntent::new("desktop", DiscoveredStorageId::new("serial:missing-disk"));
+        let intent = InstallationIntent::new(
+            "desktop",
+            DiscoveredStorageId::new("serial:missing-disk"),
+            model::UserConfiguration::new("admin", "DAIA Administrator"),
+        );
 
         let error = engine
             .prepare_installation(intent, &profile, &[])
@@ -2423,8 +2458,11 @@ mod tests {
             vec![Capability::new("desktop")],
         );
 
-        let intent =
-            InstallationIntent::new("desktop", DiscoveredStorageId::new("wwn:system-disk"));
+        let intent = InstallationIntent::new(
+            "desktop",
+            DiscoveredStorageId::new("wwn:system-disk"),
+            model::UserConfiguration::new("admin", "DAIA Administrator"),
+        );
 
         let storage = vec![DiscoveredStorage::new(
             "wwn:system-disk",
@@ -2449,8 +2487,11 @@ mod tests {
             vec![Capability::new("desktop")],
         );
 
-        let intent =
-            InstallationIntent::new("desktop", DiscoveredStorageId::new("serial:usb-disk"));
+        let intent = InstallationIntent::new(
+            "desktop",
+            DiscoveredStorageId::new("serial:usb-disk"),
+            model::UserConfiguration::new("admin", "DAIA Administrator"),
+        );
 
         let storage = vec![
             DiscoveredStorage::new("wwn:system-disk", StorageKind::System, "/dev/sda"),
@@ -2474,8 +2515,11 @@ mod tests {
     fn rejects_system_disk_as_installation_storage() {
         let engine = Engine::from_registry(desktop_registry());
 
-        let intent =
-            InstallationIntent::new("desktop", DiscoveredStorageId::new("wwn:system-disk"));
+        let intent = InstallationIntent::new(
+            "desktop",
+            DiscoveredStorageId::new("wwn:system-disk"),
+            model::UserConfiguration::new("admin", "DAIA Administrator"),
+        );
 
         let storage = vec![DiscoveredStorage::new(
             "wwn:system-disk",
@@ -2494,8 +2538,11 @@ mod tests {
     fn validates_removable_installation_storage() {
         let engine = Engine::from_registry(desktop_registry());
 
-        let intent =
-            InstallationIntent::new("desktop", DiscoveredStorageId::new("serial:usb-disk"));
+        let intent = InstallationIntent::new(
+            "desktop",
+            DiscoveredStorageId::new("serial:usb-disk"),
+            model::UserConfiguration::new("admin", "DAIA Administrator"),
+        );
 
         let storage = vec![
             DiscoveredStorage::new("wwn:system-disk", StorageKind::System, "/dev/sda"),
@@ -2520,8 +2567,11 @@ mod tests {
             vec![Capability::new("desktop")],
         );
 
-        let intent =
-            InstallationIntent::new("desktop", DiscoveredStorageId::new("serial:usb-disk"));
+        let intent = InstallationIntent::new(
+            "desktop",
+            DiscoveredStorageId::new("serial:usb-disk"),
+            model::UserConfiguration::new("admin", "DAIA Administrator"),
+        );
 
         let plans = engine
             .plan_installation(&intent, &profile)

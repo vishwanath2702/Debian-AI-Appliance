@@ -158,18 +158,20 @@ packages:
             .expect("desktop package manifest should exist");
 
         assert_eq!(manifest.name(), "desktop");
-assert_eq!(
-    manifest.packages(),
-    &[
-        "live-boot".to_owned(),
-        "live-config".to_owned(),
-        "systemd-sysv".to_owned(),
-        "linux-image-amd64".to_owned(),
-        "initramfs-tools".to_owned(),
-        "task-gnome-desktop".to_owned(),
-        "gdm3".to_owned(),
-    ]
-);
+        assert_eq!(
+            manifest.packages(),
+            &[
+                "live-boot".to_owned(),
+                "live-config".to_owned(),
+                "systemd-sysv".to_owned(),
+                "linux-image-amd64".to_owned(),
+                "initramfs-tools".to_owned(),
+                "xserver-xorg".to_owned(),
+                "task-kde-desktop".to_owned(),
+                "network-manager".to_owned(),
+                "network-manager-gnome".to_owned(),
+            ]
+        );
     }
     #[test]
     fn resolves_package_manifest_realization() {

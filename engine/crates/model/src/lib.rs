@@ -1998,6 +1998,7 @@ impl ApplianceConfiguration {
         content_repository_id: ContentRepositoryId,
         external_content: Vec<ExternalContentItemId>,
         storage_id: DiscoveredStorageId,
+        user: UserConfiguration,
     ) -> Self {
         let profile_name = profile_name.into();
 
@@ -2005,7 +2006,7 @@ impl ApplianceConfiguration {
             profile_name.clone(),
             content_repository_id,
             ContentImportIntent::new(external_content),
-            InstallationIntent::new(profile_name, storage_id),
+            InstallationIntent::new(profile_name, storage_id, user),
         )
     }
 
@@ -2053,20 +2054,61 @@ impl ContentImportIntent {
     }
 }
 
+/// Describes the non-secret identity of the human administrator
+/// configured for the installed DAIA appliance.
+///
+/// The Debian `root` account remains a separate system account and
+/// is not represented by this configuration. This type represents
+/// the additional human administrator account created by DAIA.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct UserConfiguration {
+    username: String,
+    display_name: String,
+}
+
+impl UserConfiguration {
+    /// Creates the configured human administrator identity.
+    #[must_use]
+    pub fn new(username: impl Into<String>, display_name: impl Into<String>) -> Self {
+        Self {
+            username: username.into(),
+            display_name: display_name.into(),
+        }
+    }
+
+    /// Returns the configured administrator username.
+    #[must_use]
+    pub fn username(&self) -> &str {
+        &self.username
+    }
+
+    /// Returns the configured administrator display name.
+    #[must_use]
+    pub fn display_name(&self) -> &str {
+        &self.display_name
+    }
+}
+
 /// Describes a confirmed DAIA installation intent.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct InstallationIntent {
     profile_name: String,
     storage_id: DiscoveredStorageId,
+    user: UserConfiguration,
 }
 
 impl InstallationIntent {
     /// Creates a confirmed installation intent.
     #[must_use]
-    pub fn new(profile_name: impl Into<String>, storage_id: DiscoveredStorageId) -> Self {
+    pub fn new(
+        profile_name: impl Into<String>,
+        storage_id: DiscoveredStorageId,
+        user: UserConfiguration,
+    ) -> Self {
         Self {
             profile_name: profile_name.into(),
             storage_id,
+            user,
         }
     }
 
@@ -2081,10 +2123,36 @@ impl InstallationIntent {
     pub const fn storage_id(&self) -> &DiscoveredStorageId {
         &self.storage_id
     }
+
+    /// Returns the configured human administrator identity.
+    #[must_use]
+    pub const fn user(&self) -> &UserConfiguration {
+        &self.user
+    }
 }
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn user_configuration_exposes_non_secret_identity() {
+        let user = UserConfiguration::new("admin", "DAIA Administrator");
+
+        assert_eq!(user.username(), "admin");
+        assert_eq!(user.display_name(), "DAIA Administrator");
+    }
+
+    #[test]
+    fn installation_intent_preserves_user_configuration() {
+        let storage_id = DiscoveredStorageId::new("storage/test");
+        let user = UserConfiguration::new("admin", "DAIA Administrator");
+
+        let intent = InstallationIntent::new("desktop", storage_id.clone(), user.clone());
+
+        assert_eq!(intent.profile_name(), "desktop");
+        assert_eq!(intent.storage_id(), &storage_id);
+        assert_eq!(intent.user(), &user);
+    }
+
     #[test]
     fn stores_package_manifest_realization() {
         let realization = crate::PackageManifestRealization::new("desktop");
@@ -2116,7 +2184,7 @@ mod tests {
         InstallationIntent, Observation, ObservationSourceId, ObservationTimestamp,
         PackageManifest, PlanStep, ProviderId, ResourceId, ResourceType, SchemaVersion,
         ServiceCurrentState, ServiceDesiredState, StateBasis, StorageKind, StorageTarget,
-        StorageTargetId, VerificationCondition, VerificationConditionId,
+        StorageTargetId, UserConfiguration, VerificationCondition, VerificationConditionId,
         VerificationConditionResult, VerificationEvidenceReference, VerificationOverallResult,
         VerificationPolicyRevision, VerificationProviderId, VerificationProviderVersion,
         VerificationPurpose, VerificationRequest, VerificationResult, VerificationResultId,
@@ -2503,6 +2571,7 @@ mod tests {
             ContentRepositoryId::new("local-models"),
             vec![item_id.clone()],
             DiscoveredStorageId::new("serial:usb-disk"),
+            UserConfiguration::new("admin", "DAIA Administrator"),
         );
 
         assert_eq!(configuration.profile_name(), "desktop");
@@ -2524,8 +2593,11 @@ mod tests {
             "local-models-directory:/media/daia/models/model.gguf",
         )]);
 
-        let installation =
-            InstallationIntent::new("desktop", DiscoveredStorageId::new("serial:usb-disk"));
+        let installation = InstallationIntent::new(
+            "desktop",
+            DiscoveredStorageId::new("serial:usb-disk"),
+            UserConfiguration::new("admin", "DAIA Administrator"),
+        );
 
         let configuration = ApplianceConfiguration::new(
             "desktop",
@@ -2604,8 +2676,11 @@ mod tests {
 
     #[test]
     fn installation_intent_exposes_profile_and_storage() {
-        let intent =
-            InstallationIntent::new("desktop", DiscoveredStorageId::new("serial:usb-disk"));
+        let intent = InstallationIntent::new(
+            "desktop",
+            DiscoveredStorageId::new("serial:usb-disk"),
+            UserConfiguration::new("admin", "DAIA Administrator"),
+        );
 
         assert_eq!(intent.profile_name(), "desktop");
         assert_eq!(

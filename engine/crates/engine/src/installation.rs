@@ -1,4 +1,4 @@
-use model::{DiscoveredStorage, DiscoveredStorageId, InstallationIntent, Plan};
+use model::{DiscoveredStorage, DiscoveredStorageId, InstallationIntent, Plan, UserConfiguration};
 
 use std::{io, path::PathBuf, process::Command};
 
@@ -301,6 +301,15 @@ pub enum InstallationOperation {
 
     /// Apply the appliance execution plans.
     ApplyPlans { plans: Vec<Plan> },
+
+    /// Create the configured human administrator in the installed system.
+    CreateAdministrator {
+        /// Target root filesystem containing the installed system.
+        root: PathBuf,
+
+        /// Non-secret identity of the human administrator.
+        user: UserConfiguration,
+    },
 
     ConfigureFstab {
         device_path: PathBuf,
@@ -700,6 +709,24 @@ where
                 .bootstrapper
                 .bootstrap(root, bootstrap)
                 .map_err(|_| io::Error::other("installation bootstrap failed")),
+            InstallationOperation::CreateAdministrator { root, user } => {
+                let mut command = Command::new("chroot");
+
+                command
+                    .arg(root)
+                    .arg("useradd")
+                    .arg("--create-home")
+                    .arg("--user-group")
+                    .arg("--shell")
+                    .arg("/bin/bash")
+                    .arg("--comment")
+                    .arg(user.display_name())
+                    .arg(user.username());
+
+                self.runner.status(&mut command)?;
+
+                Ok(())
+            }
             InstallationOperation::ApplyPlans { plans } => self
                 .plan_executor
                 .apply_plans(plans)
@@ -1022,6 +1049,10 @@ impl PreparedInstallation {
             InstallationOperation::BootstrapSystem {
                 root: "/target".into(),
                 bootstrap: self.bootstrap.clone(),
+            },
+            InstallationOperation::CreateAdministrator {
+                root: "/target".into(),
+                user: self.intent.user().clone(),
             },
             InstallationOperation::ApplyPlans {
                 plans: self.plans.clone(),
@@ -1742,8 +1773,11 @@ mod tests {
     }
     #[test]
     fn system_executor_implements_installation_executor() {
-        let intent =
-            InstallationIntent::new("desktop", DiscoveredStorageId::new("serial:usb-disk"));
+        let intent = InstallationIntent::new(
+            "desktop",
+            DiscoveredStorageId::new("serial:usb-disk"),
+            model::UserConfiguration::new("admin", "DAIA Administrator"),
+        );
 
         let storage = DiscoveredStorage::new("serial:usb-disk", StorageKind::Removable, "/dev/sdb");
 
@@ -2918,8 +2952,11 @@ mod tests {
             "minbase",
         );
 
-        let intent =
-            InstallationIntent::new("desktop", DiscoveredStorageId::new("serial:usb-disk"));
+        let intent = InstallationIntent::new(
+            "desktop",
+            DiscoveredStorageId::new("serial:usb-disk"),
+            model::UserConfiguration::new("admin", "DAIA Administrator"),
+        );
 
         let storage = DiscoveredStorage::new("serial:usb-disk", StorageKind::Removable, "/dev/sdb");
 

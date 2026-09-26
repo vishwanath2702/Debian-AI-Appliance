@@ -1,8 +1,8 @@
 //! Wizard state for interactive DAIA appliance configuration.
 use model::{
-    ApplianceConfiguration, ContentImportIntent, ContentRepository, ContentRepositoryId,
-    DiscoveredStorage, DiscoveredStorageId, ExternalContentItem, ExternalContentItemId,
-    InstallationIntent, StorageKind,
+    ApplianceConfiguration, ContentRepository, ContentRepositoryId, DiscoveredStorage,
+    DiscoveredStorageId, ExternalContentItem, ExternalContentItemId, StorageKind,
+    UserConfiguration,
 };
 use registry::{ApplianceProfileRepository, ContentRepositoryRepository};
 /// State accumulated while configuring an appliance through the wizard.
@@ -15,6 +15,7 @@ pub struct WizardState {
     selected_external_content: Vec<ExternalContentItemId>,
     discovered_storage: Vec<DiscoveredStorage>,
     selected_storage: Option<DiscoveredStorageId>,
+    user: Option<UserConfiguration>,
 }
 impl WizardState {
     /// Creates an empty wizard state.
@@ -28,8 +29,21 @@ impl WizardState {
             selected_external_content: Vec::new(),
             discovered_storage: Vec::new(),
             selected_storage: None,
+            user: None,
         }
     }
+
+    /// Sets the human administrator identity for the appliance.
+    pub fn set_user_configuration(&mut self, user: UserConfiguration) {
+        self.user = Some(user);
+    }
+
+    /// Returns the configured human administrator identity.
+    #[must_use]
+    pub fn user_configuration(&self) -> Option<&UserConfiguration> {
+        self.user.as_ref()
+    }
+
     /// Sets the selected appliance profile.
     pub fn set_profile_name(&mut self, profile_name: impl Into<String>) {
         self.profile_name = Some(profile_name.into());
@@ -178,6 +192,7 @@ impl WizardState {
             content_repository_id: self.selected_content_repository?,
             external_content: self.selected_external_content,
             storage_id: self.selected_storage?,
+            user: self.user?,
         })
     }
 }
@@ -190,6 +205,7 @@ pub struct WizardConfig {
     content_repository_id: ContentRepositoryId,
     external_content: Vec<ExternalContentItemId>,
     storage_id: DiscoveredStorageId,
+    user: UserConfiguration,
 }
 impl WizardConfig {
     /// Returns the selected appliance profile name.
@@ -220,6 +236,13 @@ impl WizardConfig {
     pub const fn storage_id(&self) -> &DiscoveredStorageId {
         &self.storage_id
     }
+
+    /// Returns the configured human administrator identity.
+    #[must_use]
+    pub const fn user_configuration(&self) -> &UserConfiguration {
+        &self.user
+    }
+
     /// Resolves the selected appliance profile from a repository.
     #[must_use]
     pub fn profile<'a>(
@@ -236,6 +259,7 @@ impl WizardConfig {
             self.content_repository_id.clone(),
             self.external_content.clone(),
             self.storage_id.clone(),
+            self.user_configuration().clone(),
         )
     }
 }
@@ -246,7 +270,7 @@ mod tests {
     use model::{
         ApplianceProfile, Capability, ContentRepository, ContentRepositoryId, ContentSourceId,
         DiscoveredStorage, DiscoveredStorageId, ExternalContentItem, ExternalContentItemId,
-        StorageKind,
+        StorageKind, UserConfiguration,
     };
     use registry::{ApplianceProfileRepository, ContentRepositoryRepository};
 
@@ -257,6 +281,10 @@ mod tests {
             "/dev/sdb",
         )]);
         state.select_storage(DiscoveredStorageId::new("serial:usb-disk"));
+    }
+
+    fn select_test_user(state: &mut WizardState) {
+        state.set_user_configuration(UserConfiguration::new("admin", "DAIA Administrator"));
     }
 
     fn select_test_content_repository(state: &mut WizardState) {
@@ -304,6 +332,8 @@ mod tests {
         state.select_external_content(vec![item_id.clone()]);
         select_test_storage(&mut state);
 
+        select_test_user(&mut state);
+
         let config = state
             .into_config()
             .expect("completed wizard state should build configuration");
@@ -337,6 +367,8 @@ mod tests {
         select_test_content_repository(&mut state);
         select_test_storage(&mut state);
 
+        select_test_user(&mut state);
+
         let config = state
             .into_config()
             .expect("completed wizard state should build configuration");
@@ -364,6 +396,8 @@ mod tests {
             "/dev/sdb",
         )]);
         select_test_storage(&mut state);
+
+        select_test_user(&mut state);
 
         let config = state
             .into_config()
@@ -637,6 +671,8 @@ mod tests {
         select_test_content_repository(&mut state);
         select_test_storage(&mut state);
 
+        select_test_user(&mut state);
+
         let config = state
             .into_config()
             .expect("completed wizard state should build configuration");
@@ -656,6 +692,8 @@ mod tests {
         state.set_profile_name("desktop");
         select_test_content_repository(&mut state);
         select_test_storage(&mut state);
+
+        select_test_user(&mut state);
 
         let config = state
             .into_config()

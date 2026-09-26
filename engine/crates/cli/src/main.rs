@@ -8,7 +8,9 @@ use inspector::{
     ContentInspector, DebianIsoInspector, IsoInspector, LinuxStorageInspector,
     LocalFilesystemContentInspector, StorageInspector,
 };
-use model::{Capability, InferenceEngineArchitectureSupport, InferenceEngineId, Plan};
+use model::{
+    Capability, InferenceEngineArchitectureSupport, InferenceEngineId, Plan, UserConfiguration,
+};
 use registry::{ContentRepositoryRepository, PackageRepository};
 use std::env;
 use std::io::{self, Write};
@@ -681,6 +683,52 @@ where
     select_storage(state)
 }
 
+fn configure_wizard_user(state: &mut WizardState) -> Result<(), String> {
+    println!("Human administrator:");
+    println!();
+
+    print!("Username: ");
+    io::stdout()
+        .flush()
+        .map_err(|error| format!("Error writing prompt: {error}"))?;
+
+    let mut username = String::new();
+
+    io::stdin()
+        .read_line(&mut username)
+        .map_err(|error| format!("Error reading username: {error}"))?;
+
+    let username = username.trim();
+
+    if username.is_empty() {
+        return Err("Error: administrator username cannot be empty".to_owned());
+    }
+
+    print!("Display name: ");
+    io::stdout()
+        .flush()
+        .map_err(|error| format!("Error writing prompt: {error}"))?;
+
+    let mut display_name = String::new();
+
+    io::stdin()
+        .read_line(&mut display_name)
+        .map_err(|error| format!("Error reading display name: {error}"))?;
+
+    let display_name = display_name.trim();
+
+    if display_name.is_empty() {
+        return Err("Error: administrator display name cannot be empty".to_owned());
+    }
+
+    state.set_user_configuration(UserConfiguration::new(username, display_name));
+
+    println!("Configured administrator: {} ({})", username, display_name);
+    println!();
+
+    Ok(())
+}
+
 fn configure_wizard_state(engine: &Engine, state: &mut WizardState) -> Result<(), String> {
     configure_wizard_appliance_profile(engine, state)?;
     configure_wizard_content_repository(state)?;
@@ -688,6 +736,8 @@ fn configure_wizard_state(engine: &Engine, state: &mut WizardState) -> Result<()
     let content_inspector = LocalFilesystemContentInspector::new();
 
     configure_wizard_external_content(engine, state, &content_inspector)?;
+
+    configure_wizard_user(state)?;
 
     let storage_inspector = LinuxStorageInspector::new();
 
@@ -727,6 +777,16 @@ fn review_wizard_state(
     println!(
         "  Content repository : {}",
         format_selected_content_repository(state)
+    );
+
+    let user = state
+        .user_configuration()
+        .expect("user should be configured before review");
+
+    println!(
+        "  Administrator      : {} ({})",
+        user.username(),
+        user.display_name()
     );
 
     if state.selected_external_content().is_empty() {
@@ -848,6 +908,14 @@ fn installation_operation_name(operation: &InstallationOperation) -> String {
             } else {
                 format!("Apply {} appliance plans", plans.len())
             }
+        }
+
+        InstallationOperation::CreateAdministrator { user, .. } => {
+            format!(
+                "Create administrator account {} ({})",
+                user.username(),
+                user.display_name()
+            )
         }
 
         InstallationOperation::ConfigureFstab { .. } => "Configure filesystem table".to_owned(),

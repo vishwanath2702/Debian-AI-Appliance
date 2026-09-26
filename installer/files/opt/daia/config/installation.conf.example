@@ -41,7 +41,7 @@ DAIA_INSTALL_PROFILE="standard"
 # lxqt
 # none
 
-DAIA_DESKTOP="xfce"
+DAIA_DESKTOP="kde"
 
 ############################################################
 # Container Platform

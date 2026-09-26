@@ -32,3 +32,9 @@ OVMF_VARS.fd
 .vscode/
 .idea/
 .DS_Store
+
+# Generated analysis output
+/graphify-out/
+
+# DAIA build and investigation workspace
+/work/
