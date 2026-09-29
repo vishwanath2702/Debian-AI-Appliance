@@ -27,15 +27,21 @@ check() {
 # Verify extracted files
 #
 
-check "$EXTRACT_DIR/preseed.cfg"
+check "$EXTRACT_DIR/daia/opt/daia/runtime.sh"
 
-check "$EXTRACT_DIR/daia/opt/daia/install.sh"
+check "$EXTRACT_DIR/daia/opt/daia/firstboot.sh"
 
-check "$EXTRACT_DIR/daia/opt/daia/config/daia.conf"
+check "$EXTRACT_DIR/daia/etc/systemd/system/daia-firstboot.service"
+
+check "$EXTRACT_DIR/daia/opt/daia/BUILD-INFO"
+
+check "$EXTRACT_DIR/daia/opt/daia/config/pragna.conf"
 
 check "$EXTRACT_DIR/daia/opt/daia/lib/logging.sh"
 
 check "$EXTRACT_DIR/daia/opt/daia/lib/common.sh"
+
+check "$EXTRACT_DIR/daia/opt/daia/lib/validation.sh"
 
 if [[ $fail -eq 1 ]]; then
     echo

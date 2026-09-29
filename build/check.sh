@@ -48,24 +48,24 @@ echo "========================================"
 echo
 
 echo "Checking directories..."
-check_dir "$INSTALLER_DIR/files"
-check_dir "$INSTALLER_DIR/files/opt/daia"
-check_dir "$INSTALLER_DIR/files/opt/daia/config"
-check_dir "$INSTALLER_DIR/files/opt/daia/lib"
+check_dir "$PROJECT_ROOT/runtime"
+check_dir "$PROJECT_ROOT/runtime/config"
+check_dir "$PROJECT_ROOT/runtime/lib"
+check_dir "$PROJECT_ROOT/runtime/modules"
+check_dir "$PROJECT_ROOT/runtime/systemd"
 
 echo
 echo "Checking required files..."
-check_file "$INSTALLER_DIR/preseed.cfg"
+check_file "$PROJECT_ROOT/payload/config/pragna.conf"
 
-check_file "$INSTALLER_DIR/files/opt/daia/install.sh"
-check_file "$INSTALLER_DIR/files/opt/daia/VERSION"
+check_file "$PROJECT_ROOT/runtime/runtime.sh"
+check_file "$PROJECT_ROOT/runtime/firstboot.sh"
 
-check_file "$INSTALLER_DIR/files/opt/daia/config/daia.conf"
+check_file "$PROJECT_ROOT/runtime/lib/logging.sh"
+check_file "$PROJECT_ROOT/runtime/lib/common.sh"
+check_file "$PROJECT_ROOT/runtime/lib/validation.sh"
 
-check_file "$INSTALLER_DIR/files/opt/daia/lib/logging.sh"
-check_file "$INSTALLER_DIR/files/opt/daia/lib/common.sh"
-
-check_file "$INSTALLER_DIR/files/etc/systemd/system/daia-firstboot.service"
+check_file "$PROJECT_ROOT/runtime/systemd/daia-firstboot.service"
 
 echo
 echo "Checking build tools..."

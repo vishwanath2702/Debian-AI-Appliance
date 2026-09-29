@@ -33,7 +33,6 @@ docker_install() {
 
     if ! apt-get \
         --yes \
-        --no-download \
         --no-install-recommends \
         install \
         "${docker_packages[@]}"

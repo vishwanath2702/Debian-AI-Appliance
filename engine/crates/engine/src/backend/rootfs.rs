@@ -13,6 +13,7 @@ pub struct RootfsBackend {
     rootfs: PathBuf,
     asset_directory: PathBuf,
     package_repository: PackageRepository,
+    package_installer: AptInstaller,
 }
 
 impl RootfsBackend {
@@ -27,6 +28,22 @@ impl RootfsBackend {
             rootfs,
             asset_directory,
             package_repository,
+            package_installer: AptInstaller::new(),
+        }
+    }
+
+    /// Creates a root filesystem backend for an already-privileged process.
+    #[must_use]
+    pub const fn new_privileged(
+        rootfs: PathBuf,
+        asset_directory: PathBuf,
+        package_repository: PackageRepository,
+    ) -> Self {
+        Self {
+            rootfs,
+            asset_directory,
+            package_repository,
+            package_installer: AptInstaller::new_unprivileged(),
         }
     }
 }
@@ -38,7 +55,7 @@ impl BuildBackend for RootfsBackend {
         let runner = RootfsRunner::with_dependencies(
             self.rootfs.clone(),
             self.package_repository.clone(),
-            Box::new(AptInstaller::new()),
+            Box::new(self.package_installer.clone()),
             Box::new(FilesystemAssetStore::new(self.asset_directory.clone())),
         );
 

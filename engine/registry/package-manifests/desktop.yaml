@@ -8,5 +8,42 @@ packages:
   - initramfs-tools
   - xserver-xorg
   - task-kde-desktop
+
+  # Desktop essentials
+  - konsole
+  - dolphin
+  - kate
+  - firefox-esr
+  - spice-vdagent
+
+  # Command-line essentials
+  - nano
+  - vim
+  - less
+  - bash-completion
+  - file
+
+  # DAIA/runtime and transfer utilities
+  - zstd
+  - ca-certificates
+  - curl
+  - wget
+  - rsync
+  - openssh-client
+
+  # Archive utilities
+  - unzip
+  - zip
+  - p7zip-full
+
+  # Diagnostics
+  - git
+  - lsof
+  - htop
+  - pciutils
+  - usbutils
+
+  # Desktop integration and networking
+  - xdg-utils
   - network-manager
   - network-manager-gnome

@@ -1,13 +1,14 @@
 use model::{DiscoveredStorage, DiscoveredStorageId, InstallationIntent, Plan, UserConfiguration};
 
-use std::{io, path::PathBuf, process::Command};
-
-use crate::{
-    BootstrapConfig, BuildBackend, MmdebstrapBootstrapper, MmdebstrapError, RootfsBackend,
-    SystemContentImportFileSystem, SystemContentImportOperationExecutor,
+use std::{
+    io::{self, Write},
+    path::PathBuf,
+    process::{Command, Stdio},
 };
-use executor::{ExecuteError, RootfsRunError};
-use registry::PackageRepository;
+
+use crate::{SystemContentImportFileSystem, SystemContentImportOperationExecutor};
+
+const RUNTIME_PAYLOAD_DIRECTORY: &str = "/run/live/medium/daia";
 
 /// Role of a partition in an installed DAIA system.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -120,7 +121,8 @@ const REQUIRED_INSTALLATION_COMMANDS: &[&str] = &[
     "umount",
     "blkid",
     "sudo",
-    "mmdebstrap",
+    "unsquashfs",
+    "systemctl",
 ];
 
 fn installation_command_path_is_executable(path: &std::path::Path) -> bool {
@@ -293,14 +295,20 @@ pub enum InstallationOperation {
         partitions: Vec<InstallationPartition>,
         mounts: Vec<InstallationMount>,
     },
-    /// Bootstrap the base operating system.
-    BootstrapSystem {
+    /// Install the prepared DAIA system image into the target filesystem.
+    InstallSystemImage {
+        /// Target root filesystem receiving the installed system.
         root: PathBuf,
-        bootstrap: BootstrapConfig,
+
+        /// SquashFS image containing the prepared DAIA system.
+        image: PathBuf,
     },
 
-    /// Apply the appliance execution plans.
-    ApplyPlans { plans: Vec<Plan> },
+    /// Remove live-environment configuration from the installed system.
+    NormalizeInstalledSystem {
+        /// Target root filesystem containing the installed system.
+        root: PathBuf,
+    },
 
     /// Create the configured human administrator in the installed system.
     CreateAdministrator {
@@ -385,6 +393,8 @@ fn copy_directory_contents(
 pub trait InstallationCommandRunner {
     fn status(&mut self, command: &mut Command) -> io::Result<()>;
 
+    fn status_with_input(&mut self, command: &mut Command, input: &[u8]) -> io::Result<()>;
+
     fn output(&mut self, command: &mut Command) -> io::Result<Vec<u8>>;
 }
 /// Writes files into the installed system.
@@ -418,6 +428,28 @@ impl InstallationCommandRunner for ProcessInstallationCommandRunner {
         }
     }
 
+    fn status_with_input(&mut self, command: &mut Command, input: &[u8]) -> io::Result<()> {
+        command.stdin(Stdio::piped());
+
+        let mut child = command.spawn()?;
+
+        child
+            .stdin
+            .take()
+            .ok_or_else(|| io::Error::other("installation command stdin is unavailable"))?
+            .write_all(input)?;
+
+        let status = child.wait()?;
+
+        if status.success() {
+            Ok(())
+        } else {
+            Err(io::Error::other(format!(
+                "installation command exited unsuccessfully: {status}"
+            )))
+        }
+    }
+
     fn output(&mut self, command: &mut Command) -> io::Result<Vec<u8>> {
         let output = command.output()?;
 
@@ -432,32 +464,28 @@ impl InstallationCommandRunner for ProcessInstallationCommandRunner {
     }
 }
 
-pub struct SystemInstallationOperationExecutor<R, B, P, W = SystemInstallationFileWriter> {
+pub struct SystemInstallationOperationExecutor<R, W = SystemInstallationFileWriter> {
     runner: R,
-    bootstrapper: B,
-    plan_executor: P,
     file_writer: W,
     target_root: PathBuf,
     runtime_payload_directory: PathBuf,
     imported_content: Vec<model::ImportedContentItem>,
+    administrator_password: String,
 }
 
 #[cfg(test)]
-impl<R, B, P> SystemInstallationOperationExecutor<R, B, P, SystemInstallationFileWriter>
+impl<R> SystemInstallationOperationExecutor<R, SystemInstallationFileWriter>
 where
     R: InstallationCommandRunner,
-    B: InstallationBootstrapper,
-    P: InstallationPlanExecutor,
 {
-    fn with_dependencies(runner: R, bootstrapper: B, plan_executor: P) -> Self {
+    fn with_dependencies(runner: R) -> Self {
         Self {
             runner,
-            bootstrapper,
-            plan_executor,
             file_writer: SystemInstallationFileWriter,
             target_root: PathBuf::from("/target"),
-            runtime_payload_directory: PathBuf::from("/cdrom/daia"),
+            runtime_payload_directory: PathBuf::from(RUNTIME_PAYLOAD_DIRECTORY),
             imported_content: Vec::new(),
+            administrator_password: String::new(),
         }
     }
     fn with_target_root(mut self, target_root: PathBuf) -> Self {
@@ -469,9 +497,14 @@ where
         self.runtime_payload_directory = runtime_payload_directory;
         self
     }
+
+    fn with_administrator_password(mut self, administrator_password: impl Into<String>) -> Self {
+        self.administrator_password = administrator_password.into();
+        self
+    }
 }
 
-impl<R, B, P, W> SystemInstallationOperationExecutor<R, B, P, W> {
+impl<R, W> SystemInstallationOperationExecutor<R, W> {
     /// Returns content realized during successful installation operations.
     #[must_use]
     pub fn imported_content(&self) -> &[model::ImportedContentItem] {
@@ -480,22 +513,19 @@ impl<R, B, P, W> SystemInstallationOperationExecutor<R, B, P, W> {
 }
 
 #[cfg(test)]
-impl<R, B, P, W> SystemInstallationOperationExecutor<R, B, P, W>
+impl<R, W> SystemInstallationOperationExecutor<R, W>
 where
     R: InstallationCommandRunner,
-    B: InstallationBootstrapper,
-    P: InstallationPlanExecutor,
     W: InstallationFileWriter,
 {
-    fn with_all_dependencies(runner: R, bootstrapper: B, plan_executor: P, file_writer: W) -> Self {
+    fn with_all_dependencies(runner: R, file_writer: W) -> Self {
         Self {
             runner,
-            bootstrapper,
-            plan_executor,
             file_writer,
             target_root: PathBuf::from("/target"),
-            runtime_payload_directory: PathBuf::from("/cdrom/daia"),
+            runtime_payload_directory: PathBuf::from(RUNTIME_PAYLOAD_DIRECTORY),
             imported_content: Vec::new(),
+            administrator_password: String::new(),
         }
     }
 }
@@ -503,35 +533,26 @@ where
 impl
     SystemInstallationOperationExecutor<
         ProcessInstallationCommandRunner,
-        MmdebstrapBootstrapper,
-        RootfsInstallationPlanExecutor,
         SystemInstallationFileWriter,
     >
 {
     /// Creates a production installation executor.
     #[must_use]
-    pub fn new(asset_directory: PathBuf, package_repository: PackageRepository) -> Self {
+    pub fn new(administrator_password: String) -> Self {
         Self {
             runner: ProcessInstallationCommandRunner,
-            bootstrapper: MmdebstrapBootstrapper::new(),
-            plan_executor: RootfsInstallationPlanExecutor::new(
-                PathBuf::from("/target"),
-                asset_directory,
-                package_repository,
-            ),
             file_writer: SystemInstallationFileWriter,
             target_root: PathBuf::from("/target"),
-            runtime_payload_directory: PathBuf::from("/cdrom/daia"),
+            runtime_payload_directory: PathBuf::from(RUNTIME_PAYLOAD_DIRECTORY),
             imported_content: Vec::new(),
+            administrator_password,
         }
     }
 }
 
-impl<R, B, P, W> InstallationOperationExecutor for SystemInstallationOperationExecutor<R, B, P, W>
+impl<R, W> InstallationOperationExecutor for SystemInstallationOperationExecutor<R, W>
 where
     R: InstallationCommandRunner,
-    B: InstallationBootstrapper,
-    P: InstallationPlanExecutor,
     W: InstallationFileWriter,
 {
     type Error = io::Error;
@@ -589,7 +610,11 @@ where
                     .arg("primary")
                     .arg(root_partition.filesystem())
                     .arg(format!("{root_start_mib}MiB"))
-                    .arg("100%");
+                    .arg("100%")
+                    .arg("set")
+                    .arg("1")
+                    .arg("esp")
+                    .arg("on");
 
                 self.runner.status(&mut command)
             }
@@ -705,10 +730,45 @@ where
 
                 Ok(())
             }
-            InstallationOperation::BootstrapSystem { root, bootstrap } => self
-                .bootstrapper
-                .bootstrap(root, bootstrap)
-                .map_err(|_| io::Error::other("installation bootstrap failed")),
+            InstallationOperation::InstallSystemImage { root, image } => {
+                let mut command = Command::new("unsquashfs");
+
+                command.arg("-f").arg("-d").arg(root).arg(image);
+
+                self.runner.status(&mut command)
+            }
+            InstallationOperation::NormalizeInstalledSystem { root } => {
+                let root_argument = format!("--root={}", root.display());
+
+                let mut command = Command::new("systemctl");
+                command
+                    .arg(&root_argument)
+                    .arg("disable")
+                    .arg("daia-installer.service");
+                self.runner.status(&mut command)?;
+
+                let installer_service = root.join("etc/systemd/system/daia-installer.service");
+
+                match std::fs::symlink_metadata(&installer_service) {
+                    Ok(_) => std::fs::remove_file(&installer_service)?,
+                    Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+                    Err(error) => return Err(error),
+                }
+
+                let mut command = Command::new("systemctl");
+                command
+                    .arg(&root_argument)
+                    .arg("set-default")
+                    .arg("graphical.target");
+                self.runner.status(&mut command)?;
+
+                let mut command = Command::new("systemctl");
+                command
+                    .arg(&root_argument)
+                    .arg("enable")
+                    .arg("getty@tty1.service");
+                self.runner.status(&mut command)
+            }
             InstallationOperation::CreateAdministrator { root, user } => {
                 let mut command = Command::new("chroot");
 
@@ -717,6 +777,8 @@ where
                     .arg("useradd")
                     .arg("--create-home")
                     .arg("--user-group")
+                    .arg("--groups")
+                    .arg("sudo")
                     .arg("--shell")
                     .arg("/bin/bash")
                     .arg("--comment")
@@ -725,12 +787,18 @@ where
 
                 self.runner.status(&mut command)?;
 
+                let mut password_command = Command::new("chroot");
+
+                password_command.arg(root).arg("chpasswd");
+
+                let password_input =
+                    format!("{}:{}\n", user.username(), self.administrator_password);
+
+                self.runner
+                    .status_with_input(&mut password_command, password_input.as_bytes())?;
+
                 Ok(())
             }
-            InstallationOperation::ApplyPlans { plans } => self
-                .plan_executor
-                .apply_plans(plans)
-                .map_err(|_| io::Error::other("installation plan execution failed")),
             InstallationOperation::ConfigureFstab {
                 device_path,
                 partitions,
@@ -802,7 +870,7 @@ where
                 self.runner.status(&mut mkdir)?;
 
                 let mut mount = Command::new("mount");
-                mount.arg("--rbind").arg("/dev").arg(&target_dev);
+                mount.arg("--bind").arg("/dev").arg(&target_dev);
 
                 self.runner.status(&mut mount)?;
 
@@ -825,7 +893,7 @@ where
                 self.runner.status(&mut mkdir)?;
 
                 let mut mount = Command::new("mount");
-                mount.arg("--rbind").arg("/sys").arg(&target_sys);
+                mount.arg("--bind").arg("/sys").arg(&target_sys);
 
                 self.runner.status(&mut mount)?;
                 let target_run = root.join("run");
@@ -836,7 +904,7 @@ where
                 self.runner.status(&mut mkdir)?;
 
                 let mut mount = Command::new("mount");
-                mount.arg("--rbind").arg("/run").arg(&target_run);
+                mount.arg("--bind").arg("/run").arg(&target_run);
 
                 self.runner.status(&mut mount)
             }
@@ -848,6 +916,7 @@ where
                         "--target=x86_64-efi",
                         "--efi-directory=/boot/efi",
                         "--bootloader-id=DAIA",
+                        "--removable",
                     ],
                 );
 
@@ -922,11 +991,9 @@ where
     }
 }
 
-impl<R, B, P, W> InstallationExecutor for SystemInstallationOperationExecutor<R, B, P, W>
+impl<R, W> InstallationExecutor for SystemInstallationOperationExecutor<R, W>
 where
     R: InstallationCommandRunner,
-    B: InstallationBootstrapper,
-    P: InstallationPlanExecutor,
     W: InstallationFileWriter,
 {
     type Error = io::Error;
@@ -1006,7 +1073,7 @@ pub struct PreparedInstallation {
     intent: InstallationIntent,
     storage: DiscoveredStorage,
     plans: Vec<Plan>,
-    bootstrap: BootstrapConfig,
+    system_image: PathBuf,
 }
 
 impl PreparedInstallation {
@@ -1016,13 +1083,13 @@ impl PreparedInstallation {
         intent: InstallationIntent,
         storage: DiscoveredStorage,
         plans: Vec<Plan>,
-        bootstrap: BootstrapConfig,
+        system_image: PathBuf,
     ) -> Self {
         Self {
             intent,
             storage,
             plans,
-            bootstrap,
+            system_image,
         }
     }
     /// Builds the ordered installation-operation plan.
@@ -1046,16 +1113,16 @@ impl PreparedInstallation {
                 partitions: default_installation_partitions(),
                 mounts: default_installation_mounts(),
             },
-            InstallationOperation::BootstrapSystem {
+            InstallationOperation::InstallSystemImage {
                 root: "/target".into(),
-                bootstrap: self.bootstrap.clone(),
+                image: self.system_image.clone(),
+            },
+            InstallationOperation::NormalizeInstalledSystem {
+                root: "/target".into(),
             },
             InstallationOperation::CreateAdministrator {
                 root: "/target".into(),
                 user: self.intent.user().clone(),
-            },
-            InstallationOperation::ApplyPlans {
-                plans: self.plans.clone(),
             },
             InstallationOperation::ConfigureFstab {
                 device_path: self.storage.device_path().to_path_buf(),
@@ -1101,10 +1168,10 @@ impl PreparedInstallation {
     pub fn plans(&self) -> &[Plan] {
         &self.plans
     }
-    /// Returns the root filesystem bootstrap configuration.
+    /// Returns the prepared DAIA system image used for installation.
     #[must_use]
-    pub const fn bootstrap(&self) -> &BootstrapConfig {
-        &self.bootstrap
+    pub const fn system_image(&self) -> &PathBuf {
+        &self.system_image
     }
     /// Returns a human-readable dry-run summary.
     #[must_use]
@@ -1229,89 +1296,20 @@ impl InstallationOperationExecutor for DryRunInstallationExecutor {
     }
 }
 
-/// Executes the root filesystem bootstrap stage of an installation.
-pub trait InstallationBootstrapper {
-    /// Error produced while bootstrapping.
-    type Error;
-
-    /// Bootstraps the target root filesystem.
-    fn bootstrap(
-        &self,
-        root: &std::path::Path,
-        config: &BootstrapConfig,
-    ) -> Result<(), Self::Error>;
-}
-
-impl InstallationBootstrapper for MmdebstrapBootstrapper {
-    type Error = MmdebstrapError;
-
-    fn bootstrap(
-        &self,
-        root: &std::path::Path,
-        config: &BootstrapConfig,
-    ) -> Result<(), Self::Error> {
-        self.bootstrap_root(root, config)
-    }
-}
-
-/// Executes appliance plans against an installation root.
-pub trait InstallationPlanExecutor {
-    /// Error produced while applying plans.
-    type Error;
-
-    /// Applies the supplied appliance plans.
-    fn apply_plans(&mut self, plans: &[Plan]) -> Result<(), Self::Error>;
-}
-
-/// Applies installation plans to the mounted target root filesystem.
-pub struct RootfsInstallationPlanExecutor {
-    backend: RootfsBackend,
-}
-
-impl RootfsInstallationPlanExecutor {
-    /// Creates a plan executor for an installed root filesystem.
-    #[must_use]
-    pub const fn new(
-        rootfs: PathBuf,
-        asset_directory: PathBuf,
-        package_repository: PackageRepository,
-    ) -> Self {
-        Self {
-            backend: RootfsBackend::new(rootfs, asset_directory, package_repository),
-        }
-    }
-}
-
-impl InstallationPlanExecutor for RootfsInstallationPlanExecutor {
-    type Error = ExecuteError<RootfsRunError>;
-
-    fn apply_plans(&mut self, plans: &[Plan]) -> Result<(), Self::Error> {
-        for plan in plans {
-            self.backend.build(plan)?;
-        }
-
-        Ok(())
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::{
-        BootstrapConfig, InstallationBootstrapper, InstallationCommandRunner, InstallationExecutor,
-        InstallationFileWriter, InstallationMount, InstallationOperation,
-        InstallationOperationExecutor, InstallationPartition, InstallationPartitionRole,
-        InstallationPlan, InstallationPlanExecutor, PathBuf, PreparedInstallation,
+        InstallationCommandRunner, InstallationExecutor, InstallationFileWriter, InstallationMount,
+        InstallationOperation, InstallationOperationExecutor, InstallationPartition,
+        InstallationPartitionRole, InstallationPlan, PathBuf, PreparedInstallation,
         ProcessInstallationCommandRunner, REQUIRED_INSTALLATION_COMMANDS,
-        SystemInstallationOperationExecutor, command_in_root, default_installation_mounts,
-        default_installation_partitions, filesystem_uuid, installation_command_exists,
-        installation_command_exists_in_path, installation_command_path_is_executable,
-        installation_fstab, installed_mount_point, partition_device_path,
-        validate_installation_commands,
+        RUNTIME_PAYLOAD_DIRECTORY, SystemInstallationOperationExecutor, command_in_root,
+        default_installation_mounts, default_installation_partitions, filesystem_uuid,
+        installation_command_exists, installation_command_exists_in_path,
+        installation_command_path_is_executable, installation_fstab, installed_mount_point,
+        partition_device_path, validate_installation_commands,
     };
-    use model::{
-        Capability, DiscoveredStorage, DiscoveredStorageId, InstallationIntent, Plan, ProviderId,
-        StorageKind,
-    };
+    use model::{DiscoveredStorage, DiscoveredStorageId, InstallationIntent, StorageKind};
 
     use std::{io, process::Command};
 
@@ -1329,12 +1327,17 @@ mod tests {
     #[derive(Default)]
     struct RecordingCommandRunner {
         commands: Vec<Vec<String>>,
+        inputs: Vec<Vec<u8>>,
         outputs: Vec<Vec<u8>>,
     }
     struct FailingCommandRunner;
 
     impl InstallationCommandRunner for FailingCommandRunner {
         fn status(&mut self, _command: &mut Command) -> io::Result<()> {
+            Err(io::Error::other("command failed"))
+        }
+
+        fn status_with_input(&mut self, _command: &mut Command, _input: &[u8]) -> io::Result<()> {
             Err(io::Error::other("command failed"))
         }
 
@@ -1357,6 +1360,22 @@ mod tests {
 
             Ok(())
         }
+
+        fn status_with_input(&mut self, command: &mut Command, input: &[u8]) -> io::Result<()> {
+            let mut recorded = vec![command.get_program().to_string_lossy().into_owned()];
+
+            recorded.extend(
+                command
+                    .get_args()
+                    .map(|arg| arg.to_string_lossy().into_owned()),
+            );
+
+            self.commands.push(recorded);
+            self.inputs.push(input.to_vec());
+
+            Ok(())
+        }
+
         fn output(&mut self, command: &mut Command) -> io::Result<Vec<u8>> {
             let mut recorded = vec![command.get_program().to_string_lossy().into_owned()];
 
@@ -1376,69 +1395,11 @@ mod tests {
         }
     }
 
-    #[derive(Default)]
-    struct RecordingInstallationBootstrapper {
-        calls: std::sync::Mutex<Vec<(PathBuf, BootstrapConfig)>>,
-    }
-
-    impl InstallationBootstrapper for RecordingInstallationBootstrapper {
-        type Error = std::convert::Infallible;
-
-        fn bootstrap(
-            &self,
-            root: &std::path::Path,
-            config: &BootstrapConfig,
-        ) -> Result<(), Self::Error> {
-            self.calls
-                .lock()
-                .expect("recording bootstrap calls should not be poisoned")
-                .push((root.to_path_buf(), config.clone()));
-
-            Ok(())
-        }
-    }
-    struct FailingInstallationBootstrapper;
-
-    impl InstallationBootstrapper for FailingInstallationBootstrapper {
-        type Error = io::Error;
-
-        fn bootstrap(
-            &self,
-            _root: &std::path::Path,
-            _config: &BootstrapConfig,
-        ) -> Result<(), Self::Error> {
-            Err(io::Error::other("bootstrap failed"))
-        }
-    }
-
-    #[derive(Default)]
-    struct RecordingInstallationPlanExecutor {
-        plans: Vec<Plan>,
-    }
-
-    struct FailingInstallationPlanExecutor;
-
-    impl InstallationPlanExecutor for FailingInstallationPlanExecutor {
-        type Error = io::Error;
-
-        fn apply_plans(&mut self, _plans: &[Plan]) -> Result<(), Self::Error> {
-            Err(io::Error::other("plan execution failed"))
-        }
-    }
-
-    impl InstallationPlanExecutor for RecordingInstallationPlanExecutor {
-        type Error = std::convert::Infallible;
-
-        fn apply_plans(&mut self, plans: &[Plan]) -> Result<(), Self::Error> {
-            self.plans.extend_from_slice(plans);
-            Ok(())
-        }
-    }
-
     impl RecordingCommandRunner {
         fn with_outputs(outputs: Vec<Vec<u8>>) -> Self {
             Self {
                 commands: Vec::new(),
+                inputs: Vec::new(),
                 outputs,
             }
         }
@@ -1468,6 +1429,10 @@ mod tests {
             }
         }
 
+        fn status_with_input(&mut self, command: &mut Command, _input: &[u8]) -> io::Result<()> {
+            self.status(command)
+        }
+
         fn output(&mut self, _command: &mut Command) -> io::Result<Vec<u8>> {
             Err(io::Error::other("unexpected command output request"))
         }
@@ -1492,8 +1457,6 @@ mod tests {
 
         let mut executor = SystemInstallationOperationExecutor::with_dependencies(
             RecordingCommandRunner::default(),
-            RecordingInstallationBootstrapper::default(),
-            RecordingInstallationPlanExecutor::default(),
         )
         .with_target_root(target_root);
 
@@ -1520,6 +1483,110 @@ mod tests {
     }
 
     #[test]
+    fn runtime_payload_directory_uses_live_boot_medium() {
+        assert_eq!(RUNTIME_PAYLOAD_DIRECTORY, "/run/live/medium/daia");
+    }
+
+    #[test]
+    fn system_executor_installs_prepared_system_image() {
+        let runner = RecordingCommandRunner::default();
+        let mut executor = SystemInstallationOperationExecutor::with_dependencies(runner);
+
+        executor
+            .execute_operation(&InstallationOperation::InstallSystemImage {
+                root: PathBuf::from("/target"),
+                image: PathBuf::from("/run/live/medium/live/filesystem.squashfs"),
+            })
+            .expect("prepared system image should be installed");
+
+        assert_eq!(
+            executor.runner.commands,
+            vec![vec![
+                "unsquashfs".to_owned(),
+                "-f".to_owned(),
+                "-d".to_owned(),
+                "/target".to_owned(),
+                "/run/live/medium/live/filesystem.squashfs".to_owned(),
+            ]]
+        );
+    }
+
+    #[test]
+    fn system_executor_normalizes_installed_system() {
+        let temporary_directory =
+            tempfile::tempdir().expect("temporary directory should be created");
+        let target_root = temporary_directory.path().join("target");
+        let systemd_directory = target_root.join("etc/systemd/system");
+
+        std::fs::create_dir_all(&systemd_directory).expect("systemd directory should be created");
+
+        let installer_service = systemd_directory.join("daia-installer.service");
+        std::fs::write(&installer_service, b"live installer service")
+            .expect("live installer service should be written");
+
+        let runner = RecordingCommandRunner::default();
+        let mut executor = SystemInstallationOperationExecutor::with_dependencies(runner);
+
+        executor
+            .execute_operation(&InstallationOperation::NormalizeInstalledSystem {
+                root: target_root.clone(),
+            })
+            .expect("installed system should be normalized");
+
+        assert!(
+            !installer_service.exists(),
+            "live installer service must be removed from the installed system"
+        );
+
+        let root_argument = format!("--root={}", target_root.display());
+
+        assert_eq!(
+            executor.runner.commands,
+            vec![
+                vec![
+                    "systemctl".to_owned(),
+                    root_argument.clone(),
+                    "disable".to_owned(),
+                    "daia-installer.service".to_owned(),
+                ],
+                vec![
+                    "systemctl".to_owned(),
+                    root_argument.clone(),
+                    "set-default".to_owned(),
+                    "graphical.target".to_owned(),
+                ],
+                vec![
+                    "systemctl".to_owned(),
+                    root_argument,
+                    "enable".to_owned(),
+                    "getty@tty1.service".to_owned(),
+                ],
+            ]
+        );
+    }
+
+    #[test]
+    fn system_executor_normalizes_installed_system_when_live_service_is_absent() {
+        let temporary_directory =
+            tempfile::tempdir().expect("temporary directory should be created");
+        let target_root = temporary_directory.path().join("target");
+
+        std::fs::create_dir_all(target_root.join("etc/systemd/system"))
+            .expect("systemd directory should be created");
+
+        let runner = RecordingCommandRunner::default();
+        let mut executor = SystemInstallationOperationExecutor::with_dependencies(runner);
+
+        executor
+            .execute_operation(&InstallationOperation::NormalizeInstalledSystem {
+                root: target_root,
+            })
+            .expect("normalization should tolerate an absent live installer service");
+
+        assert_eq!(executor.runner.commands.len(), 3);
+    }
+
+    #[test]
     fn system_executor_deploys_runtime_file_under_target_root() {
         let temporary_directory =
             tempfile::tempdir().expect("temporary directory should be created");
@@ -1539,8 +1606,6 @@ mod tests {
 
         let mut executor = SystemInstallationOperationExecutor::with_dependencies(
             RecordingCommandRunner::default(),
-            RecordingInstallationBootstrapper::default(),
-            RecordingInstallationPlanExecutor::default(),
         )
         .with_runtime_payload_directory(runtime_payload_directory);
 
@@ -1578,8 +1643,6 @@ mod tests {
 
         let mut executor = SystemInstallationOperationExecutor::with_dependencies(
             RecordingCommandRunner::default(),
-            RecordingInstallationBootstrapper::default(),
-            RecordingInstallationPlanExecutor::default(),
         )
         .with_runtime_payload_directory(runtime_payload_directory);
 
@@ -1623,8 +1686,6 @@ mod tests {
 
         let mut executor = SystemInstallationOperationExecutor::with_dependencies(
             RecordingCommandRunner::default(),
-            RecordingInstallationBootstrapper::default(),
-            RecordingInstallationPlanExecutor::default(),
         )
         .with_runtime_payload_directory(runtime_payload_directory);
 
@@ -1653,8 +1714,6 @@ mod tests {
 
         let mut executor = SystemInstallationOperationExecutor::with_dependencies(
             RecordingCommandRunner::default(),
-            RecordingInstallationBootstrapper::default(),
-            RecordingInstallationPlanExecutor::default(),
         )
         .with_runtime_payload_directory(runtime_payload_directory);
 
@@ -1663,6 +1722,54 @@ mod tests {
             .expect_err("missing runtime payload should fail deployment");
 
         assert_eq!(error.kind(), io::ErrorKind::NotFound);
+    }
+
+    #[test]
+    fn system_executor_sets_administrator_password_through_stdin() {
+        let mut executor = SystemInstallationOperationExecutor::with_dependencies(
+            RecordingCommandRunner::default(),
+        )
+        .with_administrator_password("secret-password");
+
+        executor
+            .execute_operation(&InstallationOperation::CreateAdministrator {
+                root: "/target".into(),
+                user: model::UserConfiguration::new("admin", "DAIA Administrator"),
+            })
+            .expect("administrator creation should succeed");
+
+        assert_eq!(
+            executor.runner.commands,
+            vec![
+                vec![
+                    "chroot",
+                    "/target",
+                    "useradd",
+                    "--create-home",
+                    "--user-group",
+                    "--groups",
+                    "sudo",
+                    "--shell",
+                    "/bin/bash",
+                    "--comment",
+                    "DAIA Administrator",
+                    "admin",
+                ],
+                vec!["chroot", "/target", "chpasswd"],
+            ]
+        );
+        assert_eq!(
+            executor.runner.inputs,
+            vec![b"admin:secret-password\n".to_vec()]
+        );
+        assert!(
+            executor
+                .runner
+                .commands
+                .iter()
+                .flatten()
+                .all(|argument| !argument.contains("secret-password"))
+        );
     }
 
     #[cfg(unix)]
@@ -1675,8 +1782,6 @@ mod tests {
 
         let mut executor = SystemInstallationOperationExecutor::with_dependencies(
             RecordingCommandRunner::default(),
-            RecordingInstallationBootstrapper::default(),
-            RecordingInstallationPlanExecutor::default(),
         );
 
         executor
@@ -1704,8 +1809,6 @@ mod tests {
 
         let mut executor = SystemInstallationOperationExecutor::with_dependencies(
             RecordingCommandRunner::default(),
-            RecordingInstallationBootstrapper::default(),
-            RecordingInstallationPlanExecutor::default(),
         );
 
         let operation = InstallationOperation::EnableFirstBoot {
@@ -1750,8 +1853,6 @@ mod tests {
 
         let mut executor = SystemInstallationOperationExecutor::with_dependencies(
             RecordingCommandRunner::default(),
-            RecordingInstallationBootstrapper::default(),
-            RecordingInstallationPlanExecutor::default(),
         )
         .with_target_root(target_root.clone());
 
@@ -1781,14 +1882,15 @@ mod tests {
 
         let storage = DiscoveredStorage::new("serial:usb-disk", StorageKind::Removable, "/dev/sdb");
 
-        let prepared =
-            PreparedInstallation::new(intent, storage, Vec::new(), BootstrapConfig::default());
-
-        let mut executor = SystemInstallationOperationExecutor::with_dependencies(
-            FailingCommandRunner,
-            RecordingInstallationBootstrapper::default(),
-            RecordingInstallationPlanExecutor::default(),
+        let prepared = PreparedInstallation::new(
+            intent,
+            storage,
+            Vec::new(),
+            PathBuf::from("/run/live/medium/live/filesystem.squashfs"),
         );
+
+        let mut executor =
+            SystemInstallationOperationExecutor::with_dependencies(FailingCommandRunner);
 
         let error = InstallationExecutor::execute(&mut executor, &prepared)
             .expect_err("system installation should report command failure");
@@ -1823,14 +1925,11 @@ mod tests {
 
     #[test]
     fn installation_plan_unmounts_filesystems_after_mount_failure() {
-        let mut executor = SystemInstallationOperationExecutor::with_dependencies(
-            FailingAtCommandRunner {
+        let mut executor =
+            SystemInstallationOperationExecutor::with_dependencies(FailingAtCommandRunner {
                 commands: Vec::new(),
                 fail_at: 3,
-            },
-            RecordingInstallationBootstrapper::default(),
-            RecordingInstallationPlanExecutor::default(),
-        );
+            });
 
         let plan = InstallationPlan::new(vec![
             InstallationOperation::MountFilesystems {
@@ -1873,8 +1972,6 @@ mod tests {
     fn system_executor_unmounts_installation_filesystems() {
         let mut executor = SystemInstallationOperationExecutor::with_dependencies(
             RecordingCommandRunner::default(),
-            RecordingInstallationBootstrapper::default(),
-            RecordingInstallationPlanExecutor::default(),
         );
 
         let operation = InstallationOperation::UnmountFilesystems {
@@ -1895,14 +1992,11 @@ mod tests {
     }
     #[test]
     fn system_executor_continues_filesystem_unmount_after_command_failure() {
-        let mut executor = SystemInstallationOperationExecutor::with_dependencies(
-            FailingAtCommandRunner {
+        let mut executor =
+            SystemInstallationOperationExecutor::with_dependencies(FailingAtCommandRunner {
                 commands: Vec::new(),
                 fail_at: 1,
-            },
-            RecordingInstallationBootstrapper::default(),
-            RecordingInstallationPlanExecutor::default(),
-        );
+            });
 
         let operation = InstallationOperation::UnmountFilesystems {
             mounts: default_installation_mounts(),
@@ -1927,8 +2021,6 @@ mod tests {
     fn system_executor_cleans_up_target_run_runtime_mount() {
         let mut executor = SystemInstallationOperationExecutor::with_dependencies(
             RecordingCommandRunner::default(),
-            RecordingInstallationBootstrapper::default(),
-            RecordingInstallationPlanExecutor::default(),
         );
 
         let operation = InstallationOperation::CleanupTargetRuntime {
@@ -1967,14 +2059,11 @@ mod tests {
     }
     #[test]
     fn installation_plan_cleans_up_after_target_runtime_preparation_failure() {
-        let mut executor = SystemInstallationOperationExecutor::with_dependencies(
-            FailingAtCommandRunner {
+        let mut executor =
+            SystemInstallationOperationExecutor::with_dependencies(FailingAtCommandRunner {
                 commands: Vec::new(),
                 fail_at: 5,
-            },
-            RecordingInstallationBootstrapper::default(),
-            RecordingInstallationPlanExecutor::default(),
-        );
+            });
 
         let plan = InstallationPlan::new(vec![
             InstallationOperation::PrepareTargetRuntime {
@@ -2001,7 +2090,7 @@ mod tests {
                 ],
                 vec![
                     "mount".to_owned(),
-                    "--rbind".to_owned(),
+                    "--bind".to_owned(),
                     "/dev".to_owned(),
                     "/target/dev".to_owned(),
                 ],
@@ -2048,14 +2137,11 @@ mod tests {
 
     #[test]
     fn system_executor_continues_target_runtime_cleanup_after_command_failure() {
-        let mut executor = SystemInstallationOperationExecutor::with_dependencies(
-            FailingAtCommandRunner {
+        let mut executor =
+            SystemInstallationOperationExecutor::with_dependencies(FailingAtCommandRunner {
                 commands: Vec::new(),
                 fail_at: 1,
-            },
-            RecordingInstallationBootstrapper::default(),
-            RecordingInstallationPlanExecutor::default(),
-        );
+            });
 
         let operation = InstallationOperation::CleanupTargetRuntime {
             root: "/target".into(),
@@ -2098,8 +2184,6 @@ mod tests {
     fn system_executor_prepares_target_runtime_mounts() {
         let mut executor = SystemInstallationOperationExecutor::with_dependencies(
             RecordingCommandRunner::default(),
-            RecordingInstallationBootstrapper::default(),
-            RecordingInstallationPlanExecutor::default(),
         );
 
         let operation = InstallationOperation::PrepareTargetRuntime {
@@ -2120,7 +2204,7 @@ mod tests {
                 ],
                 vec![
                     "mount".to_owned(),
-                    "--rbind".to_owned(),
+                    "--bind".to_owned(),
                     "/dev".to_owned(),
                     "/target/dev".to_owned(),
                 ],
@@ -2143,7 +2227,7 @@ mod tests {
                 ],
                 vec![
                     "mount".to_owned(),
-                    "--rbind".to_owned(),
+                    "--bind".to_owned(),
                     "/sys".to_owned(),
                     "/target/sys".to_owned(),
                 ],
@@ -2154,7 +2238,7 @@ mod tests {
                 ],
                 vec![
                     "mount".to_owned(),
-                    "--rbind".to_owned(),
+                    "--bind".to_owned(),
                     "/run".to_owned(),
                     "/target/run".to_owned(),
                 ],
@@ -2164,14 +2248,11 @@ mod tests {
 
     #[test]
     fn installation_plan_cleans_up_after_bootloader_failure() {
-        let mut executor = SystemInstallationOperationExecutor::with_dependencies(
-            FailingAtCommandRunner {
+        let mut executor =
+            SystemInstallationOperationExecutor::with_dependencies(FailingAtCommandRunner {
                 commands: Vec::new(),
                 fail_at: 1,
-            },
-            RecordingInstallationBootstrapper::default(),
-            RecordingInstallationPlanExecutor::default(),
-        );
+            });
 
         let plan = InstallationPlan::new(vec![
             InstallationOperation::InstallBootloader {
@@ -2203,6 +2284,7 @@ mod tests {
                     "--target=x86_64-efi".to_owned(),
                     "--efi-directory=/boot/efi".to_owned(),
                     "--bootloader-id=DAIA".to_owned(),
+                    "--removable".to_owned(),
                 ],
                 vec![
                     "umount".to_owned(),
@@ -2232,14 +2314,11 @@ mod tests {
 
     #[test]
     fn system_executor_stops_bootloader_installation_when_grub_install_fails() {
-        let mut executor = SystemInstallationOperationExecutor::with_dependencies(
-            FailingAtCommandRunner {
+        let mut executor =
+            SystemInstallationOperationExecutor::with_dependencies(FailingAtCommandRunner {
                 commands: Vec::new(),
                 fail_at: 1,
-            },
-            RecordingInstallationBootstrapper::default(),
-            RecordingInstallationPlanExecutor::default(),
-        );
+            });
 
         let operation = InstallationOperation::InstallBootloader {
             root: "/target".into(),
@@ -2260,20 +2339,18 @@ mod tests {
                 "--target=x86_64-efi".to_owned(),
                 "--efi-directory=/boot/efi".to_owned(),
                 "--bootloader-id=DAIA".to_owned(),
+                "--removable".to_owned(),
             ]]
         );
     }
 
     #[test]
     fn system_executor_returns_update_grub_failure() {
-        let mut executor = SystemInstallationOperationExecutor::with_dependencies(
-            FailingAtCommandRunner {
+        let mut executor =
+            SystemInstallationOperationExecutor::with_dependencies(FailingAtCommandRunner {
                 commands: Vec::new(),
                 fail_at: 2,
-            },
-            RecordingInstallationBootstrapper::default(),
-            RecordingInstallationPlanExecutor::default(),
-        );
+            });
 
         let operation = InstallationOperation::InstallBootloader {
             root: "/target".into(),
@@ -2297,6 +2374,7 @@ mod tests {
                     "--target=x86_64-efi".to_owned(),
                     "--efi-directory=/boot/efi".to_owned(),
                     "--bootloader-id=DAIA".to_owned(),
+                    "--removable".to_owned(),
                 ],
                 vec![
                     "sudo".to_owned(),
@@ -2312,8 +2390,6 @@ mod tests {
     fn system_executor_runs_grub_install_in_target_root() {
         let mut executor = SystemInstallationOperationExecutor::with_dependencies(
             RecordingCommandRunner::default(),
-            RecordingInstallationBootstrapper::default(),
-            RecordingInstallationPlanExecutor::default(),
         );
 
         let operation = InstallationOperation::InstallBootloader {
@@ -2336,6 +2412,7 @@ mod tests {
                     "--target=x86_64-efi".to_owned(),
                     "--efi-directory=/boot/efi".to_owned(),
                     "--bootloader-id=DAIA".to_owned(),
+                    "--removable".to_owned(),
                 ],
                 vec![
                     "sudo".to_owned(),
@@ -2409,7 +2486,8 @@ mod tests {
                 "umount",
                 "blkid",
                 "sudo",
-                "mmdebstrap",
+                "unsquashfs",
+                "systemctl",
             ]
         );
     }
@@ -2462,8 +2540,6 @@ mod tests {
     fn installation_plan_unmounts_filesystems_after_fstab_failure() {
         let mut executor = SystemInstallationOperationExecutor::with_all_dependencies(
             RecordingCommandRunner::default(),
-            RecordingInstallationBootstrapper::default(),
-            RecordingInstallationPlanExecutor::default(),
             RecordingInstallationFileWriter::default(),
         );
 
@@ -2503,8 +2579,6 @@ mod tests {
     fn system_executor_does_not_write_fstab_for_missing_root_partition() {
         let mut executor = SystemInstallationOperationExecutor::with_all_dependencies(
             RecordingCommandRunner::default(),
-            RecordingInstallationBootstrapper::default(),
-            RecordingInstallationPlanExecutor::default(),
             RecordingInstallationFileWriter::default(),
         );
 
@@ -2531,8 +2605,6 @@ mod tests {
     fn system_executor_does_not_write_fstab_when_uuid_lookup_fails() {
         let mut executor = SystemInstallationOperationExecutor::with_all_dependencies(
             FailingCommandRunner,
-            RecordingInstallationBootstrapper::default(),
-            RecordingInstallationPlanExecutor::default(),
             RecordingInstallationFileWriter::default(),
         );
 
@@ -2556,8 +2628,6 @@ mod tests {
                 b"root-uuid\n".to_vec(),
                 b"efi-uuid\n".to_vec(),
             ]),
-            RecordingInstallationBootstrapper::default(),
-            RecordingInstallationPlanExecutor::default(),
             RecordingInstallationFileWriter::default(),
         );
 
@@ -2610,8 +2680,6 @@ mod tests {
     fn system_executor_accepts_recording_file_writer_dependency() {
         let executor = SystemInstallationOperationExecutor::with_all_dependencies(
             RecordingCommandRunner::default(),
-            RecordingInstallationBootstrapper::default(),
-            RecordingInstallationPlanExecutor::default(),
             RecordingInstallationFileWriter::default(),
         );
 
@@ -2740,217 +2808,8 @@ mod tests {
     }
 
     #[test]
-    fn installation_plan_unmounts_filesystems_after_apply_plans_failure() {
-        let mut executor = SystemInstallationOperationExecutor::with_dependencies(
-            RecordingCommandRunner::default(),
-            RecordingInstallationBootstrapper::default(),
-            FailingInstallationPlanExecutor,
-        );
-
-        let plan = InstallationPlan::new(vec![
-            InstallationOperation::ApplyPlans { plans: Vec::new() },
-            InstallationOperation::UnmountFilesystems {
-                mounts: default_installation_mounts(),
-            },
-        ]);
-
-        let error = plan
-            .execute_with_cleanup(&mut executor)
-            .expect_err("plan execution failure should be reported");
-
-        assert_eq!(error.to_string(), "installation plan execution failed");
-
-        assert_eq!(
-            executor.runner.commands,
-            vec![
-                vec!["umount".to_owned(), "/target/boot/efi".to_owned()],
-                vec!["umount".to_owned(), "/target".to_owned()],
-            ]
-        );
-    }
-
-    #[test]
-    fn system_executor_returns_apply_plans_failure() {
-        let mut executor = SystemInstallationOperationExecutor::with_dependencies(
-            RecordingCommandRunner::default(),
-            RecordingInstallationBootstrapper::default(),
-            FailingInstallationPlanExecutor,
-        );
-
-        let operation = InstallationOperation::ApplyPlans { plans: Vec::new() };
-
-        let error = executor
-            .execute_operation(&operation)
-            .expect_err("plan execution failure should be returned");
-
-        assert_eq!(error.to_string(), "installation plan execution failed");
-    }
-
-    #[test]
-    fn system_executor_routes_apply_plans_to_plan_executor() {
-        let mut executor = SystemInstallationOperationExecutor::with_dependencies(
-            RecordingCommandRunner::default(),
-            RecordingInstallationBootstrapper::default(),
-            RecordingInstallationPlanExecutor::default(),
-        );
-
-        let plan = Plan {
-            capability: Capability::new("desktop"),
-            provider: ProviderId::new("gnome"),
-            steps: Vec::new(),
-        };
-
-        let operation = InstallationOperation::ApplyPlans {
-            plans: vec![plan.clone()],
-        };
-
-        executor
-            .execute_operation(&operation)
-            .expect("apply plans operation should execute");
-
-        assert_eq!(executor.plan_executor.plans, vec![plan]);
-    }
-    #[test]
-    fn installation_plan_executor_records_plans() {
-        let mut executor = RecordingInstallationPlanExecutor::default();
-
-        let plans = Vec::<Plan>::new();
-
-        executor
-            .apply_plans(&plans)
-            .expect("recording plan executor should succeed");
-
-        assert!(executor.plans.is_empty());
-    }
-
-    #[test]
-    fn installation_plan_unmounts_filesystems_after_bootstrap_failure() {
-        let mut executor = SystemInstallationOperationExecutor::with_dependencies(
-            RecordingCommandRunner::default(),
-            FailingInstallationBootstrapper,
-            RecordingInstallationPlanExecutor::default(),
-        );
-
-        let plan = InstallationPlan::new(vec![
-            InstallationOperation::BootstrapSystem {
-                root: "/target".into(),
-                bootstrap: BootstrapConfig::default(),
-            },
-            InstallationOperation::UnmountFilesystems {
-                mounts: default_installation_mounts(),
-            },
-        ]);
-
-        let error = plan
-            .execute_with_cleanup(&mut executor)
-            .expect_err("bootstrap failure should be reported");
-
-        assert_eq!(error.to_string(), "installation bootstrap failed");
-
-        assert_eq!(
-            executor.runner.commands,
-            vec![
-                vec!["umount".to_owned(), "/target/boot/efi".to_owned()],
-                vec!["umount".to_owned(), "/target".to_owned()],
-            ]
-        );
-    }
-
-    #[test]
-    fn system_executor_returns_bootstrap_failure() {
-        let mut executor = SystemInstallationOperationExecutor::with_dependencies(
-            RecordingCommandRunner::default(),
-            FailingInstallationBootstrapper,
-            RecordingInstallationPlanExecutor::default(),
-        );
-
-        let operation = InstallationOperation::BootstrapSystem {
-            root: "/target".into(),
-            bootstrap: BootstrapConfig::default(),
-        };
-
-        let error = executor
-            .execute_operation(&operation)
-            .expect_err("bootstrap failure should be returned");
-
-        assert_eq!(error.kind(), io::ErrorKind::Other);
-        assert!(error.to_string().contains("installation bootstrap failed"));
-    }
-
-    #[test]
-    fn system_executor_routes_bootstrap_operation_to_bootstrapper() {
-        let bootstrapper = RecordingInstallationBootstrapper::default();
-
-        let config = BootstrapConfig::new(
-            "trixie",
-            "amd64",
-            "https://deb.debian.org/debian",
-            vec!["main".to_owned()],
-            "minbase",
-        );
-
-        let mut executor = SystemInstallationOperationExecutor::with_dependencies(
-            RecordingCommandRunner::default(),
-            bootstrapper,
-            RecordingInstallationPlanExecutor::default(),
-        );
-
-        let operation = InstallationOperation::BootstrapSystem {
-            root: "/target".into(),
-            bootstrap: config.clone(),
-        };
-
-        executor
-            .execute_operation(&operation)
-            .expect("bootstrap operation should execute");
-
-        let calls = executor
-            .bootstrapper
-            .calls
-            .lock()
-            .expect("recording bootstrap calls should not be poisoned");
-
-        assert_eq!(
-            calls.as_slice(),
-            &[(std::path::PathBuf::from("/target"), config)]
-        );
-    }
-    #[test]
-    fn installation_bootstrapper_records_root_and_configuration() {
-        let bootstrapper = RecordingInstallationBootstrapper::default();
-
-        let config = BootstrapConfig::new(
-            "trixie",
-            "amd64",
-            "https://deb.debian.org/debian",
-            vec!["main".to_owned()],
-            "minbase",
-        );
-
-        bootstrapper
-            .bootstrap(std::path::Path::new("/target"), &config)
-            .expect("recording bootstrapper should succeed");
-
-        let calls = bootstrapper
-            .calls
-            .lock()
-            .expect("recording bootstrap calls should not be poisoned");
-
-        assert_eq!(
-            calls.as_slice(),
-            &[(std::path::PathBuf::from("/target"), config)]
-        );
-    }
-
-    #[test]
-    fn installation_plan_carries_bootstrap_configuration() {
-        let bootstrap = BootstrapConfig::new(
-            "trixie",
-            "amd64",
-            "https://deb.debian.org/debian",
-            vec!["main".to_owned(), "non-free-firmware".to_owned()],
-            "minbase",
-        );
+    fn installation_plan_carries_system_image() {
+        let image = PathBuf::from("/run/live/medium/live/filesystem.squashfs");
 
         let intent = InstallationIntent::new(
             "desktop",
@@ -2960,31 +2819,27 @@ mod tests {
 
         let storage = DiscoveredStorage::new("serial:usb-disk", StorageKind::Removable, "/dev/sdb");
 
-        let prepared = PreparedInstallation::new(intent, storage, Vec::new(), bootstrap.clone());
+        let prepared = PreparedInstallation::new(intent, storage, Vec::new(), image.clone());
 
         let plan = prepared.installation_plan();
 
-        let bootstrap_operation = plan
+        let image_operation = plan
             .operations()
             .iter()
             .find_map(|operation| match operation {
-                InstallationOperation::BootstrapSystem { root, bootstrap } => {
-                    Some((root, bootstrap))
-                }
+                InstallationOperation::InstallSystemImage { root, image } => Some((root, image)),
                 _ => None,
             })
-            .expect("installation plan should contain bootstrap operation");
+            .expect("installation plan should contain system image operation");
 
-        assert_eq!(bootstrap_operation.0, std::path::Path::new("/target"));
-        assert_eq!(bootstrap_operation.1, &bootstrap);
+        assert_eq!(image_operation.0, std::path::Path::new("/target"));
+        assert_eq!(image_operation.1, &image);
     }
 
     #[test]
     fn system_executor_rejects_missing_efi_partition_before_mounting() {
         let mut executor = SystemInstallationOperationExecutor::with_dependencies(
             RecordingCommandRunner::default(),
-            RecordingInstallationBootstrapper::default(),
-            RecordingInstallationPlanExecutor::default(),
         );
         let operation = InstallationOperation::MountFilesystems {
             device_path: "/dev/sdb".into(),
@@ -3008,8 +2863,6 @@ mod tests {
     fn system_executor_rejects_missing_root_partition_before_mounting() {
         let mut executor = SystemInstallationOperationExecutor::with_dependencies(
             RecordingCommandRunner::default(),
-            RecordingInstallationBootstrapper::default(),
-            RecordingInstallationPlanExecutor::default(),
         );
 
         let operation = InstallationOperation::MountFilesystems {
@@ -3034,8 +2887,6 @@ mod tests {
     fn system_executor_mounts_custom_partition_order() {
         let mut executor = SystemInstallationOperationExecutor::with_dependencies(
             RecordingCommandRunner::default(),
-            RecordingInstallationBootstrapper::default(),
-            RecordingInstallationPlanExecutor::default(),
         );
         let operation = InstallationOperation::MountFilesystems {
             device_path: "/dev/sdb".into(),
@@ -3081,8 +2932,6 @@ mod tests {
     fn system_executor_rejects_missing_root_mount_before_execution() {
         let mut executor = SystemInstallationOperationExecutor::with_dependencies(
             RecordingCommandRunner::default(),
-            RecordingInstallationBootstrapper::default(),
-            RecordingInstallationPlanExecutor::default(),
         );
         let operation = InstallationOperation::MountFilesystems {
             device_path: "/dev/sdb".into(),
@@ -3105,8 +2954,6 @@ mod tests {
     fn system_executor_rejects_missing_efi_mount_before_execution() {
         let mut executor = SystemInstallationOperationExecutor::with_dependencies(
             RecordingCommandRunner::default(),
-            RecordingInstallationBootstrapper::default(),
-            RecordingInstallationPlanExecutor::default(),
         );
         let operation = InstallationOperation::MountFilesystems {
             device_path: "/dev/sdb".into(),
@@ -3139,8 +2986,6 @@ mod tests {
     fn system_executor_creates_mount_points_and_mounts_filesystems() {
         let mut executor = SystemInstallationOperationExecutor::with_dependencies(
             RecordingCommandRunner::default(),
-            RecordingInstallationBootstrapper::default(),
-            RecordingInstallationPlanExecutor::default(),
         );
 
         let operation = InstallationOperation::MountFilesystems {
@@ -3196,8 +3041,6 @@ mod tests {
     fn system_executor_rejects_zero_efi_partition_size() {
         let mut executor = SystemInstallationOperationExecutor::with_dependencies(
             RecordingCommandRunner::default(),
-            RecordingInstallationBootstrapper::default(),
-            RecordingInstallationPlanExecutor::default(),
         );
         let operation = InstallationOperation::PartitionDisk {
             device_path: "/dev/sdb".into(),
@@ -3222,8 +3065,6 @@ mod tests {
     fn system_executor_rejects_efi_partition_without_size() {
         let mut executor = SystemInstallationOperationExecutor::with_dependencies(
             RecordingCommandRunner::default(),
-            RecordingInstallationBootstrapper::default(),
-            RecordingInstallationPlanExecutor::default(),
         );
         let operation = InstallationOperation::PartitionDisk {
             device_path: "/dev/sdb".into(),
@@ -3244,8 +3085,6 @@ mod tests {
     fn system_executor_rejects_partition_layout_without_efi() {
         let mut executor = SystemInstallationOperationExecutor::with_dependencies(
             RecordingCommandRunner::default(),
-            RecordingInstallationBootstrapper::default(),
-            RecordingInstallationPlanExecutor::default(),
         );
         let operation = InstallationOperation::PartitionDisk {
             device_path: "/dev/sdb".into(),
@@ -3267,8 +3106,6 @@ mod tests {
     fn system_executor_rejects_partition_layout_without_root() {
         let mut executor = SystemInstallationOperationExecutor::with_dependencies(
             RecordingCommandRunner::default(),
-            RecordingInstallationBootstrapper::default(),
-            RecordingInstallationPlanExecutor::default(),
         );
         let operation = InstallationOperation::PartitionDisk {
             device_path: "/dev/sdb".into(),
@@ -3290,8 +3127,6 @@ mod tests {
     fn system_executor_rejects_missing_efi_partition() {
         let mut executor = SystemInstallationOperationExecutor::with_dependencies(
             RecordingCommandRunner::default(),
-            RecordingInstallationBootstrapper::default(),
-            RecordingInstallationPlanExecutor::default(),
         );
         let operation = InstallationOperation::CreateFilesystems {
             device_path: "/dev/sdb".into(),
@@ -3313,8 +3148,6 @@ mod tests {
     fn system_executor_rejects_missing_root_partition() {
         let mut executor = SystemInstallationOperationExecutor::with_dependencies(
             RecordingCommandRunner::default(),
-            RecordingInstallationBootstrapper::default(),
-            RecordingInstallationPlanExecutor::default(),
         );
         let operation = InstallationOperation::CreateFilesystems {
             device_path: "/dev/sdb".into(),
@@ -3335,8 +3168,6 @@ mod tests {
     fn system_executor_rejects_unsupported_efi_filesystem() {
         let mut executor = SystemInstallationOperationExecutor::with_dependencies(
             RecordingCommandRunner::default(),
-            RecordingInstallationBootstrapper::default(),
-            RecordingInstallationPlanExecutor::default(),
         );
         let operation = InstallationOperation::CreateFilesystems {
             device_path: "/dev/sdb".into(),
@@ -3357,8 +3188,6 @@ mod tests {
     fn system_executor_rejects_unsupported_root_filesystem() {
         let mut executor = SystemInstallationOperationExecutor::with_dependencies(
             RecordingCommandRunner::default(),
-            RecordingInstallationBootstrapper::default(),
-            RecordingInstallationPlanExecutor::default(),
         );
         let operation = InstallationOperation::CreateFilesystems {
             device_path: "/dev/sdb".into(),
@@ -3380,11 +3209,8 @@ mod tests {
     }
     #[test]
     fn system_executor_returns_efi_filesystem_command_failure() {
-        let mut executor = SystemInstallationOperationExecutor::with_dependencies(
-            FailingCommandRunner,
-            RecordingInstallationBootstrapper::default(),
-            RecordingInstallationPlanExecutor::default(),
-        );
+        let mut executor =
+            SystemInstallationOperationExecutor::with_dependencies(FailingCommandRunner);
 
         let operation = InstallationOperation::CreateFilesystems {
             device_path: "/dev/sdb".into(),
@@ -3400,14 +3226,11 @@ mod tests {
 
     #[test]
     fn system_executor_returns_root_filesystem_command_failure() {
-        let mut executor = SystemInstallationOperationExecutor::with_dependencies(
-            FailingAtCommandRunner {
+        let mut executor =
+            SystemInstallationOperationExecutor::with_dependencies(FailingAtCommandRunner {
                 commands: Vec::new(),
                 fail_at: 2,
-            },
-            RecordingInstallationBootstrapper::default(),
-            RecordingInstallationPlanExecutor::default(),
-        );
+            });
 
         let operation = InstallationOperation::CreateFilesystems {
             device_path: "/dev/sdb".into(),
@@ -3442,8 +3265,6 @@ mod tests {
     fn system_executor_creates_efi_and_root_filesystems() {
         let mut executor = SystemInstallationOperationExecutor::with_dependencies(
             RecordingCommandRunner::default(),
-            RecordingInstallationBootstrapper::default(),
-            RecordingInstallationPlanExecutor::default(),
         );
         let operation = InstallationOperation::CreateFilesystems {
             device_path: "/dev/sdb".into(),
@@ -3545,8 +3366,6 @@ mod tests {
     fn creates_system_executor_with_command_runner() {
         let executor = SystemInstallationOperationExecutor::with_dependencies(
             RecordingCommandRunner::default(),
-            RecordingInstallationBootstrapper::default(),
-            RecordingInstallationPlanExecutor::default(),
         );
         assert!(executor.runner.commands.is_empty());
     }
@@ -3554,8 +3373,6 @@ mod tests {
     fn system_executor_sends_wipefs_command_for_prepare_disk() {
         let mut executor = SystemInstallationOperationExecutor::with_dependencies(
             RecordingCommandRunner::default(),
-            RecordingInstallationBootstrapper::default(),
-            RecordingInstallationPlanExecutor::default(),
         );
         let operation = InstallationOperation::PrepareDisk {
             storage_id: DiscoveredStorageId::new("serial:usb-disk"),
@@ -3577,11 +3394,8 @@ mod tests {
     }
     #[test]
     fn system_executor_returns_prepare_disk_command_failure() {
-        let mut executor = SystemInstallationOperationExecutor::with_dependencies(
-            FailingCommandRunner,
-            RecordingInstallationBootstrapper::default(),
-            RecordingInstallationPlanExecutor::default(),
-        );
+        let mut executor =
+            SystemInstallationOperationExecutor::with_dependencies(FailingCommandRunner);
         let operation = InstallationOperation::PrepareDisk {
             storage_id: DiscoveredStorageId::new("serial:usb-disk"),
             device_path: "/dev/sdb".into(),
@@ -3595,11 +3409,8 @@ mod tests {
     }
     #[test]
     fn system_executor_returns_partition_disk_command_failure() {
-        let mut executor = SystemInstallationOperationExecutor::with_dependencies(
-            FailingCommandRunner,
-            RecordingInstallationBootstrapper::default(),
-            RecordingInstallationPlanExecutor::default(),
-        );
+        let mut executor =
+            SystemInstallationOperationExecutor::with_dependencies(FailingCommandRunner);
 
         let operation = InstallationOperation::PartitionDisk {
             device_path: "/dev/sdb".into(),
@@ -3617,8 +3428,6 @@ mod tests {
     fn system_executor_sends_parted_command_for_partition_disk() {
         let mut executor = SystemInstallationOperationExecutor::with_dependencies(
             RecordingCommandRunner::default(),
-            RecordingInstallationBootstrapper::default(),
-            RecordingInstallationPlanExecutor::default(),
         );
         let operation = InstallationOperation::PartitionDisk {
             device_path: "/dev/sdb".into(),
@@ -3647,6 +3456,10 @@ mod tests {
                 "ext4".to_owned(),
                 "513MiB".to_owned(),
                 "100%".to_owned(),
+                "set".to_owned(),
+                "1".to_owned(),
+                "esp".to_owned(),
+                "on".to_owned(),
             ]]
         );
     }
@@ -3654,8 +3467,6 @@ mod tests {
     fn root_partition_start_follows_efi_partition_size() {
         let mut executor = SystemInstallationOperationExecutor::with_dependencies(
             RecordingCommandRunner::default(),
-            RecordingInstallationBootstrapper::default(),
-            RecordingInstallationPlanExecutor::default(),
         );
         let operation = InstallationOperation::PartitionDisk {
             device_path: "/dev/sdb".into(),
@@ -3691,6 +3502,10 @@ mod tests {
                 "ext4".to_owned(),
                 "257MiB".to_owned(),
                 "100%".to_owned(),
+                "set".to_owned(),
+                "1".to_owned(),
+                "esp".to_owned(),
+                "on".to_owned(),
             ]]
         );
     }

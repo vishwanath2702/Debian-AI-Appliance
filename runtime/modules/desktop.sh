@@ -4,7 +4,7 @@
 # DAIA - Debian AI Assistant
 #
 # File       : runtime/modules/desktop.sh
-# Purpose    : Install and verify the DAIA XFCE desktop
+# Purpose    : Install and verify the DAIA KDE Plasma desktop
 #              foundation.
 #
 # Version    : 1.0.0
@@ -14,16 +14,16 @@
 # Responsibilities
 # ----------------
 # - Validate the desktop package manifest.
-# - Install packages declared by the desktop manifest.
-# - Configure LightDM for secure manual login.
-# - Enable the LightDM display-manager service.
+# - Verify packages declared by the desktop manifest are installed.
+# - Configure SDDM for secure manual login.
+# - Enable the SDDM display-manager service.
 # - Verify all desktop-manifest packages are installed.
 # - Verify the graphical login service is enabled.
 #
 # Non-Responsibilities
 # --------------------
 # - DAIA desktop branding.
-# - XFCE panel or theme customization.
+# - KDE Plasma panel or theme customization.
 # - User-account creation.
 # - Automatic login.
 # - Docker installation.
@@ -74,16 +74,11 @@ _DESKTOP_RUNTIME_DIRECTORY="$(
     pwd
 )"
 
-_DESKTOP_PROJECT_ROOT="$(
-    cd -- "${_DESKTOP_RUNTIME_DIRECTORY}/.." &&
-    pwd
-)"
+_DESKTOP_MANIFEST_PATH="${_DESKTOP_RUNTIME_DIRECTORY}/manifests/desktop.lst"
 
-_DESKTOP_MANIFEST_PATH="${_DESKTOP_PROJECT_ROOT}/payload/packages/manifests/desktop.lst"
+_DESKTOP_SDDM_CONFIGURATION_DIRECTORY="/etc/sddm.conf.d"
 
-_DESKTOP_LIGHTDM_CONFIGURATION_DIRECTORY="/etc/lightdm/lightdm.conf.d"
-
-_DESKTOP_LIGHTDM_SECURITY_CONFIGURATION="${_DESKTOP_LIGHTDM_CONFIGURATION_DIRECTORY}/99-daia-security.conf"
+_DESKTOP_SDDM_SECURITY_CONFIGURATION="${_DESKTOP_SDDM_CONFIGURATION_DIRECTORY}/99-daia-security.conf"
 
 ############################################################
 # Internal logging helpers
@@ -181,8 +176,7 @@ _desktop_require_runtime()
         require_root \
         require_command \
         package_is_installed \
-        package_manifest_validate \
-        package_manifest_install
+        package_manifest_validate
     do
         _desktop_require_function "$required_function" ||
             return 1
@@ -227,7 +221,7 @@ _desktop_manifest_packages()
 ############################################################
 # _desktop_configure_manual_login
 #
-# Create a LightDM configuration override that explicitly
+# Create an SDDM configuration override that explicitly
 # disables automatic login.
 #
 # Arguments:
@@ -251,38 +245,38 @@ _desktop_configure_manual_login()
         --owner=root \
         --group=root \
         --mode=0755 \
-        "$_DESKTOP_LIGHTDM_CONFIGURATION_DIRECTORY"
+        "$_DESKTOP_SDDM_CONFIGURATION_DIRECTORY"
     then
         _desktop_log_error \
-            "Failed to create the LightDM configuration directory."
+            "Failed to create the SDDM configuration directory."
 
         return 1
     fi
 
     temporary_file="$(mktemp)" || {
         _desktop_log_error \
-            "Failed to create a temporary LightDM configuration file."
+            "Failed to create a temporary SDDM configuration file."
 
         return 1
     }
 
     if ! printf '%s\n' \
         '# ==========================================================' \
-        '# DAIA LightDM security configuration' \
+        '# DAIA SDDM security configuration' \
         '#' \
         '# Automatic login is intentionally disabled.' \
         '# Users must authenticate through the graphical login screen.' \
         '# ==========================================================' \
         '' \
-        '[Seat:*]' \
-        'autologin-user=' \
-        'autologin-user-timeout=0' \
+        '[Autologin]' \
+        'User=' \
+        'Relogin=false' \
         > "$temporary_file"
     then
         rm -f -- "$temporary_file"
 
         _desktop_log_error \
-            "Failed to prepare the LightDM security configuration."
+            "Failed to prepare the SDDM security configuration."
 
         return 1
     fi
@@ -292,12 +286,12 @@ _desktop_configure_manual_login()
         --group=root \
         --mode=0644 \
         "$temporary_file" \
-        "$_DESKTOP_LIGHTDM_SECURITY_CONFIGURATION"
+        "$_DESKTOP_SDDM_SECURITY_CONFIGURATION"
     then
         rm -f -- "$temporary_file"
 
         _desktop_log_error \
-            "Failed to install the LightDM security configuration."
+            "Failed to install the SDDM security configuration."
 
         return 1
     fi
@@ -305,13 +299,13 @@ _desktop_configure_manual_login()
     rm -f -- "$temporary_file"
 
     _desktop_log_success \
-        "LightDM has been configured for manual login."
+        "SDDM has been configured for manual login."
 }
 
 ############################################################
-# _desktop_enable_lightdm
+# _desktop_enable_sddm
 #
-# Enable LightDM so that the graphical login screen starts
+# Enable SDDM so that the graphical login screen starts
 # during normal system boot.
 #
 # Arguments:
@@ -322,24 +316,24 @@ _desktop_configure_manual_login()
 #   1 on failure.
 ############################################################
 
-_desktop_enable_lightdm()
+_desktop_enable_sddm()
 {
     require_root
     require_command systemctl
 
     _desktop_log_info \
-        "Enabling the LightDM display-manager service."
+        "Enabling the SDDM display-manager service."
 
-    if ! systemctl enable lightdm.service
+    if ! systemctl enable sddm.service
     then
         _desktop_log_error \
-            "Failed to enable the LightDM service."
+            "Failed to enable the SDDM service."
 
         return 1
     fi
 
     _desktop_log_success \
-        "LightDM service enabled successfully."
+        "SDDM service enabled successfully."
 }
 
 ############################################################
@@ -388,9 +382,9 @@ _desktop_verify_manifest_packages()
 }
 
 ############################################################
-# _desktop_verify_lightdm_enabled
+# _desktop_verify_sddm_enabled
 #
-# Verify that LightDM is enabled for system startup.
+# Verify that SDDM is enabled for system startup.
 #
 # Arguments:
 #   None
@@ -400,28 +394,28 @@ _desktop_verify_manifest_packages()
 #   1 otherwise.
 ############################################################
 
-_desktop_verify_lightdm_enabled()
+_desktop_verify_sddm_enabled()
 {
     require_command systemctl
 
     if ! systemctl is-enabled \
         --quiet \
-        lightdm.service
+        sddm.service
     then
         _desktop_log_error \
-            "LightDM is not enabled for system startup."
+            "SDDM is not enabled for system startup."
 
         return 1
     fi
 
     _desktop_log_success \
-        "LightDM is enabled for system startup."
+        "SDDM is enabled for system startup."
 }
 
 ############################################################
 # _desktop_verify_manual_login
 #
-# Verify that the DAIA LightDM configuration explicitly
+# Verify that the DAIA SDDM configuration explicitly
 # disables automatic login.
 #
 # Arguments:
@@ -435,12 +429,12 @@ _desktop_verify_lightdm_enabled()
 _desktop_verify_manual_login()
 {
     local autologin_user_value
-    local autologin_timeout_value
+    local autologin_relogin_value
 
-    if [[ ! -f "$_DESKTOP_LIGHTDM_SECURITY_CONFIGURATION" ]]
+    if [[ ! -f "$_DESKTOP_SDDM_SECURITY_CONFIGURATION" ]]
     then
         _desktop_log_error \
-            "DAIA LightDM security configuration is missing."
+            "DAIA SDDM security configuration is missing."
 
         return 1
     fi
@@ -449,50 +443,50 @@ _desktop_verify_manual_login()
         awk \
             -F= \
             '
-                /^[[:space:]]*autologin-user[[:space:]]*=/ {
+                /^[[:space:]]*User[[:space:]]*=/ {
                     value = $0
                     sub(/^[^=]*=/, "", value)
                     gsub(/^[[:space:]]+|[[:space:]]+$/, "", value)
                     print value
                 }
             ' \
-            "$_DESKTOP_LIGHTDM_SECURITY_CONFIGURATION" |
+            "$_DESKTOP_SDDM_SECURITY_CONFIGURATION" |
         tail -n 1
     )"
 
-    autologin_timeout_value="$(
+    autologin_relogin_value="$(
         awk \
             -F= \
             '
-                /^[[:space:]]*autologin-user-timeout[[:space:]]*=/ {
+                /^[[:space:]]*Relogin[[:space:]]*=/ {
                     value = $0
                     sub(/^[^=]*=/, "", value)
                     gsub(/^[[:space:]]+|[[:space:]]+$/, "", value)
                     print value
                 }
             ' \
-            "$_DESKTOP_LIGHTDM_SECURITY_CONFIGURATION" |
+            "$_DESKTOP_SDDM_SECURITY_CONFIGURATION" |
         tail -n 1
     )"
 
     if [[ -n "$autologin_user_value" ]]
     then
         _desktop_log_error \
-            "LightDM automatic login is configured for a user."
+            "SDDM automatic login is configured for a user."
 
         return 1
     fi
 
-    if [[ "$autologin_timeout_value" != "0" ]]
+    if [[ "$autologin_relogin_value" != "false" ]]
     then
         _desktop_log_error \
-            "LightDM automatic-login timeout is not disabled."
+            "SDDM automatic relogin is not disabled."
 
         return 1
     fi
 
     _desktop_log_success \
-        "LightDM manual-login policy verified."
+        "SDDM manual-login policy verified."
 }
 
 ############################################################
@@ -536,8 +530,8 @@ desktop_validate()
 ############################################################
 # desktop_install
 #
-# Install the desktop package manifest, enforce manual login,
-# and enable the LightDM service.
+# Verify the desktop package manifest, enforce manual login,
+# and enable the SDDM service.
 #
 # Arguments:
 #   None
@@ -550,25 +544,22 @@ desktop_validate()
 desktop_install()
 {
     _desktop_log_info \
-        "Installing the DAIA desktop foundation."
+        "Configuring the DAIA desktop foundation."
 
     desktop_validate || return 1
 
-    package_manifest_install \
-        "$_DESKTOP_MANIFEST_PATH" ||
-        return 1
-
+    _desktop_verify_manifest_packages || return 1
     _desktop_configure_manual_login || return 1
-    _desktop_enable_lightdm || return 1
+    _desktop_enable_sddm || return 1
 
     _desktop_log_success \
-        "DAIA desktop foundation installed successfully."
+        "DAIA desktop foundation configured successfully."
 }
 
 ############################################################
 # desktop_verify
 #
-# Verify the desktop package installation, LightDM service,
+# Verify the desktop package installation, SDDM service,
 # and manual-login security policy.
 #
 # Arguments:
@@ -596,7 +587,7 @@ desktop_verify()
         return 1
 
     _desktop_verify_manifest_packages || return 1
-    _desktop_verify_lightdm_enabled || return 1
+    _desktop_verify_sddm_enabled || return 1
     _desktop_verify_manual_login || return 1
 
     _desktop_log_success \

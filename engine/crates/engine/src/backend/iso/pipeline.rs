@@ -145,6 +145,7 @@ exit 1
                 output_iso,
                 daia_payload_directory: None,
                 mksquashfs_command: mksquashfs,
+                privileged_squashfs: false,
                 xorriso_command: xorriso,
                 grub_mkrescue_command: PathBuf::from("grub-mkrescue"),
                 layout: Layout::new(temp),

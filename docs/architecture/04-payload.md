@@ -229,13 +229,13 @@ not appear in production payload output unless explicitly required.
 The payload is exposed on the ISO under:
 
 ```text
-/cdrom/daia/
+/run/live/medium/daia/
 ```
 
 The Debian installer hook copies:
 
 ```text
-/cdrom/daia/opt/daia
+/run/live/medium/daia/opt/daia
 ```
 
 to:
@@ -247,7 +247,7 @@ to:
 The first-boot service is copied from:
 
 ```text
-/cdrom/daia/etc/systemd/system/daia-firstboot.service
+/run/live/medium/daia/etc/systemd/system/daia-firstboot.service
 ```
 
 to:

@@ -12,8 +12,7 @@ mod workflow;
 pub use installation::{
     DryRunInstallationExecutor, InstallationCommandRunner, InstallationExecutor,
     InstallationOperation, InstallationOperationExecutor, InstallationPlan,
-    InstallationPlanExecutor, PreparedApplianceInstallation, PreparedInstallation,
-    ProcessInstallationCommandRunner, RootfsInstallationPlanExecutor,
+    PreparedApplianceInstallation, PreparedInstallation, ProcessInstallationCommandRunner,
     SystemInstallationOperationExecutor, default_installation_mounts,
     default_installation_partitions, validate_installation_commands,
 };
@@ -818,7 +817,7 @@ impl Engine {
             intent,
             selected,
             plans,
-            BootstrapConfig::default(),
+            PathBuf::from("/run/live/medium/live/filesystem.squashfs"),
         ))
     }
 
@@ -969,10 +968,10 @@ mod tests {
         DryRunContentImportOperationExecutor, DryRunInstallationExecutor, Engine,
         ImportedContentItem, InstallationExecutor, InstallationOperation,
         InstallationOperationExecutor, InstallationPlan, PrepareContentImportError,
-        PreparedApplianceInstallation, PreparedContentImport, PreparedInstallation,
-        RootfsInstallationPlanExecutor, RootfsRunError, SystemContentImportFileSystem,
-        SystemContentImportOperationExecutor, SystemInstallationOperationExecutor,
-        default_installation_mounts, default_installation_partitions,
+        PreparedApplianceInstallation, PreparedContentImport, PreparedInstallation, RootfsRunError,
+        SystemContentImportFileSystem, SystemContentImportOperationExecutor,
+        SystemInstallationOperationExecutor, default_installation_mounts,
+        default_installation_partitions,
     };
     struct TestContentInspector;
 
@@ -1661,7 +1660,10 @@ mod tests {
                 root: "/target".into(),
                 device_path: "/dev/sdb".into(),
             },
-            InstallationOperation::ApplyPlans { plans: Vec::new() },
+            InstallationOperation::InstallSystemImage {
+                root: "/target".into(),
+                image: "/run/live/medium/live/filesystem.squashfs".into(),
+            },
             InstallationOperation::CleanupTargetRuntime {
                 root: "/target".into(),
             },
@@ -1786,20 +1788,9 @@ mod tests {
 
     #[test]
     fn creates_system_executor_with_production_dependencies() {
-        let _executor = SystemInstallationOperationExecutor::new(
-            "/tmp/daia-assets".into(),
-            PackageRepository::new(),
-        );
+        let _executor = SystemInstallationOperationExecutor::new("test-password".to_owned());
     }
 
-    #[test]
-    fn creates_rootfs_installation_plan_executor() {
-        let _executor = RootfsInstallationPlanExecutor::new(
-            "/target".into(),
-            "/tmp/daia-assets".into(),
-            PackageRepository::new(),
-        );
-    }
     #[test]
     fn installation_plan_stops_after_operation_failure() {
         let plan = InstallationPlan::new(vec![
@@ -1816,11 +1807,10 @@ mod tests {
                 partitions: default_installation_partitions(),
                 mounts: default_installation_mounts(),
             },
-            InstallationOperation::BootstrapSystem {
+            InstallationOperation::InstallSystemImage {
                 root: "/target".into(),
-                bootstrap: BootstrapConfig::default(),
+                image: "/run/live/medium/live/filesystem.squashfs".into(),
             },
-            InstallationOperation::ApplyPlans { plans: Vec::new() },
         ]);
 
         let mut executor = FailingOperationExecutor {
@@ -1860,8 +1850,12 @@ mod tests {
 
         let storage = DiscoveredStorage::new("serial:usb-disk", StorageKind::Removable, "/dev/sdb");
 
-        let prepared =
-            PreparedInstallation::new(intent, storage, Vec::new(), BootstrapConfig::default());
+        let prepared = PreparedInstallation::new(
+            intent,
+            storage,
+            Vec::new(),
+            "/run/live/medium/live/filesystem.squashfs".into(),
+        );
 
         let mut executor = DryRunInstallationExecutor::default();
 
@@ -2063,11 +2057,10 @@ mod tests {
                 partitions: default_installation_partitions(),
                 mounts: default_installation_mounts(),
             },
-            InstallationOperation::BootstrapSystem {
+            InstallationOperation::InstallSystemImage {
                 root: "/target".into(),
-                bootstrap: BootstrapConfig::default(),
+                image: "/run/live/medium/live/filesystem.squashfs".into(),
             },
-            InstallationOperation::ApplyPlans { plans: Vec::new() },
         ]);
 
         let expected = plan.operations().to_vec();
@@ -2111,8 +2104,12 @@ mod tests {
 
         let storage = DiscoveredStorage::new("serial:usb-disk", StorageKind::Removable, "/dev/sdb");
 
-        let prepared =
-            PreparedInstallation::new(intent, storage, Vec::new(), BootstrapConfig::default());
+        let prepared = PreparedInstallation::new(
+            intent,
+            storage,
+            Vec::new(),
+            "/run/live/medium/live/filesystem.squashfs".into(),
+        );
 
         let mut executor = DryRunInstallationExecutor::default();
 
@@ -2144,15 +2141,17 @@ mod tests {
                     partitions: default_installation_partitions(),
                     mounts: default_installation_mounts(),
                 },
-                InstallationOperation::BootstrapSystem {
+                InstallationOperation::InstallSystemImage {
                     root: "/target".into(),
-                    bootstrap: BootstrapConfig::default(),
+                    image: "/run/live/medium/live/filesystem.squashfs".into(),
+                },
+                InstallationOperation::NormalizeInstalledSystem {
+                    root: "/target".into(),
                 },
                 InstallationOperation::CreateAdministrator {
                     root: "/target".into(),
                     user: model::UserConfiguration::new("admin", "DAIA Administrator"),
                 },
-                InstallationOperation::ApplyPlans { plans: Vec::new() },
                 InstallationOperation::ConfigureFstab {
                     device_path: "/dev/sdb".into(),
                     partitions: default_installation_partitions(),
@@ -2197,11 +2196,10 @@ mod tests {
                 partitions: default_installation_partitions(),
                 mounts: default_installation_mounts(),
             },
-            InstallationOperation::BootstrapSystem {
+            InstallationOperation::InstallSystemImage {
                 root: "/target".into(),
-                bootstrap: BootstrapConfig::default(),
+                image: "/run/live/medium/live/filesystem.squashfs".into(),
             },
-            InstallationOperation::ApplyPlans { plans: Vec::new() },
         ]);
 
         assert_eq!(
@@ -2220,11 +2218,10 @@ mod tests {
                     partitions: default_installation_partitions(),
                     mounts: default_installation_mounts(),
                 },
-                InstallationOperation::BootstrapSystem {
+                InstallationOperation::InstallSystemImage {
                     root: "/target".into(),
-                    bootstrap: BootstrapConfig::default(),
-                },
-                InstallationOperation::ApplyPlans { plans: Vec::new() }
+                    image: "/run/live/medium/live/filesystem.squashfs".into(),
+                }
             ]
         );
     }
@@ -2241,8 +2238,12 @@ mod tests {
 
         let storage = DiscoveredStorage::new("serial:usb-disk", StorageKind::Removable, "/dev/sdb");
 
-        let prepared =
-            PreparedInstallation::new(intent, storage, Vec::new(), BootstrapConfig::default());
+        let prepared = PreparedInstallation::new(
+            intent,
+            storage,
+            Vec::new(),
+            "/run/live/medium/live/filesystem.squashfs".into(),
+        );
 
         let mut executor = DryRunInstallationExecutor::default();
 
@@ -2270,8 +2271,12 @@ mod tests {
 
         let storage = DiscoveredStorage::new("serial:usb-disk", StorageKind::Removable, "/dev/sdb");
 
-        let prepared =
-            PreparedInstallation::new(intent, storage, Vec::new(), BootstrapConfig::default());
+        let prepared = PreparedInstallation::new(
+            intent,
+            storage,
+            Vec::new(),
+            "/run/live/medium/live/filesystem.squashfs".into(),
+        );
 
         let mut executor = RecordingInstallationExecutor { executed: false };
 
@@ -2292,8 +2297,12 @@ mod tests {
 
         let storage = DiscoveredStorage::new("serial:usb-disk", StorageKind::Removable, "/dev/sdb");
 
-        let prepared =
-            PreparedInstallation::new(intent, storage, Vec::new(), BootstrapConfig::default());
+        let prepared = PreparedInstallation::new(
+            intent,
+            storage,
+            Vec::new(),
+            "/run/live/medium/live/filesystem.squashfs".into(),
+        );
 
         assert_eq!(
             prepared.summary(),
@@ -2310,8 +2319,12 @@ mod tests {
 
         let storage = DiscoveredStorage::new("serial:usb-disk", StorageKind::Removable, "/dev/sdb");
 
-        let installation =
-            PreparedInstallation::new(intent, storage, Vec::new(), BootstrapConfig::default());
+        let installation = PreparedInstallation::new(
+            intent,
+            storage,
+            Vec::new(),
+            "/run/live/medium/live/filesystem.squashfs".into(),
+        );
 
         let content = PreparedContentImport::new(
             ContentImportIntent::new(Vec::new()),
@@ -2334,8 +2347,12 @@ mod tests {
 
         let storage = DiscoveredStorage::new("serial:usb-disk", StorageKind::Removable, "/dev/sdb");
 
-        let installation =
-            PreparedInstallation::new(intent, storage, Vec::new(), BootstrapConfig::default());
+        let installation = PreparedInstallation::new(
+            intent,
+            storage,
+            Vec::new(),
+            "/run/live/medium/live/filesystem.squashfs".into(),
+        );
 
         let content = PreparedContentImport::new(
             ContentImportIntent::new(Vec::new()),
@@ -2364,8 +2381,12 @@ mod tests {
 
         let storage = DiscoveredStorage::new("serial:usb-disk", StorageKind::Removable, "/dev/sdb");
 
-        let installation =
-            PreparedInstallation::new(intent, storage, Vec::new(), BootstrapConfig::default());
+        let installation = PreparedInstallation::new(
+            intent,
+            storage,
+            Vec::new(),
+            "/run/live/medium/live/filesystem.squashfs".into(),
+        );
 
         let item = ExternalContentItem::new(
             ContentSourceId::new("local-models-directory"),

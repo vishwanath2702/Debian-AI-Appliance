@@ -155,11 +155,11 @@ impl WorkspaceStage {
     }
 }
 
-/// Publishes the DAIA installer payload into the ISO workspace.
+/// Publishes the DAIA payload into the ISO workspace.
 pub struct DaiaPayloadStage;
 
 impl DaiaPayloadStage {
-    /// Copies the configured DAIA installer payload into the ISO `/daia` directory.
+    /// Copies the configured DAIA payload into the ISO `/daia` directory.
     ///
     /// # Errors
     ///
@@ -286,7 +286,13 @@ impl SquashFsStage {
             fs::create_dir_all(parent)?;
         }
         let squashfs = &context.config.squashfs;
-        let mut command = Command::new(&context.config.mksquashfs_command);
+        let mut command = if context.config.privileged_squashfs {
+            let mut command = Command::new("sudo");
+            command.arg(&context.config.mksquashfs_command);
+            command
+        } else {
+            Command::new(&context.config.mksquashfs_command)
+        };
 
         command.arg(&context.config.rootfs).arg(&output).args([
             "-comp",
@@ -477,6 +483,7 @@ mod tests {
                 output_iso: PathBuf::from("build/output.iso"),
                 daia_payload_directory: None,
                 mksquashfs_command: PathBuf::from("mksquashfs"),
+                privileged_squashfs: false,
                 xorriso_command: PathBuf::from("xorriso"),
 
                 grub_mkrescue_command: PathBuf::from("grub-mkrescue"),
@@ -518,10 +525,24 @@ mod tests {
     fn copies_daia_payload_into_iso_workspace() {
         let directory = TestDirectory::create();
         let source = directory.path().join("payload");
-        let nested = source.join("opt/daia");
 
-        fs::create_dir_all(&nested).expect("payload directory should be created");
-        fs::write(nested.join("install.sh"), b"installer").expect("payload file should be written");
+        let runtime_directory = source.join("opt/daia");
+        let systemd_directory = source.join("etc/systemd/system");
+
+        fs::create_dir_all(&runtime_directory)
+            .expect("runtime payload directory should be created");
+        fs::create_dir_all(&systemd_directory)
+            .expect("systemd payload directory should be created");
+
+        fs::write(runtime_directory.join("runtime.sh"), b"runtime")
+            .expect("runtime orchestrator should be written");
+        fs::write(runtime_directory.join("firstboot.sh"), b"firstboot")
+            .expect("first-boot orchestrator should be written");
+        fs::write(
+            systemd_directory.join("daia-firstboot.service"),
+            b"firstboot-service",
+        )
+        .expect("first-boot service should be written");
 
         let context = IsoContext {
             config: IsoConfig {
@@ -535,16 +556,22 @@ mod tests {
         WorkspaceStage::run(&context).expect("workspace should be created");
         DaiaPayloadStage::run(&context).expect("DAIA payload should be copied");
 
+        let published_payload = context.config.layout.daia_payload();
+
         assert_eq!(
-            fs::read(
-                context
-                    .config
-                    .layout
-                    .daia_payload()
-                    .join("opt/daia/install.sh")
-            )
-            .expect("published payload should be readable"),
-            b"installer"
+            fs::read(published_payload.join("opt/daia/runtime.sh"))
+                .expect("published runtime orchestrator should be readable"),
+            b"runtime"
+        );
+        assert_eq!(
+            fs::read(published_payload.join("opt/daia/firstboot.sh"))
+                .expect("published first-boot orchestrator should be readable"),
+            b"firstboot"
+        );
+        assert_eq!(
+            fs::read(published_payload.join("etc/systemd/system/daia-firstboot.service"))
+                .expect("published first-boot service should be readable"),
+            b"firstboot-service"
         );
     }
 

@@ -122,11 +122,11 @@ mod tests {
             "registry/assets",
             BootstrapConfig::default(),
         )
-        .with_daia_payload_directory("installer/files");
+        .with_daia_payload_directory("work/payload/daia");
 
         assert_eq!(
             context.daia_payload_directory(),
-            Some(Path::new("installer/files"))
+            Some(Path::new("work/payload/daia"))
         );
     }
 

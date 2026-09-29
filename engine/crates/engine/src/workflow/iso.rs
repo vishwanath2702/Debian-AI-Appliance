@@ -30,6 +30,7 @@ impl LiveRootfsPreparer for SystemLiveRootfsPreparer {
         let package_manifest_source = registry_directory.join("package-manifests");
         let provider_source = registry_directory.join("providers");
         let appliance_profile_source = registry_directory.join("appliance-profiles");
+        let content_repository_source = registry_directory.join("content-repositories");
 
         copy_directory_contents(
             &package_manifest_source,
@@ -41,6 +42,11 @@ impl LiveRootfsPreparer for SystemLiveRootfsPreparer {
         copy_directory_contents(
             &appliance_profile_source,
             &daia_directory.join("appliance-profiles"),
+        )?;
+
+        copy_directory_contents(
+            &content_repository_source,
+            &daia_directory.join("content-repositories"),
         )?;
 
         copy_directory_contents(
@@ -56,6 +62,70 @@ impl LiveRootfsPreparer for SystemLiveRootfsPreparer {
             let destination = usr_bin.join("daia");
 
             copy_file(daia_binary, &destination)?;
+        }
+
+        let systemd_directory = build_context.rootfs().join("etc/systemd/system");
+
+        let multi_user_wants = systemd_directory.join("multi-user.target.wants");
+
+        create_directory(&systemd_directory)?;
+        create_directory(&multi_user_wants)?;
+
+        let default_target = systemd_directory.join("default.target");
+
+        if std::fs::symlink_metadata(&default_target).is_ok() {
+            remove_file(&default_target)?;
+        }
+
+        create_symlink(
+            std::path::Path::new("/usr/lib/systemd/system/multi-user.target"),
+            &default_target,
+        )?;
+
+        let installer_service = systemd_directory.join("daia-installer.service");
+
+        write_file(
+            &installer_service,
+            r#"[Unit]
+Description=DAIA Rust Installer
+After=systemd-user-sessions.service
+Before=graphical.target
+Conflicts=graphical.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/daia install
+StandardInput=tty
+StandardOutput=tty
+StandardError=tty
+TTYPath=/dev/tty1
+TTYReset=yes
+TTYVHangup=yes
+TTYVTDisallocate=no
+Restart=no
+
+[Install]
+WantedBy=multi-user.target
+"#,
+        )?;
+
+        let installer_link = multi_user_wants.join("daia-installer.service");
+
+        if installer_link.exists() {
+            remove_file(&installer_link)?;
+        }
+
+        create_symlink(
+            std::path::Path::new("../daia-installer.service"),
+            &installer_link,
+        )?;
+
+        let tty1_getty_link = build_context
+            .rootfs()
+            .join("etc/systemd/system/getty.target.wants/getty@tty1.service");
+
+        if tty1_getty_link.exists() {
+            remove_file(&tty1_getty_link)?;
         }
 
         clean_live_rootfs(build_context.rootfs())?;
@@ -178,6 +248,97 @@ fn clean_live_rootfs(rootfs: &std::path::Path) -> Result<(), BuildError> {
     }
 
     Ok(())
+}
+
+fn remove_file(path: &std::path::Path) -> Result<(), BuildError> {
+    match fs::remove_file(path) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
+            let status = std::process::Command::new("sudo")
+                .arg("rm")
+                .arg("-f")
+                .arg("--")
+                .arg(path)
+                .status()
+                .map_err(BuildError::Workspace)?;
+
+            if status.success() {
+                Ok(())
+            } else {
+                Err(BuildError::Workspace(std::io::Error::other(format!(
+                    "failed to remove privileged build file `{}`",
+                    path.display()
+                ))))
+            }
+        }
+        Err(error) => Err(BuildError::Workspace(error)),
+    }
+}
+
+fn create_symlink(target: &std::path::Path, link: &std::path::Path) -> Result<(), BuildError> {
+    match std::os::unix::fs::symlink(target, link) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
+            let status = std::process::Command::new("sudo")
+                .arg("ln")
+                .arg("-s")
+                .arg("--")
+                .arg(target)
+                .arg(link)
+                .status()
+                .map_err(BuildError::Workspace)?;
+
+            if status.success() {
+                Ok(())
+            } else {
+                Err(BuildError::Workspace(std::io::Error::other(format!(
+                    "failed to create privileged build symlink `{}`",
+                    link.display()
+                ))))
+            }
+        }
+        Err(error) => Err(BuildError::Workspace(error)),
+    }
+}
+
+fn write_file(path: &std::path::Path, contents: &str) -> Result<(), BuildError> {
+    match fs::write(path, contents) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
+            let mut child = std::process::Command::new("sudo")
+                .arg("tee")
+                .arg(path)
+                .stdin(std::process::Stdio::piped())
+                .stdout(std::process::Stdio::null())
+                .spawn()
+                .map_err(BuildError::Workspace)?;
+
+            use std::io::Write;
+
+            child
+                .stdin
+                .as_mut()
+                .ok_or_else(|| {
+                    BuildError::Workspace(std::io::Error::other(
+                        "failed to open privileged file writer stdin",
+                    ))
+                })?
+                .write_all(contents.as_bytes())
+                .map_err(BuildError::Workspace)?;
+
+            let status = child.wait().map_err(BuildError::Workspace)?;
+
+            if status.success() {
+                Ok(())
+            } else {
+                Err(BuildError::Workspace(std::io::Error::other(format!(
+                    "failed to write privileged build file `{}`",
+                    path.display()
+                ))))
+            }
+        }
+        Err(error) => Err(BuildError::Workspace(error)),
+    }
 }
 
 fn copy_file(source: &std::path::Path, destination: &std::path::Path) -> Result<(), BuildError> {
@@ -422,6 +583,7 @@ mod tests {
         let package_manifest_directory = registry_directory.join("package-manifests");
         let provider_directory = registry_directory.join("providers");
         let appliance_profile_directory = registry_directory.join("appliance-profiles");
+        let content_repository_directory = registry_directory.join("content-repositories");
 
         std::fs::create_dir_all(&asset_directory).expect("asset directory should be created");
 
@@ -432,6 +594,9 @@ mod tests {
 
         std::fs::create_dir_all(&appliance_profile_directory)
             .expect("appliance profile directory should be created");
+
+        std::fs::create_dir_all(&content_repository_directory)
+            .expect("content repository directory should be created");
 
         let build_context = BuildContext::new(
             temp.path().join("rootfs"),
@@ -486,6 +651,7 @@ mod tests {
         let package_manifest_directory = registry_directory.join("package-manifests");
         let provider_directory = registry_directory.join("providers");
         let appliance_profile_directory = registry_directory.join("appliance-profiles");
+        let content_repository_directory = registry_directory.join("content-repositories");
 
         let daia_binary = temp.path().join("daia");
 
@@ -501,7 +667,23 @@ mod tests {
         fs::create_dir_all(&appliance_profile_directory)
             .expect("appliance profile directory should be created");
 
+        fs::create_dir_all(&content_repository_directory)
+            .expect("content repository directory should be created");
+
+        fs::write(
+            content_repository_directory.join("local-models.yaml"),
+            b"content repository",
+        )
+        .expect("content repository fixture should be written");
+
         fs::write(&daia_binary, b"daia").expect("DAIA binary fixture should be written");
+
+        let getty_wants = rootfs.join("etc/systemd/system/getty.target.wants");
+        fs::create_dir_all(&getty_wants).expect("getty wants directory should be created");
+
+        let tty1_getty_link = getty_wants.join("getty@tty1.service");
+        std::os::unix::fs::symlink("/usr/lib/systemd/system/getty@.service", &tty1_getty_link)
+            .expect("tty1 getty fixture should be created");
 
         let build_context = BuildContext::new(
             rootfs.clone(),
@@ -538,6 +720,35 @@ mod tests {
             fs::read(rootfs.join("usr/bin/daia")).expect("DAIA binary should be copied"),
             b"daia"
         );
+
+        assert_eq!(
+            fs::read(rootfs.join("usr/share/daia/content-repositories/local-models.yaml"))
+                .expect("content repository should be copied"),
+            b"content repository"
+        );
+
+        assert!(
+            rootfs
+                .join("etc/systemd/system/daia-installer.service")
+                .is_file()
+        );
+
+        assert_eq!(
+            fs::read_link(rootfs.join("etc/systemd/system/default.target"))
+                .expect("live rootfs default target should be a symlink"),
+            std::path::PathBuf::from("/usr/lib/systemd/system/multi-user.target")
+        );
+
+        assert!(
+            rootfs
+                .join("etc/systemd/system/multi-user.target.wants/daia-installer.service")
+                .is_symlink()
+        );
+
+        assert!(
+            !tty1_getty_link.exists(),
+            "tty1 getty must be removed before the DAIA installer owns tty1"
+        );
     }
 
     #[test]
@@ -550,6 +761,7 @@ mod tests {
         let package_manifest_directory = registry_directory.join("package-manifests");
         let provider_directory = registry_directory.join("providers");
         let appliance_profile_directory = registry_directory.join("appliance-profiles");
+        let content_repository_directory = registry_directory.join("content-repositories");
 
         fs::create_dir_all(&rootfs).expect("rootfs should be created");
 
@@ -562,6 +774,9 @@ mod tests {
 
         fs::create_dir_all(&appliance_profile_directory)
             .expect("appliance profile directory should be created");
+
+        fs::create_dir_all(&content_repository_directory)
+            .expect("content repository directory should be created");
 
         let build_context = BuildContext::new(
             rootfs.clone(),

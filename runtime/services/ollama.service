@@ -7,6 +7,7 @@ ExecStart=/usr/local/bin/ollama serve
 User=ollama
 Group=ollama
 StateDirectory=ollama
+Environment=HOME=/var/lib/ollama
 Environment=OLLAMA_MODELS=/var/lib/ollama/models
 Restart=always
 RestartSec=3

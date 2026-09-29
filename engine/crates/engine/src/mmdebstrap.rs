@@ -10,7 +10,18 @@ use std::{
 
 use crate::{BootstrapConfig, Bootstrapper, BuildContext};
 
-const BOOTSTRAP_PACKAGES: &[&str] = &["ca-certificates", "gnupg", "grub-efi-amd64", "efibootmgr"];
+const BOOTSTRAP_PACKAGES: &[&str] = &[
+    "ca-certificates",
+    "gnupg",
+    "grub-efi-amd64",
+    "efibootmgr",
+    "zstd",
+    "dosfstools",
+    "e2fsprogs",
+    "mmdebstrap",
+    "sudo",
+    "squashfs-tools",
+];
 
 trait CommandRunner: Send + Sync {
     fn status(&self, command: &mut Command) -> io::Result<ExitStatus>;
@@ -98,6 +109,7 @@ impl MmdebstrapBootstrapper {
 
         command
             .arg("--mode=root")
+            .arg("--skip=check/empty")
             .arg(format!("--include={}", BOOTSTRAP_PACKAGES.join(",")))
             .arg(format!("--variant={}", config.variant()))
             .arg(format!("--architectures={}", config.architecture()))
@@ -147,6 +159,7 @@ impl MmdebstrapBootstrapper {
         command
             .arg("mmdebstrap")
             .arg("--mode=root")
+            .arg("--skip=check/empty")
             .arg(format!("--include={}", BOOTSTRAP_PACKAGES.join(",")))
             .arg(format!("--variant={}", context.bootstrap().variant()))
             .arg(format!(
@@ -296,7 +309,10 @@ mod tests {
             arguments,
             vec![
                 OsStr::new("--mode=root"),
-                OsStr::new("--include=ca-certificates,gnupg,grub-efi-amd64,efibootmgr"),
+                OsStr::new("--skip=check/empty"),
+                OsStr::new(
+                    "--include=ca-certificates,gnupg,grub-efi-amd64,efibootmgr,zstd,dosfstools,e2fsprogs,mmdebstrap,sudo,squashfs-tools"
+                ),
                 OsStr::new("--variant=minbase"),
                 OsStr::new("--architectures=amd64"),
                 OsStr::new("--components=main,non-free-firmware"),
@@ -319,7 +335,10 @@ mod tests {
             arguments,
             vec![
                 OsStr::new("--mode=root"),
-                OsStr::new("--include=ca-certificates,gnupg,grub-efi-amd64,efibootmgr"),
+                OsStr::new("--skip=check/empty"),
+                OsStr::new(
+                    "--include=ca-certificates,gnupg,grub-efi-amd64,efibootmgr,zstd,dosfstools,e2fsprogs,mmdebstrap,sudo,squashfs-tools"
+                ),
                 OsStr::new("--variant=minbase"),
                 OsStr::new("--architectures=amd64"),
                 OsStr::new("--components=main,non-free-firmware"),

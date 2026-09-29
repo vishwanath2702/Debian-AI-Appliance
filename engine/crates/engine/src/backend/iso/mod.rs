@@ -29,6 +29,7 @@ pub struct IsoBackend {
     output_path: PathBuf,
     daia_payload_directory: Option<PathBuf>,
     mksquashfs_command: PathBuf,
+    privileged_squashfs: bool,
     xorriso_command: PathBuf,
     grub_mkrescue_command: PathBuf,
     grub: GrubConfig,
@@ -51,6 +52,7 @@ impl IsoBackend {
             output_path: output_path.into(),
             daia_payload_directory: None,
             mksquashfs_command: PathBuf::from("mksquashfs"),
+            privileged_squashfs: true,
             xorriso_command: PathBuf::from("xorriso"),
             grub_mkrescue_command: PathBuf::from("grub-mkrescue"),
             grub: GrubConfig {
@@ -62,7 +64,7 @@ kernel_command_line:
             },
             squashfs: SquashFsConfig {
                 compression: "xz".to_owned(),
-                exclusions: vec!["boot".to_owned()],
+                exclusions: Vec::new(),
             },
             inspector: Box::new(DebianIsoInspector::new()),
         }
@@ -99,7 +101,7 @@ kernel_command_line:
         &self.work_directory
     }
 
-    /// Returns the DAIA installer payload directory to include in the ISO.
+    /// Returns the DAIA payload directory to include in the ISO.
     #[must_use]
     pub fn daia_payload_directory(&self) -> Option<&Path> {
         self.daia_payload_directory.as_deref()
@@ -162,6 +164,7 @@ impl BuildBackend for IsoBackend {
                 output_iso: self.output_path.clone(),
                 daia_payload_directory: self.daia_payload_directory.clone(),
                 mksquashfs_command: self.mksquashfs_command.clone(),
+                privileged_squashfs: self.privileged_squashfs,
                 xorriso_command: self.xorriso_command.clone(),
                 grub_mkrescue_command: self.grub_mkrescue_command.clone(),
                 layout: self.layout(),
@@ -267,7 +270,7 @@ mod tests {
         create_fake_mksquashfs(&fake_mksquashfs);
         create_fake_xorriso(&fake_xorriso);
 
-        let backend = IsoBackend::new(
+        let mut backend = IsoBackend::new(
             temp.path().join("rootfs"),
             &source_iso,
             temp.path().join("work"),
@@ -276,6 +279,8 @@ mod tests {
         .with_mksquashfs_command(&fake_mksquashfs)
         .with_xorriso_command(&fake_xorriso)
         .with_iso_inspector(TestIsoInspector);
+
+        backend.privileged_squashfs = false;
 
         let boot_directory = backend.rootfs().join("boot");
 
@@ -294,6 +299,37 @@ mod tests {
         }
     }
     #[test]
+    fn squashfs_creation_is_privileged_by_default() {
+        let backend = IsoBackend::new(
+            "build/rootfs",
+            "images/source.iso",
+            "build/work",
+            "build/output.iso",
+        );
+
+        assert!(backend.privileged_squashfs);
+    }
+
+    #[test]
+    fn squashfs_includes_boot_directory_by_default() {
+        let backend = IsoBackend::new(
+            "build/rootfs",
+            "images/source.iso",
+            "build/work",
+            "build/output.iso",
+        );
+
+        assert!(
+            !backend
+                .squashfs
+                .exclusions
+                .iter()
+                .any(|path| path == "boot"),
+            "production SquashFS must include /boot so the installed system retains its kernel and initramfs"
+        );
+    }
+
+    #[test]
     fn creates_backend_from_build_context() {
         let bootstrap = BootstrapConfig::new(
             "bookworm",
@@ -310,18 +346,13 @@ mod tests {
             "build/output.iso",
             "registry/assets",
             bootstrap,
-        )
-        .with_daia_payload_directory("installer/files");
+        );
         let backend = IsoBackend::from_context(&context);
 
         assert_eq!(backend.rootfs(), context.rootfs());
         assert_eq!(backend.source_iso(), context.source_iso());
         assert_eq!(backend.work_directory(), context.work_directory());
         assert_eq!(backend.output_path(), context.output_iso());
-        assert_eq!(
-            backend.daia_payload_directory(),
-            context.daia_payload_directory()
-        );
     }
     #[test]
     fn build_creates_bootable_iso_workspace_and_output_image() {
@@ -353,43 +384,6 @@ mod tests {
 ));
         assert!(grub_contents.contains("initrd /live/initrd.img"));
     }
-    #[test]
-    fn build_publishes_daia_payload_into_iso_workspace() {
-        let (temp, backend) = create_test_backend();
-
-        let payload = temp.path().join("payload");
-        let runtime = payload.join("opt/daia");
-
-        fs::create_dir_all(&runtime).expect("payload directory should be created");
-        fs::write(runtime.join("install.sh"), b"installer")
-            .expect("payload file should be written");
-
-        let context = BuildContext::new(
-            backend.rootfs(),
-            backend.source_iso(),
-            backend.work_directory(),
-            backend.output_path(),
-            temp.path().join("assets"),
-            BootstrapConfig::default(),
-        )
-        .with_daia_payload_directory(&payload);
-
-        let mut backend = IsoBackend::from_context(&context)
-            .with_mksquashfs_command(temp.path().join("mksquashfs"))
-            .with_xorriso_command(temp.path().join("xorriso"))
-            .with_iso_inspector(TestIsoInspector);
-
-        backend
-            .build(&test_plan())
-            .expect("ISO build should publish DAIA payload");
-
-        assert_eq!(
-            fs::read(backend.layout().daia_payload().join("opt/daia/install.sh"))
-                .expect("published DAIA payload should be readable"),
-            b"installer"
-        );
-    }
-
     #[test]
     fn build_uses_custom_squashfs_configuration() {
         let (temp, backend) = create_test_backend();

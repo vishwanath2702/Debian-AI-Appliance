@@ -128,7 +128,7 @@ work/extract/daia/
 The rebuilt ISO exposes the runtime under:
 
 ```text
-/cdrom/daia/
+/run/live/medium/daia/
 ```
 
 During Debian installation, the target filesystem is mounted under:
@@ -324,7 +324,7 @@ work/extract/
 The resulting ISO later exposes the DAIA content to the Debian installer under:
 
 ```text
-/cdrom/daia/
+/run/live/medium/daia/
 ```
 
 ---
@@ -382,7 +382,7 @@ This avoids leaving stale files from a previous installation or retry.
 The hook copies:
 
 ```text
-/cdrom/daia/opt/daia
+/run/live/medium/daia/opt/daia
 ```
 
 to:
@@ -399,7 +399,7 @@ installed file by file.
 The hook copies:
 
 ```text
-/cdrom/daia/etc/systemd/system/daia-firstboot.service
+/run/live/medium/daia/etc/systemd/system/daia-firstboot.service
 ```
 
 to:

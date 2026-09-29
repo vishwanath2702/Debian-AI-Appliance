@@ -12,10 +12,12 @@ build/
 !/build/
 build/*
 !/build/fetch-docker-packages.sh
+!/build/fetch-ollama.sh
 !/build/prepare-package-state.sh
 
 # Generated offline package payloads
 /payload/packages/docker/*.deb
+/payload/packages/ollama/*.tar.zst
 
 # Temporary and backup files
 *.orig

@@ -47,7 +47,10 @@ impl StorageInspector for LinuxStorageInspector {
             .into_iter()
             .filter(|device| device.device_type == "disk")
             .map(|device| {
-                let kind = if Path::new(&device.path) == system_disk_path {
+                let kind = if system_disk_path
+                    .as_deref()
+                    .is_some_and(|system_disk| Path::new(&device.path) == system_disk)
+                {
                     model::StorageKind::System
                 } else if device.rm {
                     model::StorageKind::Removable
@@ -132,8 +135,12 @@ impl LinuxStorageInspector {
         Ok(PathBuf::from(source))
     }
 
-    fn system_disk_path(&self) -> Result<PathBuf, StorageInspectError> {
+    fn system_disk_path(&self) -> Result<Option<PathBuf>, StorageInspectError> {
         let root_source = self.root_source()?;
+
+        if !root_source.starts_with("/dev") {
+            return Ok(None);
+        }
 
         let output = Command::new(&self.command)
             .arg("--paths")
@@ -160,7 +167,7 @@ impl LinuxStorageInspector {
             ));
         }
 
-        Ok(PathBuf::from(parent))
+        Ok(Some(PathBuf::from(parent)))
     }
 }
 
@@ -178,7 +185,13 @@ fn storage_identity(device: &LsblkDevice) -> String {
 
 #[cfg(test)]
 mod tests {
-    use std::{fs, os::unix::fs::PermissionsExt};
+    use std::{
+        fs::{self, File},
+        io::Write,
+        os::unix::fs::PermissionsExt,
+        thread,
+        time::Duration,
+    };
 
     use super::{LinuxStorageInspector, storage_identity};
     use crate::{StorageInspectError, StorageInspector, lsblk::LsblkDevice};
@@ -188,16 +201,32 @@ mod tests {
     fn command_script(contents: &str) -> (TempDir, std::path::PathBuf) {
         let directory = TempDir::new().expect("temporary directory should be created");
         let command = directory.path().join("lsblk");
+        let temporary_command = directory.path().join("lsblk.tmp");
 
-        fs::write(&command, contents).expect("test command should be written");
+        let mut file =
+            File::create(&temporary_command).expect("temporary test command should be created");
 
-        let mut permissions = fs::metadata(&command)
-            .expect("test command metadata should be readable")
+        file.write_all(contents.as_bytes())
+            .expect("test command should be written");
+
+        file.sync_all()
+            .expect("test command should be synchronized");
+
+        drop(file);
+
+        let mut permissions = fs::metadata(&temporary_command)
+            .expect("temporary test command metadata should be readable")
             .permissions();
 
         permissions.set_mode(0o755);
 
-        fs::set_permissions(&command, permissions).expect("test command should be executable");
+        fs::set_permissions(&temporary_command, permissions)
+            .expect("temporary test command should be executable");
+
+        fs::rename(&temporary_command, &command)
+            .expect("temporary test command should be installed");
+
+        thread::sleep(Duration::from_millis(10));
 
         (directory, command)
     }
@@ -217,7 +246,10 @@ exit 1
             .root_source()
             .expect_err("root-source inspection should fail");
 
-        assert!(matches!(error, StorageInspectError::ProcessFailed { .. }));
+        assert!(
+            matches!(error, StorageInspectError::ProcessFailed { .. }),
+            "unexpected findmnt error: {error:?}"
+        );
         assert!(error.to_string().contains("findmnt failed"));
     }
 
@@ -243,7 +275,10 @@ exit 0
             .system_disk_path()
             .expect_err("empty root parent should fail");
 
-        assert!(matches!(error, StorageInspectError::InvalidOutput(_)));
+        assert!(
+            matches!(error, StorageInspectError::InvalidOutput(_)),
+            "unexpected root-parent error: {error:?}"
+        );
         assert!(error.to_string().contains("empty root parent disk"));
     }
 
@@ -385,6 +420,56 @@ esac
 
         assert_eq!(storage[2].device_path(), std::path::Path::new("/dev/sdc"));
         assert_eq!(storage[2].kind(), StorageKind::Removable);
+    }
+
+    #[test]
+    fn discovers_installable_disk_when_root_is_live_overlay() {
+        let (_findmnt_directory, findmnt_command) = command_script(
+            r"#!/bin/sh
+echo 'overlay'
+",
+        );
+
+        let (_lsblk_directory, lsblk_command) = command_script(
+            r#"#!/bin/sh
+
+case "$*" in
+  *"PKNAME"*)
+    echo 'lsblk must not inspect a non-device root source' >&2
+    exit 32
+    ;;
+  *)
+    cat <<'EOF'
+{
+  "blockdevices": [
+    {
+      "path": "/dev/vda",
+      "type": "disk",
+      "rm": false,
+      "wwn": null,
+      "serial": "INSTALL001",
+      "size": 42949672960
+    }
+  ]
+}
+EOF
+    ;;
+esac
+"#,
+        );
+
+        let inspector = LinuxStorageInspector::new()
+            .with_command(lsblk_command)
+            .with_findmnt_command(findmnt_command);
+
+        let storage = inspector
+            .inspect()
+            .expect("live-root storage discovery should succeed");
+
+        assert_eq!(storage.len(), 1);
+        assert_eq!(storage[0].device_path(), std::path::Path::new("/dev/vda"));
+        assert_eq!(storage[0].kind(), StorageKind::Secondary);
+        assert_eq!(storage[0].size_bytes(), Some(42_949_672_960));
     }
 
     #[test]

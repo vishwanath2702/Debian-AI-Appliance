@@ -11,36 +11,24 @@ echo "      DAIA BUILD PIPELINE"
 echo "========================================"
 echo
 
-echo "[1/8] Validating project..."
+echo "[1/5] Validating project..."
 "$SCRIPT_DIR/check.sh"
 
 echo
-echo "[2/8] Cleaning workspace..."
+echo "[2/5] Cleaning workspace..."
 "$SCRIPT_DIR/clean.sh"
 
 echo
-echo "[3/8] Extracting Debian ISO..."
-"$SCRIPT_DIR/extract.sh"
-
-echo
-echo "[4/8] Patching boot configuration..."
-"$SCRIPT_DIR/patch.sh"
-
-echo
-echo "[5/8] Building DAIA payload..."
+echo "[3/5] Building DAIA payload..."
 "$SCRIPT_DIR/build-payload.sh"
 
 echo
-echo "[6/8] Injecting DAIA..."
-"$SCRIPT_DIR/inject.sh"
+echo "[4/5] Building DAIA release binary..."
+cargo build     --release     --manifest-path "$PROJECT_ROOT/engine/Cargo.toml"     -p cli
 
 echo
-echo "[7/8] Verifying injection..."
-"$SCRIPT_DIR/verify.sh"
-
-echo
-echo "[8/8] Building ISO..."
-"$SCRIPT_DIR/rebuild.sh"
+echo "[5/5] Building DAIA ISO with Rust engine..."
+"$PROJECT_ROOT/engine/target/release/daia"     build-iso     desktop     "$WORK_DIR/rootfs"     "$SOURCE_ISO"     "$WORK_DIR/iso-build"     "$OUTPUT_ISO"     "$WORK_DIR/payload/daia"
 
 echo
 echo "Calculating SHA256..."

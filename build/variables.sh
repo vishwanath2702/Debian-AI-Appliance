@@ -15,7 +15,6 @@ PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ISO_DIR="$PROJECT_ROOT/iso"
 WORK_DIR="$PROJECT_ROOT/work"
 OUTPUT_DIR="$PROJECT_ROOT/output"
-INSTALLER_DIR="$PROJECT_ROOT/installer"
 
 MOUNT_DIR="$WORK_DIR/mount"
 EXTRACT_DIR="$WORK_DIR/extract"

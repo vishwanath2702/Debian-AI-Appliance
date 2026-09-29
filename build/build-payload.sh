@@ -137,6 +137,7 @@ DAIA_LIB_TARGET="$DAIA_ROOT_TARGET/lib"
 DAIA_MODULES_TARGET="$DAIA_ROOT_TARGET/modules"
 DAIA_SERVICES_TARGET="$DAIA_ROOT_TARGET/services"
 DAIA_SYSUSERS_TARGET="$DAIA_ROOT_TARGET/sysusers.d"
+DAIA_SYSTEMD_TARGET="$DAIA_WORKSPACE/etc/systemd/system"
 
 DAIA_PAYLOAD_TARGET="$DAIA_ROOT_TARGET/payload"
 DAIA_PACKAGES_TARGET="$DAIA_PAYLOAD_TARGET/packages"
@@ -366,6 +367,16 @@ stage_runtime()
         "$DAIA_RUNTIME_SOURCE/modules" \
         "$DAIA_MODULES_TARGET"
 
+    ensure_directory "$DAIA_ROOT_TARGET/manifests"
+
+    copy_file \
+        "$PROJECT_ROOT/payload/packages/manifests/desktop.lst" \
+        "$DAIA_ROOT_TARGET/manifests/desktop.lst" \
+        0644
+
+    record_staged_component \
+        "Desktop package manifest staged successfully."
+
     stage_runtime_directory \
         "Runtime service definitions" \
         "$DAIA_RUNTIME_SOURCE/services" \
@@ -387,6 +398,29 @@ stage_runtime()
             "Runtime orchestrator staged successfully."
     fi
 
+    if [[ -f "$DAIA_RUNTIME_SOURCE/firstboot.sh" ]]
+    then
+        copy_file \
+            "$DAIA_RUNTIME_SOURCE/firstboot.sh" \
+            "$DAIA_ROOT_TARGET/firstboot.sh" \
+            0755
+
+        record_staged_component \
+            "First-boot orchestrator staged successfully."
+    fi
+
+    if [[ -f "$DAIA_RUNTIME_SOURCE/systemd/daia-firstboot.service" ]]
+    then
+        ensure_directory "$DAIA_SYSTEMD_TARGET"
+
+        copy_file \
+            "$DAIA_RUNTIME_SOURCE/systemd/daia-firstboot.service" \
+            "$DAIA_SYSTEMD_TARGET/daia-firstboot.service" \
+            0644
+
+        record_staged_component \
+            "First-boot systemd service staged successfully."
+    fi
 }
 
 ############################################################

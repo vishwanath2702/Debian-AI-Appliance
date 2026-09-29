@@ -26,6 +26,7 @@ struct BuildOptions {
     source_iso: PathBuf,
     work_directory: PathBuf,
     output_iso: PathBuf,
+    daia_payload_directory: PathBuf,
 }
 
 fn daia_data_directory() -> PathBuf {
@@ -68,6 +69,7 @@ fn run(arguments: &[String]) -> ExitCode {
             source_iso,
             work_directory,
             output_iso,
+            daia_payload_directory,
         ] if command == "build-iso" => run_iso_build(
             capability_name,
             &BuildOptions {
@@ -75,6 +77,7 @@ fn run(arguments: &[String]) -> ExitCode {
                 source_iso: PathBuf::from(source_iso),
                 work_directory: PathBuf::from(work_directory),
                 output_iso: PathBuf::from(output_iso),
+                daia_payload_directory: PathBuf::from(daia_payload_directory),
             },
         ),
         _ => {
@@ -192,12 +195,10 @@ fn create_build_context(
     .into());
     }
 
-    let daia_payload_directory =
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../installer/files");
-    if !daia_payload_directory.is_dir() {
+    if !options.daia_payload_directory.is_dir() {
         return Err(format!(
-            "DAIA installer payload directory not found at {}",
-            daia_payload_directory.display()
+            "DAIA payload directory not found at {}",
+            options.daia_payload_directory.display()
         )
         .into());
     }
@@ -211,7 +212,7 @@ fn create_build_context(
         bootstrap,
     )
     .with_daia_binary(daia_binary)
-    .with_daia_payload_directory(daia_payload_directory))
+    .with_daia_payload_directory(options.daia_payload_directory.clone()))
 }
 
 fn print_plan(plan: &Plan) {
@@ -231,13 +232,15 @@ fn print_usage() {
     eprintln!("    daia <capability>");
     eprintln!("    daia plan <capability>");
     eprintln!(
-        "    daia build-iso <capability> <rootfs> <source-iso> <work-directory> <output-iso>"
+        "    daia build-iso <capability> <rootfs> <source-iso> <work-directory> <output-iso> <daia-payload-directory>"
     );
     eprintln!();
     eprintln!("Examples:");
     eprintln!("    daia desktop");
     eprintln!("    daia plan desktop");
-    eprintln!("    daia build-iso desktop /rootfs source.iso /tmp/daia-work output.iso");
+    eprintln!(
+        "    daia build-iso desktop /rootfs source.iso /tmp/daia-work output.iso /tmp/daia-payload"
+    );
     eprintln!("    daia plan-profile <profile>");
     eprintln!("    daia plan-profile desktop");
 }
@@ -840,6 +843,24 @@ fn confirm_wizard_state(prompt: &str) -> Result<bool, String> {
     Ok(parse_wizard_confirmation(&input))
 }
 
+fn prompt_administrator_password() -> Result<String, String> {
+    let password = rpassword::prompt_password("Administrator password: ")
+        .map_err(|error| format!("Error reading administrator password: {error}"))?;
+
+    if password.is_empty() {
+        return Err("Error: administrator password cannot be empty".to_owned());
+    }
+
+    let confirmation = rpassword::prompt_password("Confirm administrator password: ")
+        .map_err(|error| format!("Error reading administrator password confirmation: {error}"))?;
+
+    if password != confirmation {
+        return Err("Error: administrator passwords do not match".to_owned());
+    }
+
+    Ok(password)
+}
+
 fn prepare_wizard_appliance(
     engine: &Engine,
     config: &model::ApplianceConfiguration,
@@ -898,16 +919,15 @@ fn installation_operation_name(operation: &InstallationOperation) -> String {
             format!("Mount {} filesystems", mounts.len())
         }
 
-        InstallationOperation::BootstrapSystem { root, .. } => {
-            format!("Bootstrap system at {}", root.display())
+        InstallationOperation::InstallSystemImage { root, image } => {
+            format!(
+                "Install system image {} at {}",
+                image.display(),
+                root.display()
+            )
         }
-
-        InstallationOperation::ApplyPlans { plans } => {
-            if plans.len() == 1 {
-                "Apply 1 appliance plan".to_owned()
-            } else {
-                format!("Apply {} appliance plans", plans.len())
-            }
+        InstallationOperation::NormalizeInstalledSystem { root } => {
+            format!("Normalize installed system at {}", root.display())
         }
 
         InstallationOperation::CreateAdministrator { user, .. } => {
@@ -1049,10 +1069,9 @@ fn load_package_repository() -> Result<PackageRepository, String> {
 fn execute_system_installation(
     engine: &Engine,
     prepared: &engine::PreparedApplianceInstallation,
-    package_repository: PackageRepository,
+    administrator_password: String,
 ) -> Result<(), String> {
-    let mut executor =
-        SystemInstallationOperationExecutor::new(asset_directory(), package_repository);
+    let mut executor = SystemInstallationOperationExecutor::new(administrator_password);
 
     engine
         .execute_appliance_installation(prepared, &mut executor)
@@ -1062,12 +1081,12 @@ fn execute_system_installation(
 fn execute_confirmed_installation(
     engine: &Engine,
     prepared: &engine::PreparedApplianceInstallation,
-    package_repository: PackageRepository,
+    administrator_password: String,
 ) -> Result<(), String> {
     println!();
     println!("Starting installation...");
 
-    execute_system_installation(engine, prepared, package_repository)?;
+    execute_system_installation(engine, prepared, administrator_password)?;
 
     println!("Installation complete.");
 
@@ -1141,13 +1160,23 @@ fn run_install() -> ExitCode {
     println!("  {selected_storage}");
 
     match confirm_wizard_state("Erase this disk and start installation? [y/N]: ") {
-        Ok(true) => match execute_confirmed_installation(&engine, &prepared, package_repository) {
-            Ok(_) => ExitCode::SUCCESS,
-            Err(error) => {
-                eprintln!("{error}");
-                ExitCode::FAILURE
+        Ok(true) => {
+            let administrator_password = match prompt_administrator_password() {
+                Ok(password) => password,
+                Err(error) => {
+                    eprintln!("{error}");
+                    return ExitCode::FAILURE;
+                }
+            };
+
+            match execute_confirmed_installation(&engine, &prepared, administrator_password) {
+                Ok(_) => ExitCode::SUCCESS,
+                Err(error) => {
+                    eprintln!("{error}");
+                    ExitCode::FAILURE
+                }
             }
-        },
+        }
         Ok(false) => {
             println!("Installation cancelled.");
             ExitCode::SUCCESS
@@ -1758,11 +1787,13 @@ mod tests {
             source_iso: PathBuf::from("source.iso"),
             work_directory: PathBuf::from("work"),
             output_iso: PathBuf::from("output.iso"),
+            daia_payload_directory: PathBuf::from("payload"),
         };
 
         assert_eq!(options.rootfs, PathBuf::from("rootfs"));
         assert_eq!(options.source_iso, PathBuf::from("source.iso"));
         assert_eq!(options.work_directory, PathBuf::from("work"));
         assert_eq!(options.output_iso, PathBuf::from("output.iso"));
+        assert_eq!(options.daia_payload_directory, PathBuf::from("payload"));
     }
 }

@@ -115,7 +115,7 @@ openwebui_verify() {
     fi
 
     if ! docker inspect \
-        -f '{{range .Mounts}}{{println .Name ":" .Destination}}' \
+        -f '{{(index .Mounts 0).Name}}:{{(index .Mounts 0).Destination}}' \
         "$container_name" |
         grep -Fxq "${DAIA_OPEN_WEBUI_VOLUME:-open-webui}:/app/backend/data"
     then

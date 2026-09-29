@@ -44,17 +44,34 @@ impl From<io::Error> for AptInstallerError {
 }
 
 /// Installs packages using APT.
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct AptInstaller {
     updated: Cell<bool>,
+    use_sudo: bool,
+}
+
+impl Default for AptInstaller {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl AptInstaller {
-    /// Creates an APT package installer.
+    /// Creates an APT package installer that elevates through sudo.
     #[must_use]
     pub const fn new() -> Self {
         Self {
             updated: Cell::new(false),
+            use_sudo: true,
+        }
+    }
+
+    /// Creates an APT package installer for an already-privileged process.
+    #[must_use]
+    pub const fn new_unprivileged() -> Self {
+        Self {
+            updated: Cell::new(false),
+            use_sudo: false,
         }
     }
 
@@ -82,12 +99,18 @@ impl AptInstaller {
         args
     }
 
-    fn run_in_rootfs(rootfs: &Path, args: &[String]) -> Result<(), AptInstallerError> {
-        let status = std::process::Command::new("sudo")
-            .arg("/usr/sbin/chroot")
-            .arg(rootfs)
-            .args(args)
-            .status()?;
+    fn run_in_rootfs(&self, rootfs: &Path, args: &[String]) -> Result<(), AptInstallerError> {
+        let mut command;
+
+        if self.use_sudo {
+            command = std::process::Command::new("sudo");
+            command.arg("/usr/sbin/chroot");
+        } else {
+            command = std::process::Command::new("/usr/sbin/chroot");
+        }
+
+        let status = command.arg(rootfs).args(args).status()?;
+
         if !status.success() {
             return Err(AptInstallerError::CommandFailed(status));
         }
@@ -101,7 +124,7 @@ impl AptInstaller {
         }
 
         let args = Self::update_command_args();
-        Self::run_in_rootfs(rootfs, &args)?;
+        self.run_in_rootfs(rootfs, &args)?;
         self.updated.set(true);
 
         Ok(())
@@ -113,10 +136,10 @@ impl PackageInstaller for AptInstaller {
         self.update_once(rootfs)?;
 
         let args = Self::install_command_args(packages);
-        Self::run_in_rootfs(rootfs, &args)?;
+        self.run_in_rootfs(rootfs, &args)?;
 
         let initramfs_args = Self::update_initramfs_command_args();
-        Self::run_in_rootfs(rootfs, &initramfs_args)?;
+        self.run_in_rootfs(rootfs, &initramfs_args)?;
 
         Ok(())
     }

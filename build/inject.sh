@@ -4,10 +4,10 @@
 # DAIA - Debian AI Assistant
 #
 # File       : build/inject.sh
-# Purpose    : Inject the DAIA installer files and assembled
-#              payload workspace into the extracted ISO.
+# Purpose    : Inject the assembled DAIA payload workspace
+#              into the extracted ISO.
 #
-# Version    : 1.1.0
+# Version    : 1.2.0
 # Codename   : Pragna
 # License    : GPL-3.0
 #
@@ -15,33 +15,19 @@
 # ----------------
 # - Load the project build environment and DAIA configuration.
 # - Validate the extracted Debian ISO workspace.
-# - Validate the installer configuration and hooks.
 # - Validate the generated DAIA payload workspace.
 # - Remove any previously injected DAIA content.
-# - Copy the Debian Preseed configuration.
-# - Copy the established installer runtime.
-# - Overlay the assembled payload workspace.
-# - Copy installer hooks.
+# - Copy the assembled payload workspace into the ISO.
 # - Apply executable permissions.
 # - Verify all required files after injection.
 #
-# Transitional Architecture
-# -------------------------
-# DAIA currently has two runtime sources:
+# Architecture
+# ------------
+# work/payload/daia/ is the canonical DAIA distribution
+# payload assembled by build/build-payload.sh.
 #
-#   installer/files/
-#       Contains the proven installation runtime, including
-#       install.sh and the first-boot service.
-#
-#   work/payload/daia/
-#       Contains the newly assembled distribution payload,
-#       runtime libraries, modules, packages, images, models,
-#       branding, and BUILD-INFO metadata.
-#
-# The installer runtime is copied first. The payload workspace
-# is then overlaid on top of it. This preserves the working
-# installer while allowing the new distribution architecture
-# to enter the ISO safely.
+# The Rust installer consumes the resulting ISO payload from
+# /run/live/medium/daia and deploys it into the installed target.
 #
 # Dependencies
 # ------------
@@ -56,16 +42,11 @@
 #
 # Inputs
 # ------
-# - installer/preseed.cfg
-# - installer/hooks/
-# - installer/files/
 # - work/payload/daia/
 # - work/extract/
 #
 # Outputs
 # -------
-# - work/extract/preseed.cfg
-# - work/extract/installer/hooks/
 # - work/extract/daia/
 #
 # Failure Modes
@@ -73,18 +54,8 @@
 # The script exits non-zero when:
 # - the extracted ISO directory is missing;
 # - the payload workspace is missing;
-# - the Preseed configuration is missing;
-# - installer hooks are missing;
-# - the established installer runtime is missing;
+# - required payload content is missing;
 # - a required copied file cannot be verified.
-#
-# Future Migration
-# ----------------
-# Once install.sh, systemd services, and all
-# installer runtime files have moved into runtime/ and are
-# assembled entirely by build-payload.sh, the direct copy from
-# installer/files/ can be removed in a dedicated migration
-# task.
 #
 # Usage
 # -----
@@ -156,17 +127,10 @@ source "$PROJECT_ROOT/runtime/lib/validation.sh"
 # 2. Source and Destination Paths
 ############################################################
 
-PRESEED_SOURCE="$INSTALLER_DIR/preseed.cfg"
-INSTALLER_FILES_SOURCE="$INSTALLER_DIR/files"
-INSTALLER_HOOKS_SOURCE="$INSTALLER_DIR/hooks"
-
 PAYLOAD_WORKSPACE="$WORK_DIR/payload"
 PAYLOAD_DAIA_SOURCE="$PAYLOAD_WORKSPACE/daia"
 PAYLOAD_BUILD_INFO="$PAYLOAD_DAIA_SOURCE/opt/daia/BUILD-INFO"
 
-ISO_PRESEED_TARGET="$EXTRACT_DIR/preseed.cfg"
-ISO_INSTALLER_TARGET="$EXTRACT_DIR/installer"
-ISO_HOOKS_TARGET="$ISO_INSTALLER_TARGET/hooks"
 ISO_DAIA_TARGET="$EXTRACT_DIR/daia"
 
 injected_files_verified=0
@@ -251,22 +215,6 @@ validate_injection_inputs()
         "Extracted Debian ISO workspace" \
         "$EXTRACT_DIR"
 
-    require_nonempty_file \
-        "Debian Preseed configuration" \
-        "$PRESEED_SOURCE"
-
-    require_directory \
-        "Established installer runtime" \
-        "$INSTALLER_FILES_SOURCE"
-
-    require_directory \
-        "Installer hooks" \
-        "$INSTALLER_HOOKS_SOURCE"
-
-    require_nonempty_file \
-        "Late-install hook" \
-        "$INSTALLER_HOOKS_SOURCE/late-install.sh"
-
     require_directory \
         "Generated payload workspace" \
         "$PAYLOAD_DAIA_SOURCE"
@@ -274,14 +222,6 @@ validate_injection_inputs()
     require_nonempty_file \
         "Payload build metadata" \
         "$PAYLOAD_BUILD_INFO"
-
-    require_nonempty_file \
-        "Installer entry point" \
-        "$INSTALLER_FILES_SOURCE/opt/daia/install.sh"
-
-    require_nonempty_file \
-        "First-boot systemd service" \
-        "$INSTALLER_FILES_SOURCE/etc/systemd/system/daia-firstboot.service"
 
     log_success "All injection inputs are valid."
 }
@@ -307,38 +247,13 @@ clean_previous_injection()
     log_section "Cleaning previous DAIA injection"
 
     remove_path "$ISO_DAIA_TARGET"
-    remove_path "$ISO_INSTALLER_TARGET"
-    remove_path "$ISO_PRESEED_TARGET"
+
+    # Remove artifacts produced by the retired Debian Installer
+    # integration so they cannot survive from an older workspace.
+    remove_path "$EXTRACT_DIR/preseed.cfg"
+    remove_path "$EXTRACT_DIR/installer"
 
     log_success "Previous injected DAIA content removed."
-}
-
-############################################################
-# 5. Installer Configuration Injection
-############################################################
-
-############################################################
-# inject_preseed_configuration
-#
-# Copy the Debian installer automation configuration into the
-# root of the extracted ISO.
-#
-# Arguments:
-#   None
-#
-# Returns:
-#   0 on success.
-############################################################
-inject_preseed_configuration()
-{
-    log_section "Injecting Debian installer configuration"
-
-    copy_file \
-        "$PRESEED_SOURCE" \
-        "$ISO_PRESEED_TARGET" \
-        0644
-
-    log_success "Preseed configuration injected."
 }
 
 ############################################################
@@ -346,42 +261,13 @@ inject_preseed_configuration()
 ############################################################
 
 ############################################################
-# inject_established_runtime
-#
-# Copy the currently proven installer runtime into the ISO.
-#
-# This remains the base layer until all installation runtime
-# files have been migrated to the new runtime architecture.
-#
-# Arguments:
-#   None
-#
-# Returns:
-#   0 on success.
-############################################################
-inject_established_runtime()
-{
-    log_section "Injecting established DAIA installer runtime"
-
-    ensure_directory "$ISO_DAIA_TARGET"
-
-    rsync \
-        --archive \
-        "$INSTALLER_FILES_SOURCE/" \
-        "$ISO_DAIA_TARGET/"
-
-
-    log_success "Established installer runtime injected."
-}
-
-############################################################
 # overlay_payload_workspace
 #
-# Overlay the assembled DAIA distribution workspace onto the
-# established runtime already copied into the ISO.
+# Copy the assembled DAIA distribution workspace into the
+# extracted ISO.
 #
-# rsync is used for overlay semantics because copy_directory
-# intentionally replaces its destination.
+# rsync preserves the assembled payload hierarchy and file
+# metadata while excluding source-control placeholder files.
 #
 # Arguments:
 #   None
@@ -409,36 +295,6 @@ overlay_payload_workspace()
 }
 
 ############################################################
-# 7. Installer Hook Injection
-############################################################
-
-############################################################
-# inject_installer_hooks
-#
-# Copy the installer-time DAIA hooks into the extracted ISO.
-#
-# Arguments:
-#   None
-#
-# Returns:
-#   0 on success.
-############################################################
-inject_installer_hooks()
-{
-    log_section "Injecting installer hooks"
-
-    ensure_directory "$ISO_HOOKS_TARGET"
-
-    rsync \
-        --archive \
-        --exclude='.gitkeep' \
-        "$INSTALLER_HOOKS_SOURCE/" \
-        "$ISO_HOOKS_TARGET/"
-
-    log_success "Installer hooks injected."
-}
-
-############################################################
 # 8. Permission Management
 ############################################################
 
@@ -459,8 +315,8 @@ apply_injected_permissions()
     log_section "Applying injected file permissions"
 
     chmod 0755 \
-        "$ISO_HOOKS_TARGET/late-install.sh" \
-        "$ISO_DAIA_TARGET/opt/daia/install.sh"
+        "$ISO_DAIA_TARGET/opt/daia/runtime.sh" \
+        "$ISO_DAIA_TARGET/opt/daia/firstboot.sh"
 
     if [[ -d "$ISO_DAIA_TARGET/opt/daia/modules" ]]
     then
@@ -530,16 +386,12 @@ verify_injected_content()
     log_section "Verifying injected DAIA content"
 
     verify_injected_file \
-        "Preseed configuration" \
-        "$ISO_PRESEED_TARGET"
+        "DAIA runtime orchestrator" \
+        "$ISO_DAIA_TARGET/opt/daia/runtime.sh"
 
     verify_injected_file \
-        "Late-install hook" \
-        "$ISO_HOOKS_TARGET/late-install.sh"
-
-    verify_injected_file \
-        "DAIA installer entry point" \
-        "$ISO_DAIA_TARGET/opt/daia/install.sh"
+        "DAIA first-boot orchestrator" \
+        "$ISO_DAIA_TARGET/opt/daia/firstboot.sh"
 
     verify_injected_file \
         "DAIA first-boot service" \
@@ -605,10 +457,7 @@ main()
 
     validate_injection_inputs
     clean_previous_injection
-    inject_preseed_configuration
-    inject_established_runtime
     overlay_payload_workspace
-    inject_installer_hooks
     apply_injected_permissions
     verify_injected_content
     display_summary

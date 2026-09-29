@@ -433,7 +433,7 @@ fi
 
 if ! validate_supported_value \
     DAIA_DESKTOP_ENVIRONMENT \
-    xfce
+    kde
 then
     configuration_errors=$((configuration_errors + 1))
 fi
