@@ -8,6 +8,7 @@ packages:
   - initramfs-tools
   - xserver-xorg
   - task-kde-desktop
+  - kwin-x11
 
   # Desktop essentials
   - konsole

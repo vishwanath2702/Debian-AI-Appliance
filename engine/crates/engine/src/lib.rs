@@ -34,10 +34,10 @@ use inspector::{
 pub use mmdebstrap::{MmdebstrapBootstrapper, MmdebstrapError};
 use model::{
     ApplianceProfile, Capability, ContentImportDestination, ContentImportIntent, ContentRepository,
-    ContentRepositoryId, ContentSource, CurrentResource, CurrentRevision, CurrentStateProposal,
-    DiscoveredContent, DiscoveredStorage, ExternalContentItem, ExternalContentItemId,
-    ImportedContentItem, InferenceEngineArchitectureSupport, InferenceEngineId, InstallationIntent,
-    Observation, ObservationSourceId, ObservationTimestamp, Plan, ResourceId, SchemaVersion,
+    ContentSource, CurrentResource, CurrentRevision, CurrentStateProposal, DiscoveredContent,
+    DiscoveredStorage, ExternalContentItem, ExternalContentItemId, ImportedContentItem,
+    InferenceEngineArchitectureSupport, InferenceEngineId, InstallationIntent, Observation,
+    ObservationSourceId, ObservationTimestamp, Plan, ResourceId, SchemaVersion,
     ServiceCurrentState, ServiceDesiredState, StorageKind, VerificationConditionResult,
     VerificationEvidenceReference, VerificationOverallResult, VerificationProviderId,
     VerificationProviderVersion, VerificationRequest, VerificationResult, VerificationResultId,

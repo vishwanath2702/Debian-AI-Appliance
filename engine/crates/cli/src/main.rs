@@ -1142,13 +1142,10 @@ fn run_install() -> ExitCode {
 
     print_installation_plan(&installation_plan);
 
-    let package_repository = match load_package_repository() {
-        Ok(repository) => repository,
-        Err(error) => {
-            eprintln!("{error}");
-            return ExitCode::FAILURE;
-        }
-    };
+    if let Err(error) = load_package_repository() {
+        eprintln!("{error}");
+        return ExitCode::FAILURE;
+    }
 
     if let Err(error) = engine::validate_installation_commands() {
         eprintln!("Error validating installation commands: {error}");

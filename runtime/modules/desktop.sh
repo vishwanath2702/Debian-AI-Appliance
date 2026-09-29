@@ -80,6 +80,9 @@ _DESKTOP_SDDM_CONFIGURATION_DIRECTORY="/etc/sddm.conf.d"
 
 _DESKTOP_SDDM_SECURITY_CONFIGURATION="${_DESKTOP_SDDM_CONFIGURATION_DIRECTORY}/99-daia-security.conf"
 
+_DESKTOP_SPICE_AUTOSTART_DIRECTORY="/etc/xdg/autostart"
+_DESKTOP_SPICE_AUTOSTART_CONFIGURATION="${_DESKTOP_SPICE_AUTOSTART_DIRECTORY}/spice-vdagent.desktop"
+
 ############################################################
 # Internal logging helpers
 ############################################################
@@ -235,6 +238,7 @@ _desktop_manifest_packages()
 _desktop_configure_manual_login()
 {
     local temporary_file
+    local state_file="/var/lib/sddm/state.conf"
 
     require_root
     require_command install
@@ -296,10 +300,186 @@ _desktop_configure_manual_login()
         return 1
     fi
 
+    if ! install \
+        --directory \
+        --owner=sddm \
+        --group=sddm \
+        --mode=0755 \
+        "$(dirname "$state_file")"
+    then
+        rm -f -- "$temporary_file"
+
+        _desktop_log_error \
+            "Failed to create the SDDM state directory."
+
+        return 1
+    fi
+
+    if ! printf '%s\n' \
+        '[Last]' \
+        'Session=/usr/share/xsessions/plasmax11.desktop' \
+        > "$temporary_file"
+    then
+        rm -f -- "$temporary_file"
+
+        _desktop_log_error \
+            "Failed to prepare the SDDM session state."
+
+        return 1
+    fi
+
+    if ! install \
+        --owner=sddm \
+        --group=sddm \
+        --mode=0600 \
+        "$temporary_file" \
+        "$state_file"
+    then
+        rm -f -- "$temporary_file"
+
+        _desktop_log_error \
+            "Failed to install the SDDM session state."
+
+        return 1
+    fi
+
     rm -f -- "$temporary_file"
 
     _desktop_log_success \
-        "SDDM has been configured for manual login."
+        "SDDM has been configured for manual login with Plasma X11 preselected."
+}
+
+############################################################
+# _desktop_configure_spice_vdagent
+#
+# Install the DAIA XDG autostart definition for the SPICE
+# guest session agent. The Debian GNOME-specific WindowManager
+# autostart phase is intentionally omitted so that the agent
+# starts normally in the supported Plasma X11 session.
+#
+# Arguments:
+#   None
+#
+# Returns:
+#   0 on success.
+#   1 on failure.
+############################################################
+
+_desktop_configure_spice_vdagent()
+{
+    local temporary_file
+
+    require_root
+    require_command install
+    require_command mktemp
+
+    if ! install \
+        --directory \
+        --owner=root \
+        --group=root \
+        --mode=0755 \
+        "$_DESKTOP_SPICE_AUTOSTART_DIRECTORY"
+    then
+        _desktop_log_error \
+            "Failed to create the desktop autostart directory."
+
+        return 1
+    fi
+
+    temporary_file="$(mktemp)" || {
+        _desktop_log_error \
+            "Failed to create a temporary SPICE autostart file."
+
+        return 1
+    }
+
+    if ! printf '%s\n' \
+        '[Desktop Entry]' \
+        'Name=Spice vdagent' \
+        'Comment=Agent for Spice guests' \
+        'Exec=/usr/bin/spice-vdagent' \
+        'Terminal=false' \
+        'Type=Application' \
+        'Categories=' \
+        'NoDisplay=true' \
+        > "$temporary_file"
+    then
+        rm -f -- "$temporary_file"
+
+        _desktop_log_error \
+            "Failed to prepare the SPICE autostart configuration."
+
+        return 1
+    fi
+
+    if ! install \
+        --owner=root \
+        --group=root \
+        --mode=0644 \
+        "$temporary_file" \
+        "$_DESKTOP_SPICE_AUTOSTART_CONFIGURATION"
+    then
+        rm -f -- "$temporary_file"
+
+        _desktop_log_error \
+            "Failed to install the SPICE autostart configuration."
+
+        return 1
+    fi
+
+    rm -f -- "$temporary_file"
+
+    _desktop_log_success \
+        "SPICE guest session agent configured for Plasma X11."
+}
+
+############################################################
+# _desktop_verify_spice_vdagent
+#
+# Verify the DAIA SPICE guest-session autostart definition.
+#
+# Arguments:
+#   None
+#
+# Returns:
+#   0 when the configuration is correct.
+#   1 otherwise.
+############################################################
+
+_desktop_verify_spice_vdagent()
+{
+    if [[ ! -f "$_DESKTOP_SPICE_AUTOSTART_CONFIGURATION" ]]
+    then
+        _desktop_log_error \
+            "DAIA SPICE autostart configuration is missing."
+
+        return 1
+    fi
+
+    if ! grep \
+        --quiet \
+        '^Exec=/usr/bin/spice-vdagent$' \
+        "$_DESKTOP_SPICE_AUTOSTART_CONFIGURATION"
+    then
+        _desktop_log_error \
+            "DAIA SPICE autostart command is incorrect."
+
+        return 1
+    fi
+
+    if grep \
+        --quiet \
+        '^X-GNOME-Autostart-Phase=' \
+        "$_DESKTOP_SPICE_AUTOSTART_CONFIGURATION"
+    then
+        _desktop_log_error \
+            "DAIA SPICE autostart contains a GNOME-specific phase."
+
+        return 1
+    fi
+
+    _desktop_log_success \
+        "SPICE guest session agent configuration verified."
 }
 
 ############################################################
@@ -430,6 +610,8 @@ _desktop_verify_manual_login()
 {
     local autologin_user_value
     local autologin_relogin_value
+    local state_file="/var/lib/sddm/state.conf"
+    local session_value
 
     if [[ ! -f "$_DESKTOP_SDDM_SECURITY_CONFIGURATION" ]]
     then
@@ -485,6 +667,37 @@ _desktop_verify_manual_login()
         return 1
     fi
 
+    if [[ ! -f "$state_file" ]]
+    then
+        _desktop_log_error \
+            "SDDM session state is missing."
+
+        return 1
+    fi
+
+    session_value="$(
+        awk \
+            -F= \
+            '
+                /^[[:space:]]*Session[[:space:]]*=/ {
+                    value = $0
+                    sub(/^[^=]*=/, "", value)
+                    gsub(/^[[:space:]]+|[[:space:]]+$/, "", value)
+                    print value
+                }
+            ' \
+            "$state_file" |
+        tail -n 1
+    )"
+
+    if [[ "$session_value" != "/usr/share/xsessions/plasmax11.desktop" ]]
+    then
+        _desktop_log_error \
+            "SDDM Plasma X11 session is not preselected."
+
+        return 1
+    fi
+
     _desktop_log_success \
         "SDDM manual-login policy verified."
 }
@@ -518,6 +731,7 @@ desktop_validate()
     require_command systemctl
     require_command awk
     require_command tail
+    require_command grep
 
     package_manifest_validate \
         "$_DESKTOP_MANIFEST_PATH" ||
@@ -550,6 +764,7 @@ desktop_install()
 
     _desktop_verify_manifest_packages || return 1
     _desktop_configure_manual_login || return 1
+    _desktop_configure_spice_vdagent || return 1
     _desktop_enable_sddm || return 1
 
     _desktop_log_success \
@@ -581,6 +796,7 @@ desktop_verify()
     require_command systemctl
     require_command awk
     require_command tail
+    require_command grep
 
     package_manifest_validate \
         "$_DESKTOP_MANIFEST_PATH" ||
@@ -589,6 +805,7 @@ desktop_verify()
     _desktop_verify_manifest_packages || return 1
     _desktop_verify_sddm_enabled || return 1
     _desktop_verify_manual_login || return 1
+    _desktop_verify_spice_vdagent || return 1
 
     _desktop_log_success \
         "DAIA desktop foundation verified successfully."

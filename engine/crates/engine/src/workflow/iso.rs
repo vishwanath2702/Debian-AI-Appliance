@@ -695,21 +695,6 @@ mod tests {
         )
         .with_daia_binary(&daia_binary);
 
-        let pipeline = IsoPipeline {
-            bootstrapper: RecordingBootstrapper {
-                log: Arc::new(Mutex::new(Vec::new())),
-                error: false,
-            },
-            rootfs_backend: RecordingRootfsBackend {
-                log: Arc::new(Mutex::new(Vec::new())),
-                error: false,
-            },
-            live_rootfs_preparer: SystemLiveRootfsPreparer,
-            iso_backend: RecordingIsoBackend {
-                log: Arc::new(Mutex::new(Vec::new())),
-                error: false,
-            },
-        };
         let mut preparer = SystemLiveRootfsPreparer;
 
         preparer
@@ -786,22 +771,6 @@ mod tests {
             asset_directory,
             BootstrapConfig::default(),
         );
-
-        let pipeline = IsoPipeline {
-            bootstrapper: RecordingBootstrapper {
-                log: Arc::new(Mutex::new(Vec::new())),
-                error: false,
-            },
-            rootfs_backend: RecordingRootfsBackend {
-                log: Arc::new(Mutex::new(Vec::new())),
-                error: false,
-            },
-            live_rootfs_preparer: SystemLiveRootfsPreparer,
-            iso_backend: RecordingIsoBackend {
-                log: Arc::new(Mutex::new(Vec::new())),
-                error: false,
-            },
-        };
 
         let mut preparer = SystemLiveRootfsPreparer;
 

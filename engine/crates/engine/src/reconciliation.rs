@@ -1,5 +1,6 @@
 use model::{CurrentResource, ServiceCurrentState, ServiceDesiredState};
 
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ServiceStateDifference {
     Present,
@@ -17,6 +18,7 @@ enum ServiceTransition {
     Stop,
 }
 
+#[cfg(test)]
 fn service_state_differences(
     desired: &ServiceDesiredState,
     current: &ServiceCurrentState,

@@ -114,6 +114,7 @@ impl PackageRepository {
             .find(|manifest| manifest.name() == name)
     }
 
+    #[cfg(test)]
     #[must_use]
     pub(crate) fn manifest_for_realization(
         &self,
@@ -168,6 +169,7 @@ packages:
                 "initramfs-tools".to_owned(),
                 "xserver-xorg".to_owned(),
                 "task-kde-desktop".to_owned(),
+                "kwin-x11".to_owned(),
                 "konsole".to_owned(),
                 "dolphin".to_owned(),
                 "kate".to_owned(),

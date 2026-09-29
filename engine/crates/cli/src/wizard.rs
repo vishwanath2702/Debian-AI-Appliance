@@ -4,6 +4,7 @@ use model::{
     DiscoveredStorageId, ExternalContentItem, ExternalContentItemId, StorageKind,
     UserConfiguration,
 };
+#[cfg(test)]
 use registry::{ApplianceProfileRepository, ContentRepositoryRepository};
 /// State accumulated while configuring an appliance through the wizard.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -210,16 +211,19 @@ pub struct WizardConfig {
 impl WizardConfig {
     /// Returns the selected appliance profile name.
     #[must_use]
+    #[cfg(test)]
     pub fn profile_name(&self) -> &str {
         &self.profile_name
     }
     /// Returns the selected content repository identifier.
     #[must_use]
+    #[cfg(test)]
     pub const fn content_repository_id(&self) -> &ContentRepositoryId {
         &self.content_repository_id
     }
     /// Resolves the selected content repository from a repository collection.
     #[must_use]
+    #[cfg(test)]
     pub fn content_repository<'a>(
         &self,
         repository: &'a ContentRepositoryRepository,
@@ -228,11 +232,13 @@ impl WizardConfig {
     }
     /// Returns the external content selected for import.
     #[must_use]
+    #[cfg(test)]
     pub fn external_content(&self) -> &[ExternalContentItemId] {
         &self.external_content
     }
     /// Returns the selected storage identifier.
     #[must_use]
+    #[cfg(test)]
     pub const fn storage_id(&self) -> &DiscoveredStorageId {
         &self.storage_id
     }
@@ -245,6 +251,7 @@ impl WizardConfig {
 
     /// Resolves the selected appliance profile from a repository.
     #[must_use]
+    #[cfg(test)]
     pub fn profile<'a>(
         &self,
         repository: &'a ApplianceProfileRepository,
