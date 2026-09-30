@@ -738,13 +738,7 @@ fn configure_wizard_state(engine: &Engine, state: &mut WizardState) -> Result<()
 
     let content_inspector = LocalFilesystemContentInspector::new();
 
-    configure_wizard_external_content(engine, state, &content_inspector)?;
-
-    configure_wizard_user(state)?;
-
-    let storage_inspector = LinuxStorageInspector::new();
-
-    configure_wizard_storage(engine, state, &storage_inspector)
+    configure_wizard_external_content(engine, state, &content_inspector)
 }
 
 fn discover_wizard_hardware(engine: &Engine) -> Result<(usize, u64), String> {
@@ -841,6 +835,24 @@ fn confirm_wizard_state(prompt: &str) -> Result<bool, String> {
         .map_err(|error| format!("Error reading confirmation: {error}"))?;
 
     Ok(parse_wizard_confirmation(&input))
+}
+
+fn prompt_root_password() -> Result<String, String> {
+    let password = rpassword::prompt_password("Root password: ")
+        .map_err(|error| format!("Error reading root password: {error}"))?;
+
+    if password.is_empty() {
+        return Err("Error: root password cannot be empty".to_owned());
+    }
+
+    let confirmation = rpassword::prompt_password("Confirm root password: ")
+        .map_err(|error| format!("Error reading root password confirmation: {error}"))?;
+
+    if password != confirmation {
+        return Err("Error: root passwords do not match".to_owned());
+    }
+
+    Ok(password)
 }
 
 fn prompt_administrator_password() -> Result<String, String> {
@@ -1069,9 +1081,11 @@ fn load_package_repository() -> Result<PackageRepository, String> {
 fn execute_system_installation(
     engine: &Engine,
     prepared: &engine::PreparedApplianceInstallation,
+    root_password: String,
     administrator_password: String,
 ) -> Result<(), String> {
-    let mut executor = SystemInstallationOperationExecutor::new(administrator_password);
+    let mut executor =
+        SystemInstallationOperationExecutor::new(root_password, administrator_password);
 
     engine
         .execute_appliance_installation(prepared, &mut executor)
@@ -1081,12 +1095,13 @@ fn execute_system_installation(
 fn execute_confirmed_installation(
     engine: &Engine,
     prepared: &engine::PreparedApplianceInstallation,
+    root_password: String,
     administrator_password: String,
 ) -> Result<(), String> {
     println!();
     println!("Starting installation...");
 
-    execute_system_installation(engine, prepared, administrator_password)?;
+    execute_system_installation(engine, prepared, root_password, administrator_password)?;
 
     println!("Installation complete.");
 
@@ -1104,6 +1119,34 @@ fn run_install() -> ExitCode {
     println!();
 
     if let Err(error) = configure_wizard_state(&engine, &mut state) {
+        eprintln!("{error}");
+        return ExitCode::FAILURE;
+    }
+
+    let root_password = match prompt_root_password() {
+        Ok(password) => password,
+        Err(error) => {
+            eprintln!("{error}");
+            return ExitCode::FAILURE;
+        }
+    };
+
+    if let Err(error) = configure_wizard_user(&mut state) {
+        eprintln!("{error}");
+        return ExitCode::FAILURE;
+    }
+
+    let administrator_password = match prompt_administrator_password() {
+        Ok(password) => password,
+        Err(error) => {
+            eprintln!("{error}");
+            return ExitCode::FAILURE;
+        }
+    };
+
+    let storage_inspector = LinuxStorageInspector::new();
+
+    if let Err(error) = configure_wizard_storage(&engine, &mut state, &storage_inspector) {
         eprintln!("{error}");
         return ExitCode::FAILURE;
     }
@@ -1158,15 +1201,12 @@ fn run_install() -> ExitCode {
 
     match confirm_wizard_state("Erase this disk and start installation? [y/N]: ") {
         Ok(true) => {
-            let administrator_password = match prompt_administrator_password() {
-                Ok(password) => password,
-                Err(error) => {
-                    eprintln!("{error}");
-                    return ExitCode::FAILURE;
-                }
-            };
-
-            match execute_confirmed_installation(&engine, &prepared, administrator_password) {
+            match execute_confirmed_installation(
+                &engine,
+                &prepared,
+                root_password,
+                administrator_password,
+            ) {
                 Ok(_) => ExitCode::SUCCESS,
                 Err(error) => {
                     eprintln!("{error}");
@@ -1212,6 +1252,18 @@ fn run_wizard() -> ExitCode {
     println!();
 
     if let Err(error) = configure_wizard_state(&engine, &mut state) {
+        eprintln!("{error}");
+        return ExitCode::FAILURE;
+    }
+
+    if let Err(error) = configure_wizard_user(&mut state) {
+        eprintln!("{error}");
+        return ExitCode::FAILURE;
+    }
+
+    let storage_inspector = LinuxStorageInspector::new();
+
+    if let Err(error) = configure_wizard_storage(&engine, &mut state, &storage_inspector) {
         eprintln!("{error}");
         return ExitCode::FAILURE;
     }

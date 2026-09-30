@@ -1788,7 +1788,10 @@ mod tests {
 
     #[test]
     fn creates_system_executor_with_production_dependencies() {
-        let _executor = SystemInstallationOperationExecutor::new("test-password".to_owned());
+        let _executor = SystemInstallationOperationExecutor::new(
+            "root-test-password".to_owned(),
+            "test-password".to_owned(),
+        );
     }
 
     #[test]

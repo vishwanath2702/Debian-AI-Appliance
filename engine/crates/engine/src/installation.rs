@@ -470,6 +470,7 @@ pub struct SystemInstallationOperationExecutor<R, W = SystemInstallationFileWrit
     target_root: PathBuf,
     runtime_payload_directory: PathBuf,
     imported_content: Vec<model::ImportedContentItem>,
+    root_password: String,
     administrator_password: String,
 }
 
@@ -485,6 +486,7 @@ where
             target_root: PathBuf::from("/target"),
             runtime_payload_directory: PathBuf::from(RUNTIME_PAYLOAD_DIRECTORY),
             imported_content: Vec::new(),
+            root_password: String::new(),
             administrator_password: String::new(),
         }
     }
@@ -495,6 +497,11 @@ where
 
     fn with_runtime_payload_directory(mut self, runtime_payload_directory: PathBuf) -> Self {
         self.runtime_payload_directory = runtime_payload_directory;
+        self
+    }
+
+    fn with_root_password(mut self, root_password: impl Into<String>) -> Self {
+        self.root_password = root_password.into();
         self
     }
 
@@ -525,6 +532,7 @@ where
             target_root: PathBuf::from("/target"),
             runtime_payload_directory: PathBuf::from(RUNTIME_PAYLOAD_DIRECTORY),
             imported_content: Vec::new(),
+            root_password: String::new(),
             administrator_password: String::new(),
         }
     }
@@ -538,13 +546,14 @@ impl
 {
     /// Creates a production installation executor.
     #[must_use]
-    pub fn new(administrator_password: String) -> Self {
+    pub fn new(root_password: String, administrator_password: String) -> Self {
         Self {
             runner: ProcessInstallationCommandRunner,
             file_writer: SystemInstallationFileWriter,
             target_root: PathBuf::from("/target"),
             runtime_payload_directory: PathBuf::from(RUNTIME_PAYLOAD_DIRECTORY),
             imported_content: Vec::new(),
+            root_password,
             administrator_password,
         }
     }
@@ -791,8 +800,12 @@ where
 
                 password_command.arg(root).arg("chpasswd");
 
-                let password_input =
-                    format!("{}:{}\n", user.username(), self.administrator_password);
+                let password_input = format!(
+                    "root:{}\n{}:{}\n",
+                    self.root_password,
+                    user.username(),
+                    self.administrator_password
+                );
 
                 self.runner
                     .status_with_input(&mut password_command, password_input.as_bytes())?;
@@ -1725,11 +1738,12 @@ mod tests {
     }
 
     #[test]
-    fn system_executor_sets_administrator_password_through_stdin() {
+    fn system_executor_sets_account_passwords_through_stdin() {
         let mut executor = SystemInstallationOperationExecutor::with_dependencies(
             RecordingCommandRunner::default(),
         )
-        .with_administrator_password("secret-password");
+        .with_root_password("root-secret-password")
+        .with_administrator_password("admin-secret-password");
 
         executor
             .execute_operation(&InstallationOperation::CreateAdministrator {
@@ -1760,16 +1774,12 @@ mod tests {
         );
         assert_eq!(
             executor.runner.inputs,
-            vec![b"admin:secret-password\n".to_vec()]
+            vec![b"root:root-secret-password\nadmin:admin-secret-password\n".to_vec()]
         );
-        assert!(
-            executor
-                .runner
-                .commands
-                .iter()
-                .flatten()
-                .all(|argument| !argument.contains("secret-password"))
-        );
+        assert!(executor.runner.commands.iter().flatten().all(|argument| {
+            !argument.contains("root-secret-password")
+                && !argument.contains("admin-secret-password")
+        }));
     }
 
     #[cfg(unix)]
