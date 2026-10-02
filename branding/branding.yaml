@@ -1,0 +1,15 @@
+schema-version: 1
+
+identity:
+  name: DAIA
+  display-name: Debian AI Appliance
+
+components:
+  identity: identity
+  grub: boot/grub
+  plymouth: boot/plymouth
+  wallpaper: desktop/wallpaper
+  plasma: desktop/plasma
+  sddm: desktop/sddm
+  installer: installer
+  application: application
