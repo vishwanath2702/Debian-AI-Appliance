@@ -37,7 +37,7 @@ DAIA aims to support building a wide variety of AI systems, including:
 * Virtual machine images
 * Cloud images
 
-* [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/vishwanath2702/Debian-AI-Appliance)
+[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/vishwanath2702/Debian-AI-Appliance)
 * Bootable AI appliance images
 
 Future capabilities will include AI runtimes, model serving, GPU acceleration, notebooks, web interfaces, and complete AI software stacks while remaining focused on one mission:
