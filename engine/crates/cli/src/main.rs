@@ -55,10 +55,59 @@ fn main() -> ExitCode {
     run(&arguments)
 }
 
+fn realize_models_with<E>(
+    realizations: &[model::ModelRealization],
+    executor: &mut E,
+) -> Result<(), E::Error>
+where
+    E: engine::ModelRealizationExecutor,
+{
+    for realization in realizations {
+        executor.execute(realization)?;
+    }
+
+    Ok(())
+}
+
+fn run_realize_models_from_root_with<E>(
+    root: impl AsRef<std::path::Path>,
+    executor: &mut E,
+) -> ExitCode
+where
+    E: engine::ModelRealizationExecutor,
+    E::Error: std::fmt::Display,
+{
+    let appliance_state = match state::ApplianceState::read_from_root(root) {
+        Ok(appliance_state) => appliance_state,
+        Err(error) => {
+            eprintln!("Error loading appliance state: {error}");
+            return ExitCode::FAILURE;
+        }
+    };
+
+    if let Err(error) = realize_models_with(appliance_state.model_realizations(), executor) {
+        eprintln!("Error realizing models: {error}");
+        return ExitCode::FAILURE;
+    }
+
+    ExitCode::SUCCESS
+}
+
+fn run_realize_models_from_root(root: impl AsRef<std::path::Path>) -> ExitCode {
+    let mut executor = engine::OllamaModelRealizationExecutor::default();
+
+    run_realize_models_from_root_with(root, &mut executor)
+}
+
+fn run_realize_models() -> ExitCode {
+    run_realize_models_from_root("/")
+}
+
 fn run(arguments: &[String]) -> ExitCode {
     match arguments {
         [command] if command == "wizard" => run_wizard(),
         [command] if command == "install" => run_install(),
+        [command] if command == "realize-models" => run_realize_models(),
         [capability_name] => run_plan(capability_name),
         [command, capability_name] if command == "plan" => run_plan(capability_name),
         [command, profile_name] if command == "plan-profile" => run_profile_plan(profile_name),
@@ -229,6 +278,7 @@ fn print_plan(plan: &Plan) {
 fn print_usage() {
     eprintln!("Usage:");
     eprintln!("    daia install");
+    eprintln!("    daia realize-models");
     eprintln!("    daia <capability>");
     eprintln!("    daia plan <capability>");
     eprintln!(
@@ -505,6 +555,36 @@ fn format_external_content_item(
     }
 }
 
+fn prompt_model_realization_id(
+    item: &model::ExternalContentItem,
+    metadata: &inspector::GgufMetadata,
+) -> Result<model::ModelRealizationId, String> {
+    println!();
+    println!("Selected GGUF model: {}", item.path().display());
+
+    if let Some(name) = metadata.name() {
+        println!("Model metadata name: {name}");
+    }
+
+    print!("DAIA model name: ");
+    io::stdout()
+        .flush()
+        .map_err(|error| format!("Error writing prompt: {error}"))?;
+
+    let mut input = String::new();
+    io::stdin()
+        .read_line(&mut input)
+        .map_err(|error| format!("Error reading model name: {error}"))?;
+
+    let name = input.trim();
+
+    if name.is_empty() {
+        return Err("Error: DAIA model name cannot be empty".to_owned());
+    }
+
+    Ok(model::ModelRealizationId::new(name))
+}
+
 fn select_external_content(engine: &Engine, state: &mut WizardState) -> Result<(), String> {
     let items = state.external_content_items();
 
@@ -540,12 +620,37 @@ fn select_external_content(engine: &Engine, state: &mut WizardState) -> Result<(
 
     let selections = parse_external_content_selection(&input, items.len())?;
 
-    let selected_ids = selections
+    let selected_items = selections
         .into_iter()
-        .map(|selection| items[selection - 1].id().clone())
-        .collect();
+        .map(|selection| items[selection - 1].clone())
+        .collect::<Vec<_>>();
+
+    let selected_ids = selected_items
+        .iter()
+        .map(|item| item.id().clone())
+        .collect::<Vec<_>>();
 
     state.select_external_content(selected_ids);
+
+    let mut realization_intents = Vec::new();
+
+    for item in &selected_items {
+        if let Some(metadata) = engine
+            .inspect_external_model(item)
+            .map_err(|error| format!("Error inspecting external model: {error}"))?
+        {
+            let realization_id = prompt_model_realization_id(item, &metadata)?;
+
+            realization_intents.push(model::ModelRealizationIntent::new(
+                realization_id,
+                InferenceEngineId::ollama(),
+                item.id().clone(),
+            ));
+        }
+    }
+
+    state.set_model_realization_intents(realization_intents);
+
     println!(
         "Selected external content: {}",
         state
@@ -969,6 +1074,10 @@ fn installation_operation_name(operation: &InstallationOperation) -> String {
         }
         InstallationOperation::ImportContent { .. } => "Import content".to_string(),
 
+        InstallationOperation::PersistApplianceState { root, .. } => {
+            format!("Persist appliance state in {}", root.display())
+        }
+
         InstallationOperation::DeployRuntime { root } => {
             format!("Deploy DAIA runtime to {}", root.display())
         }
@@ -1307,6 +1416,115 @@ mod tests {
     use super::{BuildOptions, InstallationOperation, installation_operation_name, run};
     use std::path::PathBuf;
     use std::process::ExitCode;
+
+    #[test]
+    fn loads_persisted_model_realizations_and_hands_them_to_executor() {
+        #[derive(Default)]
+        struct RecordingModelRealizationExecutor {
+            realizations: Vec<(String, String, PathBuf)>,
+        }
+
+        impl engine::ModelRealizationExecutor for RecordingModelRealizationExecutor {
+            type Error = std::io::Error;
+
+            fn execute(
+                &mut self,
+                realization: &model::ModelRealization,
+            ) -> Result<(), Self::Error> {
+                self.realizations.push((
+                    realization.id().as_str().to_owned(),
+                    realization.engine().as_str().to_owned(),
+                    realization.content().path().to_path_buf(),
+                ));
+                Ok(())
+            }
+        }
+
+        let temporary_directory =
+            tempfile::tempdir().expect("temporary directory should be created");
+
+        let mut appliance_state = state::ApplianceState::new("desktop");
+        appliance_state.record_model_realization(model::ModelRealization::new(
+            model::ModelRealizationId::new("test-model"),
+            model::InferenceEngineId::ollama(),
+            model::ImportedContentItem::new(
+                model::ExternalContentItemId::new("source-model"),
+                "/var/lib/daia/content/model.gguf",
+            ),
+        ));
+
+        appliance_state
+            .write_to_root(temporary_directory.path())
+            .expect("appliance state should be written");
+
+        let mut executor = RecordingModelRealizationExecutor::default();
+
+        assert_eq!(
+            super::run_realize_models_from_root_with(temporary_directory.path(), &mut executor,),
+            ExitCode::SUCCESS
+        );
+
+        assert_eq!(
+            executor.realizations,
+            vec![(
+                "test-model".to_owned(),
+                "ollama".to_owned(),
+                PathBuf::from("/var/lib/daia/content/model.gguf"),
+            )]
+        );
+    }
+
+    #[test]
+    fn hands_model_realizations_to_executor() {
+        #[derive(Default)]
+        struct RecordingModelRealizationExecutor {
+            ids: Vec<String>,
+        }
+
+        impl engine::ModelRealizationExecutor for RecordingModelRealizationExecutor {
+            type Error = std::io::Error;
+
+            fn execute(
+                &mut self,
+                realization: &model::ModelRealization,
+            ) -> Result<(), Self::Error> {
+                self.ids.push(realization.id().as_str().to_owned());
+                Ok(())
+            }
+        }
+
+        let realization = model::ModelRealization::new(
+            model::ModelRealizationId::new("test-model"),
+            model::InferenceEngineId::ollama(),
+            model::ImportedContentItem::new(
+                model::ExternalContentItemId::new("source-model"),
+                "/var/lib/daia/content/model.gguf",
+            ),
+        );
+
+        let mut executor = RecordingModelRealizationExecutor::default();
+
+        super::realize_models_with(&[realization], &mut executor)
+            .expect("model realization should succeed");
+
+        assert_eq!(executor.ids, vec!["test-model"]);
+    }
+
+    #[test]
+    fn realizes_empty_appliance_state_without_invoking_ollama() {
+        let temporary_directory =
+            tempfile::tempdir().expect("temporary directory should be created");
+
+        let appliance_state = state::ApplianceState::new("desktop");
+        appliance_state
+            .write_to_root(temporary_directory.path())
+            .expect("appliance state should be written");
+
+        assert_eq!(
+            super::run_realize_models_from_root(temporary_directory.path()),
+            ExitCode::SUCCESS
+        );
+    }
 
     #[test]
     fn names_runtime_installation_operations() {

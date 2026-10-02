@@ -172,6 +172,26 @@ _ai_verify_ollama_account() {
     return 0
 }
 
+_ai_wait_for_ollama_ready() {
+    local ollama_binary="$1"
+    local attempts="${DAIA_OLLAMA_READY_ATTEMPTS:-30}"
+    local delay="${DAIA_OLLAMA_READY_DELAY:-1}"
+    local attempt
+
+    for ((attempt = 1; attempt <= attempts; attempt++)); do
+        if "$ollama_binary" list >/dev/null 2>&1; then
+            return 0
+        fi
+
+        if (( attempt < attempts )); then
+            sleep "$delay"
+        fi
+    done
+
+    echo "Ollama service did not become ready after ${attempts} attempts" >&2
+    return 1
+}
+
 ai_verify() {
     local install_root="${DAIA_OLLAMA_INSTALL_ROOT:-/usr/local}"
     local systemd_system_directory="${DAIA_SYSTEMD_SYSTEM_DIRECTORY:-/etc/systemd/system}"
@@ -226,6 +246,8 @@ ai_verify() {
         echo "Ollama service is not active: ollama.service" >&2
         return 1
     fi
+
+    _ai_wait_for_ollama_ready "$ollama_binary" || return 1
 
     return 0
 }

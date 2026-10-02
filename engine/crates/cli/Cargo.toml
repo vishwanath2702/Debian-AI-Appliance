@@ -13,7 +13,11 @@ engine = { path = "../engine" }
 model = { path = "../model" }
 registry = { path = "../registry" }
 inspector = { path = "../inspector" }
+state = { path = "../state" }
 rpassword = "7.5.4"
+
+[dev-dependencies]
+tempfile = "3"
 
 [lints]
 workspace = true

@@ -5,6 +5,7 @@ mod bootstrapper;
 mod context;
 mod installation;
 mod mmdebstrap;
+mod model_realization;
 mod reconciliation;
 mod verification;
 mod workflow;
@@ -42,6 +43,11 @@ use model::{
     VerificationEvidenceReference, VerificationOverallResult, VerificationProviderId,
     VerificationProviderVersion, VerificationRequest, VerificationResult, VerificationResultId,
     VerificationRuleReference, VerificationTimestamp,
+};
+pub use model::{ModelRealization, ModelRealizationId};
+pub use model_realization::{
+    ModelRealizationExecutor, OllamaCommandRunner, OllamaModelRealizationExecutor,
+    ProcessOllamaCommandRunner,
 };
 
 use planner::{PlanError, Planner};
@@ -273,6 +279,13 @@ impl ContentImportFileSystem for SystemContentImportFileSystem {
         }
 
         std::fs::copy(item.path(), &destination)?;
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+
+            std::fs::set_permissions(&destination, std::fs::Permissions::from_mode(0o644))?;
+        }
 
         Ok(ImportedContentItem::new(item.id().clone(), destination))
     }
@@ -870,7 +883,11 @@ impl Engine {
         let installation =
             self.prepare_installation(configuration.installation().clone(), profile, storage)?;
 
-        Ok(self.prepare_appliance_installation(installation, content))
+        Ok(self.prepare_appliance_installation(
+            installation,
+            content,
+            configuration.model_realization_intents().to_vec(),
+        ))
     }
 
     /// Combines prepared installation and content into a prepared appliance installation.
@@ -879,8 +896,9 @@ impl Engine {
         &self,
         installation: PreparedInstallation,
         content: PreparedContentImport,
+        model_realization_intents: Vec<model::ModelRealizationIntent>,
     ) -> PreparedApplianceInstallation {
-        PreparedApplianceInstallation::new(installation, content)
+        PreparedApplianceInstallation::new(installation, content, model_realization_intents)
     }
 
     /// Executes a prepared installation using the supplied executor.
@@ -1320,6 +1338,40 @@ mod tests {
             "model"
         );
     }
+    #[cfg(unix)]
+    #[test]
+    fn system_content_import_file_system_makes_imported_content_readable() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let directory = tempfile::tempdir().expect("temporary directory should be created");
+
+        let source = directory.path().join("model.gguf");
+        let root = directory.path().join("target");
+
+        std::fs::write(&source, "model").expect("source content should be written");
+        std::fs::set_permissions(&source, std::fs::Permissions::from_mode(0o600))
+            .expect("source permissions should be restricted");
+
+        let item = ExternalContentItem::new(ContentSourceId::new("local-models-directory"), source);
+
+        let mut file_system = SystemContentImportFileSystem::with_root(&root);
+
+        let imported = file_system
+            .copy_item(
+                &item,
+                &ContentImportDestination::new("/var/lib/daia/content"),
+            )
+            .expect("content item should be copied beneath root");
+
+        let mode = std::fs::metadata(imported.path())
+            .expect("imported content metadata should be readable")
+            .permissions()
+            .mode()
+            & 0o777;
+
+        assert_eq!(mode, 0o644);
+    }
+
     #[test]
     fn system_content_import_file_system_rejects_existing_item() {
         let directory = tempfile::tempdir().expect("temporary directory should be created");
@@ -2038,7 +2090,11 @@ mod tests {
             )
             .expect("content import should prepare");
 
-        let prepared = engine.prepare_appliance_installation(installation.clone(), content.clone());
+        let prepared = engine.prepare_appliance_installation(
+            installation.clone(),
+            content.clone(),
+            Vec::new(),
+        );
 
         assert_eq!(prepared.installation(), &installation);
         assert_eq!(prepared.content(), &content);
@@ -2335,7 +2391,8 @@ mod tests {
             ContentImportDestination::new("/var/lib/daia/content"),
         );
 
-        let prepared = PreparedApplianceInstallation::new(installation.clone(), content.clone());
+        let prepared =
+            PreparedApplianceInstallation::new(installation.clone(), content.clone(), Vec::new());
 
         assert_eq!(prepared.installation(), &installation);
         assert_eq!(prepared.content(), &content);
@@ -2363,7 +2420,7 @@ mod tests {
             ContentImportDestination::new("/var/lib/daia/content"),
         );
 
-        let prepared = PreparedApplianceInstallation::new(installation, content);
+        let prepared = PreparedApplianceInstallation::new(installation, content, Vec::new());
         let plan = prepared.installation_plan();
 
         assert!(
@@ -2402,7 +2459,8 @@ mod tests {
             ContentImportDestination::new("/var/lib/daia/content"),
         );
 
-        let prepared = PreparedApplianceInstallation::new(installation, content.clone());
+        let prepared =
+            PreparedApplianceInstallation::new(installation, content.clone(), Vec::new());
 
         let mut executor = RecordingOperationExecutor {
             operations: Vec::new(),

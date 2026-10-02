@@ -330,6 +330,13 @@ pub enum InstallationOperation {
         content: crate::PreparedContentImport,
     },
 
+    /// Persists appliance state while the installed target is still mounted.
+    PersistApplianceState {
+        root: PathBuf,
+        profile_name: String,
+        model_realization_intents: Vec<model::ModelRealizationIntent>,
+    },
+
     /// Deploys the DAIA runtime into the installed system.
     DeployRuntime { root: PathBuf },
 
@@ -852,6 +859,19 @@ where
 
                 Ok(())
             }
+            InstallationOperation::PersistApplianceState {
+                root,
+                profile_name,
+                model_realization_intents,
+            } => {
+                let mut appliance_state = state::ApplianceState::new(profile_name);
+                appliance_state.apply_content_imports(
+                    self.imported_content.iter().cloned(),
+                    model_realization_intents,
+                );
+
+                appliance_state.write_to_root(root)
+            }
             InstallationOperation::DeployRuntime { root } => {
                 copy_directory_contents(&self.runtime_payload_directory, root)
             }
@@ -1203,16 +1223,19 @@ impl PreparedInstallation {
 pub struct PreparedApplianceInstallation {
     installation: PreparedInstallation,
     content: crate::PreparedContentImport,
+    model_realization_intents: Vec<model::ModelRealizationIntent>,
 }
 
 impl PreparedApplianceInstallation {
     pub const fn new(
         installation: PreparedInstallation,
         content: crate::PreparedContentImport,
+        model_realization_intents: Vec<model::ModelRealizationIntent>,
     ) -> Self {
         Self {
             installation,
             content,
+            model_realization_intents,
         }
     }
 
@@ -1223,19 +1246,38 @@ impl PreparedApplianceInstallation {
     pub const fn content(&self) -> &crate::PreparedContentImport {
         &self.content
     }
+
+    /// Returns model realization intents associated with the prepared content.
+    #[must_use]
+    pub fn model_realization_intents(&self) -> &[model::ModelRealizationIntent] {
+        &self.model_realization_intents
+    }
+
     #[must_use]
     pub fn installation_plan(&self) -> InstallationPlan {
         let installation_plan = self.installation.installation_plan();
-        let mut operations = Vec::with_capacity(installation_plan.operations().len() + 1);
+        let additional_operations = if self.content.intent().items().is_empty() {
+            1
+        } else {
+            2
+        };
+        let mut operations =
+            Vec::with_capacity(installation_plan.operations().len() + additional_operations);
 
         for operation in installation_plan.operations() {
             operations.push(operation.clone());
 
-            if matches!(operation, InstallationOperation::ConfigureFstab { .. })
-                && !self.content.intent().items().is_empty()
-            {
-                operations.push(InstallationOperation::ImportContent {
-                    content: self.content.clone(),
+            if matches!(operation, InstallationOperation::ConfigureFstab { .. }) {
+                if !self.content.intent().items().is_empty() {
+                    operations.push(InstallationOperation::ImportContent {
+                        content: self.content.clone(),
+                    });
+                }
+
+                operations.push(InstallationOperation::PersistApplianceState {
+                    root: PathBuf::from("/target"),
+                    profile_name: self.installation.intent().profile_name().to_owned(),
+                    model_realization_intents: self.model_realization_intents.clone(),
                 });
             }
         }
@@ -1852,11 +1894,24 @@ mod tests {
         std::fs::write(&source, b"model data").expect("source content should be written");
 
         let item = model::ExternalContentItem::new(model::ContentSourceId::new("local"), source);
+        let source_item_id = item.id().clone();
 
         let content = crate::PreparedContentImport::new(
             model::ContentImportIntent::new(vec![item.id().clone()]),
             vec![item],
             model::ContentImportDestination::new("/var/lib/daia/content"),
+        );
+
+        let matching_realization_intent = model::ModelRealizationIntent::new(
+            model::ModelRealizationId::new("model"),
+            model::InferenceEngineId::ollama(),
+            source_item_id,
+        );
+
+        let unmatched_realization_intent = model::ModelRealizationIntent::new(
+            model::ModelRealizationId::new("missing-model"),
+            model::InferenceEngineId::ollama(),
+            model::ExternalContentItemId::new("missing-source"),
         );
 
         let target_root = temporary_directory.path().join("target");
@@ -1881,7 +1936,67 @@ mod tests {
             executor.imported_content()[0].path(),
             target_root.join("var/lib/daia/content/model.gguf")
         );
+
+        executor
+            .execute_operation(&InstallationOperation::PersistApplianceState {
+                root: target_root.clone(),
+                profile_name: "desktop".to_owned(),
+                model_realization_intents: vec![
+                    matching_realization_intent,
+                    unmatched_realization_intent,
+                ],
+            })
+            .expect("appliance state persistence should succeed");
+
+        let persisted_state = std::fs::read_to_string(target_root.join("var/lib/daia/state.json"))
+            .expect("appliance state should be written beneath target root");
+
+        let persisted_state: serde_json::Value =
+            serde_json::from_str(&persisted_state).expect("appliance state should be valid JSON");
+
+        assert_eq!(persisted_state["profile_name"], "desktop");
+
+        let imported_content = persisted_state["imported_content"]
+            .as_array()
+            .expect("imported content should be an array");
+
+        assert_eq!(imported_content.len(), 1);
+        assert_eq!(
+            imported_content[0]["source_item_id"],
+            executor.imported_content()[0].source_item_id().as_str()
+        );
+        assert_eq!(
+            imported_content[0]["path"],
+            target_root
+                .join("var/lib/daia/content/model.gguf")
+                .to_string_lossy()
+                .as_ref()
+        );
+
+        let model_realizations = persisted_state["model_realizations"]
+            .as_array()
+            .expect("model realizations should be an array");
+
+        assert_eq!(
+            model_realizations.len(),
+            1,
+            "only intents backed by successfully imported content should persist"
+        );
+        assert_eq!(model_realizations[0]["id"], "model");
+        assert_eq!(model_realizations[0]["engine"], "ollama");
+        assert_eq!(
+            model_realizations[0]["content"]["source_item_id"],
+            executor.imported_content()[0].source_item_id().as_str()
+        );
+        assert_eq!(
+            model_realizations[0]["content"]["path"],
+            target_root
+                .join("var/lib/daia/content/model.gguf")
+                .to_string_lossy()
+                .as_ref()
+        );
     }
+
     #[test]
     fn system_executor_implements_installation_executor() {
         let intent = InstallationIntent::new(

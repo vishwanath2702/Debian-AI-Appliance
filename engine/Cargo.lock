@@ -30,6 +30,8 @@ dependencies = [
  "model",
  "registry",
  "rpassword",
+ "state",
+ "tempfile",
 ]
 
 [[package]]
@@ -44,6 +46,8 @@ dependencies = [
  "planner",
  "registry",
  "resolver",
+ "serde_json",
+ "state",
  "tempfile",
 ]
 

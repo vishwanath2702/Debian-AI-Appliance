@@ -28,6 +28,7 @@ set -euo pipefail
 ############################################################
 
 readonly DAIA_RUNTIME="/opt/daia/runtime.sh"
+readonly DAIA_COMMAND="/usr/bin/daia"
 readonly DAIA_STATE_DIRECTORY="/var/lib/daia"
 readonly DAIA_FIRSTBOOT_COMPLETE="${DAIA_STATE_DIRECTORY}/firstboot-complete"
 readonly DAIA_FIRSTBOOT_SERVICE="daia-firstboot.service"
@@ -62,6 +63,22 @@ run_runtime()
 }
 
 ############################################################
+# realize_models
+############################################################
+
+realize_models()
+{
+    if [[ ! -x "$DAIA_COMMAND" ]]
+    then
+        printf 'ERROR: DAIA command is unavailable: %s\n' \
+            "$DAIA_COMMAND" >&2
+        return 1
+    fi
+
+    "$DAIA_COMMAND" realize-models
+}
+
+############################################################
 # mark_firstboot_complete
 ############################################################
 
@@ -88,6 +105,7 @@ main()
 {
     require_root
     run_runtime
+    realize_models
     mark_firstboot_complete
     disable_firstboot_service
 }

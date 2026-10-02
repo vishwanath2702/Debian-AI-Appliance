@@ -1,8 +1,8 @@
 //! Wizard state for interactive DAIA appliance configuration.
 use model::{
     ApplianceConfiguration, ContentRepository, ContentRepositoryId, DiscoveredStorage,
-    DiscoveredStorageId, ExternalContentItem, ExternalContentItemId, StorageKind,
-    UserConfiguration,
+    DiscoveredStorageId, ExternalContentItem, ExternalContentItemId, ModelRealizationIntent,
+    StorageKind, UserConfiguration,
 };
 #[cfg(test)]
 use registry::{ApplianceProfileRepository, ContentRepositoryRepository};
@@ -14,6 +14,7 @@ pub struct WizardState {
     selected_content_repository: Option<ContentRepositoryId>,
     external_content_items: Vec<ExternalContentItem>,
     selected_external_content: Vec<ExternalContentItemId>,
+    model_realization_intents: Vec<ModelRealizationIntent>,
     discovered_storage: Vec<DiscoveredStorage>,
     selected_storage: Option<DiscoveredStorageId>,
     user: Option<UserConfiguration>,
@@ -28,6 +29,7 @@ impl WizardState {
             selected_content_repository: None,
             external_content_items: Vec::new(),
             selected_external_content: Vec::new(),
+            model_realization_intents: Vec::new(),
             discovered_storage: Vec::new(),
             selected_storage: None,
             user: None,
@@ -70,6 +72,7 @@ impl WizardState {
             if previous_repository != replacement_repository {
                 self.external_content_items.clear();
                 self.selected_external_content.clear();
+                self.model_realization_intents.clear();
             }
 
             if replacement_repository.is_none() {
@@ -95,6 +98,7 @@ impl WizardState {
             if self.selected_content_repository.as_ref() != Some(&repository_id) {
                 self.external_content_items.clear();
                 self.selected_external_content.clear();
+                self.model_realization_intents.clear();
             }
 
             self.selected_content_repository = Some(repository_id);
@@ -114,6 +118,7 @@ impl WizardState {
             .any(|selected| !items.iter().any(|item| item.id() == selected))
         {
             self.selected_external_content.clear();
+            self.model_realization_intents.clear();
         }
 
         self.external_content_items = items;
@@ -131,6 +136,10 @@ impl WizardState {
                 .iter()
                 .any(|item| item.id() == item_id)
         }) {
+            if self.selected_external_content != items {
+                self.model_realization_intents.clear();
+            }
+
             self.selected_external_content = items;
         }
     }
@@ -139,6 +148,23 @@ impl WizardState {
     #[must_use]
     pub fn selected_external_content(&self) -> &[ExternalContentItemId] {
         &self.selected_external_content
+    }
+
+    /// Replaces model realization intent for selected external content.
+    pub fn set_model_realization_intents(&mut self, intents: Vec<ModelRealizationIntent>) {
+        if intents.iter().all(|intent| {
+            self.selected_external_content
+                .iter()
+                .any(|item_id| item_id == intent.source_item_id())
+        }) {
+            self.model_realization_intents = intents;
+        }
+    }
+
+    /// Returns model realization intent for selected external content.
+    #[must_use]
+    pub fn model_realization_intents(&self) -> &[ModelRealizationIntent] {
+        &self.model_realization_intents
     }
     /// Replaces the storage discovered for the current system.
     pub fn set_discovered_storage(&mut self, storage: Vec<DiscoveredStorage>) {
@@ -192,6 +218,7 @@ impl WizardState {
             profile_name: self.profile_name?,
             content_repository_id: self.selected_content_repository?,
             external_content: self.selected_external_content,
+            model_realization_intents: self.model_realization_intents,
             storage_id: self.selected_storage?,
             user: self.user?,
         })
@@ -205,6 +232,7 @@ pub struct WizardConfig {
     profile_name: String,
     content_repository_id: ContentRepositoryId,
     external_content: Vec<ExternalContentItemId>,
+    model_realization_intents: Vec<ModelRealizationIntent>,
     storage_id: DiscoveredStorageId,
     user: UserConfiguration,
 }
@@ -236,6 +264,13 @@ impl WizardConfig {
     pub fn external_content(&self) -> &[ExternalContentItemId] {
         &self.external_content
     }
+    /// Returns the confirmed model realization intents.
+    #[must_use]
+    #[cfg(test)]
+    pub fn model_realization_intents(&self) -> &[ModelRealizationIntent] {
+        &self.model_realization_intents
+    }
+
     /// Returns the selected storage identifier.
     #[must_use]
     #[cfg(test)]
@@ -268,6 +303,7 @@ impl WizardConfig {
             self.storage_id.clone(),
             self.user_configuration().clone(),
         )
+        .with_model_realization_intents(self.model_realization_intents.clone())
     }
 }
 
@@ -277,7 +313,8 @@ mod tests {
     use model::{
         ApplianceProfile, Capability, ContentRepository, ContentRepositoryId, ContentSourceId,
         DiscoveredStorage, DiscoveredStorageId, ExternalContentItem, ExternalContentItemId,
-        StorageKind, UserConfiguration,
+        InferenceEngineId, ModelRealizationId, ModelRealizationIntent, StorageKind,
+        UserConfiguration,
     };
     use registry::{ApplianceProfileRepository, ContentRepositoryRepository};
 
@@ -477,6 +514,100 @@ mod tests {
             selected[1],
             ExternalContentItemId::new("local-models-directory:/media/daia/models/tokenizer.json")
         );
+    }
+
+    #[test]
+    fn wizard_state_stores_model_realization_intent_for_selected_content() {
+        let mut state = WizardState::new();
+        let item = ExternalContentItem::new(
+            ContentSourceId::new("local-models-directory"),
+            "/media/daia/models/model.gguf",
+        );
+        let item_id = item.id().clone();
+
+        state.set_external_content_items(vec![item]);
+        state.select_external_content(vec![item_id.clone()]);
+        state.set_model_realization_intents(vec![ModelRealizationIntent::new(
+            ModelRealizationId::new("model"),
+            InferenceEngineId::ollama(),
+            item_id.clone(),
+        )]);
+
+        let intents = state.model_realization_intents();
+
+        assert_eq!(intents.len(), 1);
+        assert_eq!(intents[0].id().as_str(), "model");
+        assert_eq!(intents[0].engine(), &InferenceEngineId::ollama());
+        assert_eq!(intents[0].source_item_id(), &item_id);
+    }
+
+    #[test]
+    fn changing_external_content_selection_clears_model_realization_intent() {
+        let mut state = WizardState::new();
+        let model = ExternalContentItem::new(
+            ContentSourceId::new("local-models-directory"),
+            "/media/daia/models/model.gguf",
+        );
+        let documentation = ExternalContentItem::new(
+            ContentSourceId::new("local-models-directory"),
+            "/media/daia/models/readme.txt",
+        );
+        let model_id = model.id().clone();
+        let documentation_id = documentation.id().clone();
+
+        state.set_external_content_items(vec![model, documentation]);
+        state.select_external_content(vec![model_id.clone()]);
+        state.set_model_realization_intents(vec![ModelRealizationIntent::new(
+            ModelRealizationId::new("model"),
+            InferenceEngineId::ollama(),
+            model_id,
+        )]);
+
+        state.select_external_content(vec![documentation_id]);
+
+        assert!(state.model_realization_intents().is_empty());
+    }
+
+    #[test]
+    fn wizard_configuration_preserves_model_realization_intent() {
+        let mut state = WizardState::new();
+
+        state.set_profile_name("desktop");
+        select_test_content_repository(&mut state);
+        select_test_storage(&mut state);
+        select_test_user(&mut state);
+
+        let item = ExternalContentItem::new(
+            ContentSourceId::new("local-models-directory"),
+            "/media/daia/models/model.gguf",
+        );
+        let item_id = item.id().clone();
+
+        state.set_external_content_items(vec![item]);
+        state.select_external_content(vec![item_id.clone()]);
+        state.set_model_realization_intents(vec![ModelRealizationIntent::new(
+            ModelRealizationId::new("model"),
+            InferenceEngineId::ollama(),
+            item_id.clone(),
+        )]);
+
+        let config = state
+            .into_config()
+            .expect("completed wizard state should build configuration");
+
+        assert_eq!(config.model_realization_intents().len(), 1);
+        assert_eq!(
+            config.model_realization_intents()[0].source_item_id(),
+            &item_id
+        );
+
+        let appliance = config.appliance_configuration();
+        let intents = appliance.model_realization_intents();
+
+        assert_eq!(intents.len(), 1);
+        assert_eq!(intents[0].id().as_str(), "model");
+        assert_eq!(intents[0].engine(), &InferenceEngineId::ollama());
+        assert_eq!(intents[0].source_item_id(), &item_id);
     }
 
     #[test]

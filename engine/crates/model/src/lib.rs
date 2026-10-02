@@ -1250,6 +1250,12 @@ impl InferenceEngineId {
         Self::new("llama.cpp")
     }
 
+    /// Returns the canonical identifier for Ollama.
+    #[must_use]
+    pub fn ollama() -> Self {
+        Self::new("ollama")
+    }
+
     /// Returns the inference engine identifier as a string slice.
     #[must_use]
     pub fn as_str(&self) -> &str {
@@ -1260,6 +1266,111 @@ impl InferenceEngineId {
 impl fmt::Display for InferenceEngineId {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(self.as_str())
+    }
+}
+
+/// Stable identity assigned to a realized model.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ModelRealizationId(String);
+
+impl ModelRealizationId {
+    /// Creates a model realization identifier.
+    #[must_use]
+    pub fn new(value: impl Into<String>) -> Self {
+        Self(value.into())
+    }
+
+    /// Returns the model realization identifier.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+/// Describes intent to realize selected external model content with an inference engine.
+///
+/// This intent exists before content is imported. The source item identity is
+/// later resolved to successfully imported content before model realization.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ModelRealizationIntent {
+    id: ModelRealizationId,
+    engine: InferenceEngineId,
+    source_item_id: ExternalContentItemId,
+}
+
+impl ModelRealizationIntent {
+    /// Creates model realization intent.
+    #[must_use]
+    pub const fn new(
+        id: ModelRealizationId,
+        engine: InferenceEngineId,
+        source_item_id: ExternalContentItemId,
+    ) -> Self {
+        Self {
+            id,
+            engine,
+            source_item_id,
+        }
+    }
+
+    /// Returns the stable realization identity.
+    #[must_use]
+    pub const fn id(&self) -> &ModelRealizationId {
+        &self.id
+    }
+
+    /// Returns the target inference engine.
+    #[must_use]
+    pub const fn engine(&self) -> &InferenceEngineId {
+        &self.engine
+    }
+
+    /// Returns the selected external content identity.
+    #[must_use]
+    pub const fn source_item_id(&self) -> &ExternalContentItemId {
+        &self.source_item_id
+    }
+}
+
+/// Describes one imported model that should be realized by an inference engine.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ModelRealization {
+    id: ModelRealizationId,
+    engine: InferenceEngineId,
+    content: ImportedContentItem,
+}
+
+impl ModelRealization {
+    /// Creates a model realization.
+    #[must_use]
+    pub fn new(
+        id: ModelRealizationId,
+        engine: InferenceEngineId,
+        content: ImportedContentItem,
+    ) -> Self {
+        Self {
+            id,
+            engine,
+            content,
+        }
+    }
+
+    /// Returns the stable realization identity.
+    #[must_use]
+    pub const fn id(&self) -> &ModelRealizationId {
+        &self.id
+    }
+
+    /// Returns the inference engine that owns this realization.
+    #[must_use]
+    pub const fn engine(&self) -> &InferenceEngineId {
+        &self.engine
+    }
+
+    /// Returns the imported content backing this realization.
+    #[must_use]
+    pub const fn content(&self) -> &ImportedContentItem {
+        &self.content
     }
 }
 
@@ -1971,6 +2082,7 @@ pub struct ApplianceConfiguration {
     profile_name: String,
     content_repository_id: ContentRepositoryId,
     content_import: ContentImportIntent,
+    model_realization_intents: Vec<ModelRealizationIntent>,
     installation: InstallationIntent,
 }
 
@@ -1987,6 +2099,7 @@ impl ApplianceConfiguration {
             profile_name: profile_name.into(),
             content_repository_id,
             content_import,
+            model_realization_intents: Vec::new(),
             installation,
         }
     }
@@ -2026,6 +2139,19 @@ impl ApplianceConfiguration {
     #[must_use]
     pub const fn content_import(&self) -> &ContentImportIntent {
         &self.content_import
+    }
+
+    /// Replaces the confirmed model realization intents.
+    #[must_use]
+    pub fn with_model_realization_intents(mut self, intents: Vec<ModelRealizationIntent>) -> Self {
+        self.model_realization_intents = intents;
+        self
+    }
+
+    /// Returns the confirmed model realization intents.
+    #[must_use]
+    pub fn model_realization_intents(&self) -> &[ModelRealizationIntent] {
+        &self.model_realization_intents
     }
 
     /// Returns the confirmed installation intent.
@@ -2134,6 +2260,22 @@ impl InstallationIntent {
 #[cfg(test)]
 mod tests {
     #[test]
+    fn model_realization_intent_exposes_contract() {
+        let intent = ModelRealizationIntent::new(
+            ModelRealizationId::new("model"),
+            InferenceEngineId::ollama(),
+            ExternalContentItemId::new("local:/media/daia/models/model.gguf"),
+        );
+
+        assert_eq!(intent.id().as_str(), "model");
+        assert_eq!(intent.engine(), &InferenceEngineId::ollama());
+        assert_eq!(
+            intent.source_item_id().as_str(),
+            "local:/media/daia/models/model.gguf"
+        );
+    }
+
+    #[test]
     fn user_configuration_exposes_non_secret_identity() {
         let user = UserConfiguration::new("admin", "DAIA Administrator");
 
@@ -2181,14 +2323,15 @@ mod tests {
         CurrentRevision, CurrentStateProposal, DesiredGeneration, DesiredResource,
         DiscoveredContent, DiscoveredStorage, DiscoveredStorageId, EvidenceId, EvidenceSourceId,
         ExternalContentItem, ExternalContentItemId, ImportedContentItem, InferenceEngineId,
-        InstallationIntent, Observation, ObservationSourceId, ObservationTimestamp,
-        PackageManifest, PlanStep, ProviderId, ResourceId, ResourceType, SchemaVersion,
-        ServiceCurrentState, ServiceDesiredState, StateBasis, StorageKind, StorageTarget,
-        StorageTargetId, UserConfiguration, VerificationCondition, VerificationConditionId,
-        VerificationConditionResult, VerificationEvidenceReference, VerificationOverallResult,
-        VerificationPolicyRevision, VerificationProviderId, VerificationProviderVersion,
-        VerificationPurpose, VerificationRequest, VerificationResult, VerificationResultId,
-        VerificationRuleReference, VerificationRuleVersion, VerificationTimestamp,
+        InstallationIntent, ModelRealizationId, ModelRealizationIntent, Observation,
+        ObservationSourceId, ObservationTimestamp, PackageManifest, PlanStep, ProviderId,
+        ResourceId, ResourceType, SchemaVersion, ServiceCurrentState, ServiceDesiredState,
+        StateBasis, StorageKind, StorageTarget, StorageTargetId, UserConfiguration,
+        VerificationCondition, VerificationConditionId, VerificationConditionResult,
+        VerificationEvidenceReference, VerificationOverallResult, VerificationPolicyRevision,
+        VerificationProviderId, VerificationProviderVersion, VerificationPurpose,
+        VerificationRequest, VerificationResult, VerificationResultId, VerificationRuleReference,
+        VerificationRuleVersion, VerificationTimestamp,
     };
     use std::path::{Path, PathBuf};
 

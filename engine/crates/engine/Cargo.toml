@@ -13,6 +13,11 @@ model = { path = "../model" }
 planner = { path = "../planner" }
 registry = { path = "../registry" }
 resolver = { path = "../resolver" }
+state = { path = "../state" }
 tempfile = "3"
+
+[dev-dependencies]
+serde_json.workspace = true
+
 [lints]
 workspace = true
