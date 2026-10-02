@@ -3,6 +3,14 @@
 version = 4
 
 [[package]]
+name = "application"
+version = "0.1.0"
+dependencies = [
+ "model",
+ "registry",
+]
+
+[[package]]
 name = "assets"
 version = "0.1.0"
 dependencies = [
@@ -25,6 +33,7 @@ checksum = "9330f8b2ff13f34540b44e946ef35111825727b38d33286ef986142615121801"
 name = "cli"
 version = "0.1.0"
 dependencies = [
+ "application",
  "engine",
  "inspector",
  "model",

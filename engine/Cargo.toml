@@ -11,6 +11,7 @@ members = [
     "crates/facts",
     "crates/state",
     "crates/engine",
+    "crates/application",
     "crates/cli",
 
 ]

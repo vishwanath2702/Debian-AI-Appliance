@@ -16,10 +16,9 @@ use std::env;
 use std::io::{self, Write};
 use std::path::PathBuf;
 use std::process::ExitCode;
-use wizard::WizardState;
+use application::WizardState;
 mod appliance_profile_repository;
 mod provider_registry;
-mod wizard;
 
 struct BuildOptions {
     rootfs: PathBuf,

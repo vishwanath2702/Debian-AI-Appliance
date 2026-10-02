@@ -9,6 +9,7 @@ name = "daia"
 path = "src/main.rs"
 
 [dependencies]
+application = { path = "../application" }
 engine = { path = "../engine" }
 model = { path = "../model" }
 registry = { path = "../registry" }
