@@ -583,6 +583,33 @@ impl Engine {
 
         Ok(PreparedContentImport::new(intent, items, destination))
     }
+    /// Applies a prepared content import to an existing installed appliance.
+    ///
+    /// Successfully imported content is recorded in the appliance's persisted
+    /// desired state together with matching model realization intents.
+    ///
+    /// # Errors
+    ///
+    /// Returns an I/O error if content import or appliance-state persistence fails.
+    pub fn apply_post_install_content_import(
+        &self,
+        prepared: &PreparedContentImport,
+        model_realization_intents: &[model::ModelRealizationIntent],
+        root: impl AsRef<std::path::Path>,
+    ) -> Result<(), std::io::Error> {
+        let root = root.as_ref();
+
+        let mut executor = SystemContentImportOperationExecutor::new(
+            SystemContentImportFileSystem::with_root(root),
+        );
+
+        let imported_content = prepared.execute(&mut executor)?;
+
+        let mut appliance_state = state::ApplianceState::read_from_root(root)?;
+        appliance_state.apply_content_imports(imported_content, model_realization_intents);
+        appliance_state.write_to_root(root)
+    }
+
     /// Discovers hardware facts for the current system.
     ///
     /// # Errors
@@ -1272,6 +1299,80 @@ mod tests {
             )]
         );
     }
+    #[test]
+    fn applies_post_install_content_import_to_existing_appliance_state() {
+        let directory = tempfile::tempdir().expect("temporary directory should be created");
+
+        let source = directory.path().join("model.gguf");
+        let root = directory.path().join("root");
+
+        std::fs::write(&source, "model").expect("source model should be written");
+
+        let item =
+            ExternalContentItem::new(ContentSourceId::new("local-models-directory"), &source);
+
+        let intent = ContentImportIntent::new(vec![item.id().clone()]);
+
+        let engine = Engine::from_registry(desktop_registry());
+
+        let prepared = engine
+            .prepare_content_import(
+                intent,
+                vec![item.clone()],
+                ContentImportDestination::new("/var/lib/daia/content"),
+            )
+            .expect("content import should prepare");
+
+        let realization_intent = model::ModelRealizationIntent::new(
+            model::ModelRealizationId::new("post-install-model"),
+            InferenceEngineId::ollama(),
+            item.id().clone(),
+        );
+
+        let existing_source_item_id =
+            ExternalContentItemId::new("existing-repository:/models/existing.gguf");
+        let existing_content = ImportedContentItem::new(
+            existing_source_item_id.clone(),
+            "/var/lib/daia/content/existing.gguf",
+        );
+
+        let mut appliance_state = state::ApplianceState::new("desktop");
+        appliance_state.record_imported_content(existing_content);
+        appliance_state
+            .write_to_root(&root)
+            .expect("initial appliance state should be written");
+
+        engine
+            .apply_post_install_content_import(&prepared, &[realization_intent], &root)
+            .expect("post-install content import should succeed");
+
+        let appliance_state = state::ApplianceState::read_from_root(&root)
+            .expect("updated appliance state should be readable");
+
+        assert_eq!(appliance_state.imported_content().len(), 2);
+        assert!(
+            appliance_state
+                .imported_content()
+                .iter()
+                .any(|content| content.source_item_id() == &existing_source_item_id),
+            "existing managed content should be preserved"
+        );
+        assert_eq!(appliance_state.model_realizations().len(), 1);
+
+        let realization = &appliance_state.model_realizations()[0];
+
+        assert_eq!(
+            realization.id(),
+            &model::ModelRealizationId::new("post-install-model")
+        );
+        assert_eq!(realization.engine(), &InferenceEngineId::ollama());
+        assert_eq!(realization.content().source_item_id(), item.id());
+        assert_eq!(
+            realization.content().path(),
+            root.join("var/lib/daia/content/model.gguf")
+        );
+    }
+
     #[test]
     fn system_content_import_file_system_copies_item() {
         let directory = tempfile::tempdir().expect("temporary directory should be created");

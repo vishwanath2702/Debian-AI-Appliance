@@ -103,11 +103,218 @@ fn run_realize_models() -> ExitCode {
     run_realize_models_from_root("/")
 }
 
+fn apply_post_install_model_add_with<E>(
+    engine: &engine::Engine,
+    prepared: &engine::PreparedContentImport,
+    model_realization_intents: &[model::ModelRealizationIntent],
+    root: impl AsRef<std::path::Path>,
+    executor: &mut E,
+) -> ExitCode
+where
+    E: engine::ModelRealizationExecutor,
+    E::Error: std::fmt::Display,
+{
+    let root = root.as_ref();
+
+    if let Err(error) =
+        engine.apply_post_install_content_import(prepared, model_realization_intents, root)
+    {
+        eprintln!("Error importing model content: {error}");
+        return ExitCode::FAILURE;
+    }
+
+    let appliance_state = match state::ApplianceState::read_from_root(root) {
+        Ok(appliance_state) => appliance_state,
+        Err(error) => {
+            eprintln!("Error loading appliance state: {error}");
+            return ExitCode::FAILURE;
+        }
+    };
+
+    if let Err(error) = realize_models_with(appliance_state.model_realizations(), executor) {
+        eprintln!("Error realizing models: {error}");
+        return ExitCode::FAILURE;
+    }
+
+    ExitCode::SUCCESS
+}
+
+fn run_model_add() -> ExitCode {
+    let repositories = match load_content_repositories() {
+        Ok(repositories) => repositories,
+        Err(error) => {
+            eprintln!("{error}");
+            return ExitCode::FAILURE;
+        }
+    };
+
+    if repositories.is_empty() {
+        eprintln!("No content repositories found.");
+        return ExitCode::FAILURE;
+    }
+
+    println!();
+    println!("Content repositories:");
+
+    for (index, repository) in repositories.iter().enumerate() {
+        println!(
+            "  {}. {}  {}",
+            index + 1,
+            repository.id(),
+            repository.description()
+        );
+    }
+
+    print!("Select content repository [1-{}]: ", repositories.len());
+
+    if let Err(error) = io::stdout().flush() {
+        eprintln!("Error writing prompt: {error}");
+        return ExitCode::FAILURE;
+    }
+
+    let mut input = String::new();
+
+    if let Err(error) = io::stdin().read_line(&mut input) {
+        eprintln!("Error reading selection: {error}");
+        return ExitCode::FAILURE;
+    }
+
+    let selection = match parse_content_repository_selection(&input, repositories.len()) {
+        Ok(selection) => selection,
+        Err(error) => {
+            eprintln!("{error}");
+            return ExitCode::FAILURE;
+        }
+    };
+
+    let repository = &repositories[selection - 1];
+    let engine = Engine::from_registry(registry::Registry::default());
+    let inspector = inspector::LocalFilesystemContentInspector::new();
+
+    let items = match engine.repository_content_items(repository, &inspector) {
+        Ok(items) => items,
+        Err(error) => {
+            eprintln!("Error discovering external content: {error}");
+            return ExitCode::FAILURE;
+        }
+    };
+
+    let mut models = Vec::new();
+
+    for item in items {
+        match engine.inspect_external_model(&item) {
+            Ok(Some(metadata)) => models.push((item, metadata)),
+            Ok(None) => {}
+            Err(error) => {
+                eprintln!(
+                    "Error inspecting external content {}: {error}",
+                    item.path().display()
+                );
+                return ExitCode::FAILURE;
+            }
+        }
+    }
+
+    if models.is_empty() {
+        eprintln!("No GGUF models found in the selected content repository.");
+        return ExitCode::FAILURE;
+    }
+
+    println!();
+    println!("GGUF models:");
+
+    for (index, (item, metadata)) in models.iter().enumerate() {
+        match metadata.name() {
+            Some(name) => println!("  {}. {}  ({name})", index + 1, item.path().display()),
+            None => println!("  {}. {}", index + 1, item.path().display()),
+        }
+    }
+
+    print!("Select model [1-{}]: ", models.len());
+
+    if let Err(error) = io::stdout().flush() {
+        eprintln!("Error writing prompt: {error}");
+        return ExitCode::FAILURE;
+    }
+
+    input.clear();
+
+    if let Err(error) = io::stdin().read_line(&mut input) {
+        eprintln!("Error reading selection: {error}");
+        return ExitCode::FAILURE;
+    }
+
+    let selections = match parse_external_content_selection(&input, models.len()) {
+        Ok(selections) => selections,
+        Err(error) => {
+            eprintln!("{error}");
+            return ExitCode::FAILURE;
+        }
+    };
+
+    if selections.len() != 1 {
+        eprintln!("Select exactly one model.");
+        return ExitCode::FAILURE;
+    }
+
+    let item = models[selections[0] - 1].0.clone();
+
+    print!("DAIA model name: ");
+
+    if let Err(error) = io::stdout().flush() {
+        eprintln!("Error writing prompt: {error}");
+        return ExitCode::FAILURE;
+    }
+
+    input.clear();
+
+    if let Err(error) = io::stdin().read_line(&mut input) {
+        eprintln!("Error reading model name: {error}");
+        return ExitCode::FAILURE;
+    }
+
+    let model_name = input.trim();
+
+    if model_name.is_empty() {
+        eprintln!("DAIA model name cannot be empty.");
+        return ExitCode::FAILURE;
+    }
+
+    let prepared = match engine.prepare_content_import(
+        model::ContentImportIntent::new(vec![item.id().clone()]),
+        vec![item.clone()],
+        model::ContentImportDestination::new("/var/lib/daia/content"),
+    ) {
+        Ok(prepared) => prepared,
+        Err(error) => {
+            eprintln!("Error preparing model import: {error}");
+            return ExitCode::FAILURE;
+        }
+    };
+
+    let realization_intent = model::ModelRealizationIntent::new(
+        model::ModelRealizationId::new(model_name),
+        model::InferenceEngineId::ollama(),
+        item.id().clone(),
+    );
+
+    let mut executor = engine::OllamaModelRealizationExecutor::default();
+
+    apply_post_install_model_add_with(
+        &engine,
+        &prepared,
+        &[realization_intent],
+        "/",
+        &mut executor,
+    )
+}
+
 fn run(arguments: &[String]) -> ExitCode {
     match arguments {
         [command] if command == "wizard" => run_wizard(),
         [command] if command == "install" => run_install(),
         [command] if command == "realize-models" => run_realize_models(),
+        [command, subcommand] if command == "model" && subcommand == "add" => run_model_add(),
         [capability_name] => run_plan(capability_name),
         [command, capability_name] if command == "plan" => run_plan(capability_name),
         [command, profile_name] if command == "plan-profile" => run_profile_plan(profile_name),
@@ -1156,12 +1363,15 @@ fn execute_wizard_dry_run(
     print_installation_operations(&installation_executor);
 }
 
-fn load_wizard_content_repositories(state: &mut WizardState) -> Result<(), String> {
+fn load_content_repositories() -> Result<Vec<model::ContentRepository>, String> {
     let repository = ContentRepositoryRepository::load_directory(&content_repository_directory())
         .map_err(|error| format!("Error loading content repositories: {error}"))?;
 
-    state.set_content_repositories(repository.repositories().to_vec());
+    Ok(repository.repositories().to_vec())
+}
 
+fn load_wizard_content_repositories(state: &mut WizardState) -> Result<(), String> {
+    state.set_content_repositories(load_content_repositories()?);
     Ok(())
 }
 
@@ -1413,7 +1623,10 @@ fn run_wizard() -> ExitCode {
 }
 #[cfg(test)]
 mod tests {
-    use super::{BuildOptions, InstallationOperation, installation_operation_name, run};
+    use super::{
+        BuildOptions, InstallationOperation, apply_post_install_model_add_with,
+        installation_operation_name, run,
+    };
     use std::path::PathBuf;
     use std::process::ExitCode;
 
@@ -1472,6 +1685,70 @@ mod tests {
                 PathBuf::from("/var/lib/daia/content/model.gguf"),
             )]
         );
+    }
+
+    #[test]
+    fn post_install_model_add_realizes_persisted_desired_model() {
+        let directory = tempfile::tempdir().expect("temporary directory should be created");
+        let root = directory.path().join("root");
+        let source = directory.path().join("model.gguf");
+
+        std::fs::write(&source, "model").expect("source model should be written");
+
+        let item = model::ExternalContentItem::new(
+            model::ContentSourceId::new("local-models-directory"),
+            &source,
+        );
+
+        let engine = engine::Engine::from_registry(registry::Registry::default());
+
+        let prepared = engine
+            .prepare_content_import(
+                model::ContentImportIntent::new(vec![item.id().clone()]),
+                vec![item.clone()],
+                model::ContentImportDestination::new("/var/lib/daia/content"),
+            )
+            .expect("content import should prepare");
+
+        let realization_intent = model::ModelRealizationIntent::new(
+            model::ModelRealizationId::new("post-install-model"),
+            model::InferenceEngineId::ollama(),
+            item.id().clone(),
+        );
+
+        state::ApplianceState::new("desktop")
+            .write_to_root(&root)
+            .expect("initial appliance state should be written");
+
+        #[derive(Default)]
+        struct RecordingModelRealizationExecutor {
+            ids: Vec<String>,
+        }
+
+        impl engine::ModelRealizationExecutor for RecordingModelRealizationExecutor {
+            type Error = std::io::Error;
+
+            fn execute(
+                &mut self,
+                realization: &model::ModelRealization,
+            ) -> Result<(), Self::Error> {
+                self.ids.push(realization.id().as_str().to_owned());
+                Ok(())
+            }
+        }
+
+        let mut executor = RecordingModelRealizationExecutor::default();
+
+        let result = apply_post_install_model_add_with(
+            &engine,
+            &prepared,
+            &[realization_intent],
+            &root,
+            &mut executor,
+        );
+
+        assert_eq!(result, ExitCode::SUCCESS);
+        assert_eq!(executor.ids, vec!["post-install-model"]);
     }
 
     #[test]
