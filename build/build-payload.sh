@@ -131,6 +131,15 @@ DAIA_WORKSPACE="$PAYLOAD_WORKSPACE/daia"
 
 DAIA_ROOT_TARGET="$DAIA_WORKSPACE/opt/daia"
 DAIA_RUNTIME_SOURCE="$PROJECT_ROOT/runtime"
+DAIA_BRANDING_SOURCE="$PROJECT_ROOT/branding"
+DAIA_BRANDING_IDENTITY_SOURCE="$DAIA_BRANDING_SOURCE/identity"
+DAIA_BRANDING_GRUB_SOURCE="$DAIA_BRANDING_SOURCE/boot/grub"
+DAIA_BRANDING_PLYMOUTH_SOURCE="$DAIA_BRANDING_SOURCE/boot/plymouth"
+DAIA_BRANDING_WALLPAPER_SOURCE="$DAIA_BRANDING_SOURCE/desktop/wallpaper"
+DAIA_BRANDING_PLASMA_SOURCE="$DAIA_BRANDING_SOURCE/desktop/plasma"
+DAIA_BRANDING_SDDM_SOURCE="$DAIA_BRANDING_SOURCE/desktop/sddm"
+DAIA_BRANDING_INSTALLER_SOURCE="$DAIA_BRANDING_SOURCE/installer"
+DAIA_BRANDING_APPLICATION_SOURCE="$DAIA_BRANDING_SOURCE/application"
 
 DAIA_CONFIG_TARGET="$DAIA_ROOT_TARGET/config"
 DAIA_LIB_TARGET="$DAIA_ROOT_TARGET/lib"
@@ -594,6 +603,54 @@ stage_branding()
         log_info "DAIA branding is disabled by configuration."
         return 0
     fi
+
+    stage_directory_component \
+        "DAIA identity branding" \
+        "$DAIA_BRANDING_ENABLED" \
+        "$DAIA_BRANDING_IDENTITY_SOURCE" \
+        "$DAIA_BRANDING_TARGET/identity"
+
+    stage_directory_component \
+        "DAIA GRUB branding" \
+        "$DAIA_BRANDING_ENABLED" \
+        "$DAIA_BRANDING_GRUB_SOURCE" \
+        "$DAIA_BRANDING_TARGET/boot/grub"
+
+    stage_directory_component \
+        "DAIA Plymouth branding" \
+        "$DAIA_BRANDING_ENABLED" \
+        "$DAIA_BRANDING_PLYMOUTH_SOURCE" \
+        "$DAIA_BRANDING_TARGET/boot/plymouth"
+
+    stage_directory_component \
+        "DAIA wallpaper branding" \
+        "$DAIA_BRANDING_ENABLED" \
+        "$DAIA_BRANDING_WALLPAPER_SOURCE" \
+        "$DAIA_BRANDING_TARGET/desktop/wallpaper"
+
+    stage_directory_component \
+        "DAIA Plasma branding" \
+        "$DAIA_BRANDING_ENABLED" \
+        "$DAIA_BRANDING_PLASMA_SOURCE" \
+        "$DAIA_BRANDING_TARGET/desktop/plasma"
+
+    stage_directory_component \
+        "DAIA SDDM branding" \
+        "$DAIA_BRANDING_ENABLED" \
+        "$DAIA_BRANDING_SDDM_SOURCE" \
+        "$DAIA_BRANDING_TARGET/desktop/sddm"
+
+    stage_directory_component \
+        "DAIA installer branding" \
+        "$DAIA_BRANDING_ENABLED" \
+        "$DAIA_BRANDING_INSTALLER_SOURCE" \
+        "$DAIA_BRANDING_TARGET/installer"
+
+    stage_directory_component \
+        "DAIA application branding" \
+        "$DAIA_BRANDING_ENABLED" \
+        "$DAIA_BRANDING_APPLICATION_SOURCE" \
+        "$DAIA_BRANDING_TARGET/application"
 
     stage_file_component \
         "Default wallpaper" \
