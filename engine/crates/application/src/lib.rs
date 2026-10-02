@@ -41,6 +41,15 @@ impl WizardState {
         self.user = Some(user);
     }
 
+    /// Configures the human administrator identity selected by a presentation.
+    pub fn set_user_identity(
+        &mut self,
+        username: impl Into<String>,
+        display_name: impl Into<String>,
+    ) {
+        self.set_user_configuration(UserConfiguration::new(username, display_name));
+    }
+
     /// Returns the configured human administrator identity.
     #[must_use]
     pub fn user_configuration(&self) -> Option<&UserConfiguration> {
