@@ -1055,7 +1055,7 @@ fn render(frame: &mut ratatui::Frame<'_>, state: &TuiState) {
                 marker(AdministratorField::Back),
             )
         }
-        _ => {
+        WizardScreen::Review => {
             let continue_marker = if state.screen_action == ScreenAction::Continue {
                 ">"
             } else {
@@ -1067,8 +1067,49 @@ fn render(frame: &mut ratatui::Frame<'_>, state: &TuiState) {
                 " "
             };
 
+            let repository = state
+                .wizard
+                .selected_content_repository()
+                .map_or("Not selected", model::ContentRepositoryId::as_str);
+
+            let storage = state
+                .wizard
+                .selected_storage_device()
+                .map(|storage| {
+                    format!(
+                        "{} ({}, {})",
+                        storage.device_path().display(),
+                        storage.kind(),
+                        storage.id(),
+                    )
+                })
+                .unwrap_or_else(|| "Not selected".to_owned());
+
+            let local_content = state.wizard.selected_external_content().len();
+
+            let username = if state.administrator_username.is_empty() {
+                "Not configured"
+            } else {
+                &state.administrator_username
+            };
+
+            let display_name = if state.administrator_display_name.is_empty() {
+                "Not configured"
+            } else {
+                &state.administrator_display_name
+            };
+
             format!(
-                "Selected profile: {profile}\n\n                 {continue_marker} Continue\n                 {back_marker} Back"
+                "Review Configuration\n\n\
+                 Appliance profile: {profile}\n\
+                 Content repository: {repository}\n\
+                 Local content selected: {local_content}\n\
+                 Installation storage: {storage}\n\
+                 Administrator: {username}\n\
+                 Display name: {display_name}\n\n\
+                 Root and administrator passwords are configured but are not displayed.\n\n\
+                 {continue_marker} Continue\n\
+                 {back_marker} Back"
             )
         }
     };
@@ -1253,8 +1294,48 @@ fn main() -> io::Result<()> {
 mod tests {
     use super::{
         AdministratorField, ExternalContentFocus, ScreenAction, TuiState, WelcomeAction,
-        WizardScreen,
+        WizardScreen, render,
     };
+    use ratatui::{Terminal, backend::TestBackend};
+
+    #[test]
+    fn renders_review_configuration_summary() {
+        let mut state = TuiState::new();
+
+        let storage = model::DiscoveredStorage::new(
+            "review-disk",
+            model::StorageKind::Secondary,
+            "/dev/review",
+        )
+        .with_size_bytes(128 * 1024 * 1024 * 1024);
+        let storage_id = storage.id().clone();
+
+        state.wizard.set_discovered_storage(vec![storage]);
+        state.wizard.select_storage(storage_id);
+        state
+            .wizard
+            .set_user_identity("review-admin", "Review Administrator");
+
+        state.administrator_username = "review-admin".to_owned();
+        state.administrator_display_name = "Review Administrator".to_owned();
+        state.screen = WizardScreen::Review;
+
+        let backend = TestBackend::new(120, 40);
+        let mut terminal = Terminal::new(backend).expect("test terminal should be created");
+
+        terminal
+            .draw(|frame| render(frame, &state))
+            .expect("Review should render");
+
+        let rendered = terminal.backend().to_string();
+
+        assert!(rendered.contains("Review Configuration"));
+        assert!(rendered.contains("/dev/review"));
+        assert!(rendered.contains("review-disk"));
+        assert!(rendered.contains("review-admin"));
+        assert!(rendered.contains("Review Administrator"));
+        assert!(rendered.contains("Root and administrator passwords are configured"));
+    }
 
     #[test]
     fn starts_at_welcome_screen_with_empty_wizard_state() {
