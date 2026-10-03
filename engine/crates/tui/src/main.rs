@@ -193,24 +193,43 @@ impl TuiState {
 
     fn validate_administrator(&mut self) -> bool {
         let error = if self.credentials.root_password.is_empty() {
-            Some("Root password cannot be empty")
+            Some((
+                AdministratorField::RootPassword,
+                "Root password cannot be empty",
+            ))
         } else if self.credentials.root_password != self.credentials.root_password_confirmation {
-            Some("Root passwords do not match")
+            Some((
+                AdministratorField::RootPasswordConfirmation,
+                "Root passwords do not match",
+            ))
         } else if self.administrator_username.trim().is_empty() {
-            Some("Administrator username cannot be empty")
+            Some((
+                AdministratorField::Username,
+                "Administrator username cannot be empty",
+            ))
         } else if self.administrator_display_name.trim().is_empty() {
-            Some("Administrator display name cannot be empty")
+            Some((
+                AdministratorField::DisplayName,
+                "Administrator display name cannot be empty",
+            ))
         } else if self.credentials.administrator_password.is_empty() {
-            Some("Administrator password cannot be empty")
+            Some((
+                AdministratorField::AdministratorPassword,
+                "Administrator password cannot be empty",
+            ))
         } else if self.credentials.administrator_password
             != self.credentials.administrator_password_confirmation
         {
-            Some("Administrator passwords do not match")
+            Some((
+                AdministratorField::AdministratorPasswordConfirmation,
+                "Administrator passwords do not match",
+            ))
         } else {
             None
         };
 
-        if let Some(error) = error {
+        if let Some((field, error)) = error {
+            self.administrator_field = field;
             self.administrator_error = Some(error.to_owned());
             return false;
         }
@@ -406,8 +425,15 @@ fn render(frame: &mut ratatui::Frame<'_>, state: &TuiState) {
             .title("Configuration"),
     );
 
-    let controls = Paragraph::new("Up / Down: Select    Enter: Confirm    Backspace: Edit")
-        .block(Block::default().borders(Borders::ALL));
+    let controls = match state.screen {
+        WizardScreen::Welcome => "↑ / ↓: Navigate    Enter: Select",
+        WizardScreen::Administrator => {
+            "↑ / ↓: Navigate    Enter: Select    Esc: Back    Backspace: Edit"
+        }
+        _ => "↑ / ↓: Navigate    Enter: Select    Esc: Back",
+    };
+
+    let controls = Paragraph::new(controls).block(Block::default().borders(Borders::ALL));
 
     frame.render_widget(title, areas[0]);
     frame.render_widget(body, areas[1]);
@@ -432,6 +458,14 @@ fn run() -> io::Result<()> {
         };
 
         match key.code {
+            KeyCode::Esc if state.screen != WizardScreen::Welcome => {
+                state.previous_screen();
+                state.screen_action = ScreenAction::Continue;
+
+                if state.screen == WizardScreen::Administrator {
+                    state.administrator_field = AdministratorField::RootPassword;
+                }
+            }
             KeyCode::Down if state.screen == WizardScreen::Welcome => {
                 state.next_welcome_action();
             }
@@ -629,6 +663,7 @@ mod tests {
             state.administrator_error.as_deref(),
             Some("Root password cannot be empty")
         );
+        assert_eq!(state.administrator_field, AdministratorField::RootPassword);
         assert_eq!(state.wizard.user_configuration(), None);
     }
 
@@ -651,7 +686,44 @@ mod tests {
             state.administrator_error.as_deref(),
             Some("Administrator passwords do not match")
         );
+        assert_eq!(
+            state.administrator_field,
+            AdministratorField::AdministratorPasswordConfirmation
+        );
         assert_eq!(state.wizard.user_configuration(), None);
+    }
+
+    #[test]
+    fn escape_navigation_moves_back_one_screen() {
+        let mut state = TuiState::new();
+
+        state.screen = WizardScreen::Profile;
+        state.previous_screen();
+        assert_eq!(state.screen, WizardScreen::Welcome);
+
+        state.screen = WizardScreen::ContentRepository;
+        state.previous_screen();
+        assert_eq!(state.screen, WizardScreen::Profile);
+
+        state.screen = WizardScreen::ExternalContent;
+        state.previous_screen();
+        assert_eq!(state.screen, WizardScreen::ContentRepository);
+
+        state.screen = WizardScreen::Storage;
+        state.previous_screen();
+        assert_eq!(state.screen, WizardScreen::ExternalContent);
+
+        state.screen = WizardScreen::Administrator;
+        state.previous_screen();
+        assert_eq!(state.screen, WizardScreen::Storage);
+
+        state.screen = WizardScreen::Review;
+        state.previous_screen();
+        assert_eq!(state.screen, WizardScreen::Administrator);
+
+        state.screen = WizardScreen::Welcome;
+        state.previous_screen();
+        assert_eq!(state.screen, WizardScreen::Welcome);
     }
 
     #[test]
