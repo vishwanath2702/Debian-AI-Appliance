@@ -7,7 +7,9 @@ use crossterm::{
     terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
 use engine::Engine;
-use inspector::{ContentInspector, LocalFilesystemContentInspector};
+use inspector::{
+    ContentInspector, LinuxStorageInspector, LocalFilesystemContentInspector, StorageInspector,
+};
 use ratatui::{
     Terminal,
     backend::CrosstermBackend,
@@ -26,6 +28,13 @@ enum WizardScreen {
     Storage,
     Administrator,
     Review,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+enum StorageFocus {
+    #[default]
+    Devices,
+    Back,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -83,6 +92,9 @@ struct TuiState {
     pending_model_name_index: Option<usize>,
     external_content_error: Option<String>,
     external_content_focus: ExternalContentFocus,
+    selected_storage_index: usize,
+    storage_error: Option<String>,
+    storage_focus: StorageFocus,
     credentials: CredentialState,
     administrator_username: String,
     administrator_display_name: String,
@@ -115,6 +127,9 @@ impl TuiState {
             pending_model_name_index: None,
             external_content_error: None,
             external_content_focus: ExternalContentFocus::ContinueWithoutLocalContent,
+            selected_storage_index: 0,
+            storage_error: None,
+            storage_focus: StorageFocus::Devices,
             credentials: CredentialState::default(),
             administrator_username: String::new(),
             administrator_display_name: String::new(),
@@ -213,6 +228,79 @@ impl TuiState {
 
     fn previous_welcome_action(&mut self) {
         self.welcome_action = WelcomeAction::Start;
+    }
+
+    fn next_storage(&mut self) {
+        let selectable_count = self.wizard.selectable_storage().count();
+
+        match self.storage_focus {
+            StorageFocus::Devices => {
+                if selectable_count == 0 || self.selected_storage_index + 1 >= selectable_count {
+                    self.storage_focus = StorageFocus::Back;
+                } else {
+                    self.selected_storage_index += 1;
+                }
+            }
+            StorageFocus::Back => {}
+        }
+    }
+
+    fn previous_storage(&mut self) {
+        let selectable_count = self.wizard.selectable_storage().count();
+
+        match self.storage_focus {
+            StorageFocus::Devices => {
+                self.selected_storage_index = self.selected_storage_index.saturating_sub(1);
+            }
+            StorageFocus::Back => {
+                if selectable_count > 0 {
+                    self.storage_focus = StorageFocus::Devices;
+                    self.selected_storage_index = selectable_count - 1;
+                }
+            }
+        }
+    }
+
+    fn confirm_storage(&mut self) {
+        match self.storage_focus {
+            StorageFocus::Devices => {
+                let selected_id = self
+                    .wizard
+                    .selectable_storage()
+                    .nth(self.selected_storage_index)
+                    .map(|storage| storage.id().clone());
+
+                if let Some(selected_id) = selected_id {
+                    self.wizard.select_storage(selected_id);
+                    self.next_screen();
+                }
+            }
+            StorageFocus::Back => {
+                self.previous_screen();
+            }
+        }
+    }
+
+    fn enter_storage(&mut self) {
+        let engine = Engine::from_registry(registry::Registry::default());
+        let inspector = LinuxStorageInspector::new();
+
+        self.storage_error = None;
+        self.selected_storage_index = 0;
+        self.storage_focus = StorageFocus::Devices;
+
+        match discover_storage(&engine, &mut self.wizard, &inspector) {
+            Ok(()) => {
+                if self.wizard.selectable_storage().next().is_none() {
+                    self.storage_focus = StorageFocus::Back;
+                }
+                self.screen = WizardScreen::Storage;
+            }
+            Err(error) => {
+                self.storage_error = Some(format!("Error discovering storage: {error}"));
+                self.screen = WizardScreen::Storage;
+            }
+        }
     }
 
     fn next_screen(&mut self) {
@@ -468,7 +556,7 @@ impl TuiState {
                 if self.pending_external_content.is_empty() {
                     self.wizard.select_external_content(Vec::new());
                     self.wizard.set_model_realization_intents(Vec::new());
-                    self.next_screen();
+                    self.enter_storage();
                     return;
                 }
 
@@ -507,7 +595,7 @@ impl TuiState {
                     self.wizard
                         .select_external_content(self.pending_external_content.clone());
                     self.wizard.set_model_realization_intents(Vec::new());
-                    self.next_screen();
+                    self.enter_storage();
                 } else {
                     self.pending_model_name_index = Some(0);
                 }
@@ -515,7 +603,7 @@ impl TuiState {
             ExternalContentFocus::ContinueWithoutLocalContent => {
                 self.pending_external_content.clear();
                 self.wizard.select_external_content(Vec::new());
-                self.next_screen();
+                self.enter_storage();
             }
             ExternalContentFocus::Back => {
                 self.previous_screen();
@@ -591,7 +679,7 @@ impl TuiState {
 
         self.pending_model_name_index = None;
         self.external_content_error = None;
-        self.next_screen();
+        self.enter_storage();
     }
 
     fn previous_screen(&mut self) {
@@ -605,6 +693,20 @@ impl TuiState {
             WizardScreen::Review => WizardScreen::Administrator,
         };
     }
+}
+
+fn discover_storage<I>(
+    engine: &Engine,
+    state: &mut WizardState,
+    inspector: &I,
+) -> Result<(), inspector::StorageInspectError>
+where
+    I: StorageInspector,
+{
+    let storage = engine.discover_storage(inspector)?;
+    state.set_discovered_storage(storage);
+
+    Ok(())
 }
 
 fn discover_external_content<I>(
@@ -843,6 +945,64 @@ fn render(frame: &mut ratatui::Frame<'_>, state: &TuiState) {
                 }
             }
         }
+        WizardScreen::Storage => {
+            let storage = state
+                .wizard
+                .selectable_storage()
+                .enumerate()
+                .map(|(index, storage)| {
+                    let marker = if state.storage_focus == StorageFocus::Devices
+                        && index == state.selected_storage_index
+                    {
+                        ">"
+                    } else {
+                        " "
+                    };
+
+                    let size = match storage.size_bytes() {
+                        Some(size_bytes) => {
+                            let gib = size_bytes as f64 / 1024.0 / 1024.0 / 1024.0;
+                            format!("{gib:.1} GiB")
+                        }
+                        None => "unknown size".to_owned(),
+                    };
+
+                    format!(
+                        "{marker} {}  {size}  {}  {}",
+                        storage.kind(),
+                        storage.id(),
+                        storage.device_path().display(),
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+
+            let back_marker = if state.storage_focus == StorageFocus::Back {
+                ">"
+            } else {
+                " "
+            };
+
+            let error = state
+                .storage_error
+                .as_deref()
+                .map_or(String::new(), |error| format!("\n\nError: {error}"));
+
+            if storage.is_empty() {
+                format!(
+                    "Installation Storage\n\n\
+                     No selectable storage devices were found.\n\n\
+                     {back_marker} Back{error}"
+                )
+            } else {
+                format!(
+                    "Installation Storage\n\n\
+                     Select the device DAIA will install onto.\n\n\
+                     {storage}\n\n\
+                     {back_marker} Back{error}"
+                )
+            }
+        }
         WizardScreen::Administrator => {
             let username = if state.administrator_username.is_empty() {
                 "Not configured"
@@ -1019,12 +1179,16 @@ fn run() -> io::Result<()> {
             {
                 state.toggle_external_content();
             }
-            KeyCode::Down
-                if matches!(state.screen, WizardScreen::Storage | WizardScreen::Review) =>
-            {
+            KeyCode::Down if state.screen == WizardScreen::Storage => {
+                state.next_storage();
+            }
+            KeyCode::Down if state.screen == WizardScreen::Review => {
                 state.next_screen_action();
             }
-            KeyCode::Up if matches!(state.screen, WizardScreen::Storage | WizardScreen::Review) => {
+            KeyCode::Up if state.screen == WizardScreen::Storage => {
+                state.previous_storage();
+            }
+            KeyCode::Up if state.screen == WizardScreen::Review => {
                 state.previous_screen_action();
             }
             KeyCode::Backspace
@@ -1048,9 +1212,10 @@ fn run() -> io::Result<()> {
             KeyCode::Enter if state.screen == WizardScreen::ExternalContent => {
                 state.confirm_external_content();
             }
-            KeyCode::Enter
-                if matches!(state.screen, WizardScreen::Storage | WizardScreen::Review) =>
-            {
+            KeyCode::Enter if state.screen == WizardScreen::Storage => {
+                state.confirm_storage();
+            }
+            KeyCode::Enter if state.screen == WizardScreen::Review => {
                 state.confirm_screen_action();
             }
             KeyCode::Down if state.screen == WizardScreen::Administrator => {
@@ -1277,6 +1442,87 @@ mod tests {
 
         assert!(state.pending_external_content.is_empty());
         assert!(state.wizard.selected_external_content().is_empty());
+    }
+
+    #[test]
+    fn selects_storage_device_and_advances() {
+        let mut state = TuiState::new();
+
+        state.wizard.set_discovered_storage(vec![
+            model::DiscoveredStorage::new("system-disk", model::StorageKind::System, "/dev/system"),
+            model::DiscoveredStorage::new(
+                "first-disk",
+                model::StorageKind::Secondary,
+                "/dev/first",
+            ),
+            model::DiscoveredStorage::new(
+                "second-disk",
+                model::StorageKind::Removable,
+                "/dev/second",
+            ),
+        ]);
+
+        state.screen = WizardScreen::Storage;
+        state.selected_storage_index = 0;
+        state.storage_focus = super::StorageFocus::Devices;
+
+        state.next_storage();
+
+        assert_eq!(state.selected_storage_index, 1);
+        assert_eq!(state.storage_focus, super::StorageFocus::Devices);
+
+        state.confirm_storage();
+
+        assert_eq!(state.screen, WizardScreen::Administrator);
+        assert_eq!(
+            state
+                .wizard
+                .selected_storage()
+                .expect("Storage should be selected")
+                .as_str(),
+            "second-disk"
+        );
+    }
+
+    #[test]
+    fn discovers_storage_and_excludes_system_device_from_selection() {
+        struct TestStorageInspector;
+
+        impl inspector::StorageInspector for TestStorageInspector {
+            fn inspect(
+                &self,
+            ) -> Result<Vec<model::DiscoveredStorage>, inspector::StorageInspectError> {
+                Ok(vec![
+                    model::DiscoveredStorage::new(
+                        "system-disk",
+                        model::StorageKind::System,
+                        "/dev/system",
+                    )
+                    .with_size_bytes(128 * 1024 * 1024 * 1024),
+                    model::DiscoveredStorage::new(
+                        "install-disk",
+                        model::StorageKind::Secondary,
+                        "/dev/install",
+                    )
+                    .with_size_bytes(512 * 1024 * 1024 * 1024),
+                ])
+            }
+        }
+
+        let engine = engine::Engine::from_registry(registry::Registry::new());
+        let mut state = super::WizardState::new();
+
+        super::discover_storage(&engine, &mut state, &TestStorageInspector)
+            .expect("storage discovery should succeed");
+
+        let selectable = state.selectable_storage().collect::<Vec<_>>();
+
+        assert_eq!(selectable.len(), 1);
+        assert_eq!(selectable[0].id().as_str(), "install-disk");
+        assert_eq!(
+            selectable[0].device_path(),
+            std::path::Path::new("/dev/install")
+        );
     }
 
     #[test]
