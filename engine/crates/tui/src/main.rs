@@ -1,6 +1,6 @@
 //! DAIA terminal user interface.
 
-use application::{WizardState, load_appliance_profiles};
+use application::{WizardState, load_appliance_profiles, load_content_repositories};
 use crossterm::{
     event::{self, Event, KeyCode},
     execute,
@@ -67,6 +67,7 @@ struct TuiState {
     wizard: WizardState,
     appliance_profiles: Vec<model::ApplianceProfile>,
     selected_profile_index: usize,
+    selected_content_repository_index: usize,
     credentials: CredentialState,
     administrator_username: String,
     administrator_display_name: String,
@@ -83,10 +84,16 @@ impl TuiState {
             .map(|repository| repository.profiles().to_vec())
             .unwrap_or_default();
 
+        let content_repositories = load_content_repositories().unwrap_or_default();
+
+        let mut wizard = WizardState::new();
+        wizard.set_content_repositories(content_repositories);
+
         Self {
-            wizard: WizardState::new(),
+            wizard,
             appliance_profiles,
             selected_profile_index: 0,
+            selected_content_repository_index: 0,
             credentials: CredentialState::default(),
             administrator_username: String::new(),
             administrator_display_name: String::new(),
@@ -114,6 +121,32 @@ impl TuiState {
         };
 
         self.wizard.set_profile_name(profile.name());
+        self.next_screen();
+    }
+
+    fn next_content_repository(&mut self) {
+        if self.selected_content_repository_index + 1 < self.wizard.content_repositories().len() {
+            self.selected_content_repository_index += 1;
+        }
+    }
+
+    fn previous_content_repository(&mut self) {
+        self.selected_content_repository_index =
+            self.selected_content_repository_index.saturating_sub(1);
+    }
+
+    fn confirm_content_repository(&mut self) {
+        let Some(repository) = self
+            .wizard
+            .content_repositories()
+            .get(self.selected_content_repository_index)
+        else {
+            return;
+        };
+
+        let repository_id = repository.id().clone();
+
+        self.wizard.select_content_repository(repository_id);
         self.next_screen();
     }
 
@@ -410,6 +443,36 @@ fn render(frame: &mut ratatui::Frame<'_>, state: &TuiState) {
                 format!("Choose the appliance profile that DAIA will configure.\n\n{profiles}")
             }
         }
+        WizardScreen::ContentRepository => {
+            if state.wizard.content_repositories().is_empty() {
+                "No content repositories are available.".to_owned()
+            } else {
+                let repositories = state
+                    .wizard
+                    .content_repositories()
+                    .iter()
+                    .enumerate()
+                    .map(|(index, repository)| {
+                        let marker = if index == state.selected_content_repository_index {
+                            ">"
+                        } else {
+                            " "
+                        };
+
+                        format!(
+                            "{marker} {}\n    {}",
+                            repository.id(),
+                            repository.description(),
+                        )
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n\n");
+
+                format!(
+                    "Choose the content repository DAIA will use for external content.\n\n{repositories}"
+                )
+            }
+        }
         WizardScreen::Administrator => {
             let username = if state.administrator_username.is_empty() {
                 "Not configured"
@@ -546,13 +609,19 @@ fn run() -> io::Result<()> {
             KeyCode::Enter if state.screen == WizardScreen::Profile => {
                 state.confirm_profile();
             }
+            KeyCode::Down if state.screen == WizardScreen::ContentRepository => {
+                state.next_content_repository();
+            }
+            KeyCode::Up if state.screen == WizardScreen::ContentRepository => {
+                state.previous_content_repository();
+            }
+            KeyCode::Enter if state.screen == WizardScreen::ContentRepository => {
+                state.confirm_content_repository();
+            }
             KeyCode::Down
                 if matches!(
                     state.screen,
-                    WizardScreen::ContentRepository
-                        | WizardScreen::ExternalContent
-                        | WizardScreen::Storage
-                        | WizardScreen::Review
+                    WizardScreen::ExternalContent | WizardScreen::Storage | WizardScreen::Review
                 ) =>
             {
                 state.next_screen_action();
@@ -560,10 +629,7 @@ fn run() -> io::Result<()> {
             KeyCode::Up
                 if matches!(
                     state.screen,
-                    WizardScreen::ContentRepository
-                        | WizardScreen::ExternalContent
-                        | WizardScreen::Storage
-                        | WizardScreen::Review
+                    WizardScreen::ExternalContent | WizardScreen::Storage | WizardScreen::Review
                 ) =>
             {
                 state.previous_screen_action();
@@ -571,10 +637,7 @@ fn run() -> io::Result<()> {
             KeyCode::Enter
                 if matches!(
                     state.screen,
-                    WizardScreen::ContentRepository
-                        | WizardScreen::ExternalContent
-                        | WizardScreen::Storage
-                        | WizardScreen::Review
+                    WizardScreen::ExternalContent | WizardScreen::Storage | WizardScreen::Review
                 ) =>
             {
                 state.confirm_screen_action();
@@ -655,6 +718,28 @@ mod tests {
 
         assert_eq!(state.wizard.profile_name(), Some(selected_name.as_str()));
         assert_eq!(state.screen, WizardScreen::ContentRepository);
+    }
+
+    #[test]
+    fn selects_content_repository_and_advances() {
+        let mut state = TuiState::new();
+
+        assert!(
+            !state.wizard.content_repositories().is_empty(),
+            "repository should provide content repositories"
+        );
+
+        state.screen = WizardScreen::ContentRepository;
+
+        let selected_id = state.wizard.content_repositories()[0].id().clone();
+
+        state.confirm_content_repository();
+
+        assert_eq!(
+            state.wizard.selected_content_repository(),
+            Some(&selected_id)
+        );
+        assert_eq!(state.screen, WizardScreen::ExternalContent);
     }
 
     #[test]

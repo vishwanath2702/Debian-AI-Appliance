@@ -4,9 +4,7 @@ use model::{
     DiscoveredStorageId, ExternalContentItem, ExternalContentItemId, ModelRealizationIntent,
     StorageKind, UserConfiguration,
 };
-#[cfg(test)]
-use registry::ContentRepositoryRepository;
-use registry::{ApplianceProfileRepository, RegistryError};
+use registry::{ApplianceProfileRepository, ContentRepositoryRepository, RegistryError};
 use std::path::PathBuf;
 /// Loads the appliance profiles available to interactive DAIA presentations.
 ///
@@ -27,6 +25,29 @@ pub fn load_appliance_profiles() -> Result<ApplianceProfileRepository, RegistryE
     };
 
     ApplianceProfileRepository::from_directory(directory)
+}
+
+/// Loads the content repositories available to interactive DAIA presentations.
+///
+/// Installed systems use the packaged DAIA repository directory. Development
+/// builds fall back to the repository definitions in the source tree.
+///
+/// # Errors
+///
+/// Returns a [`RegistryError`] if the content-repository directory cannot be
+/// read or contains an invalid repository definition.
+pub fn load_content_repositories() -> Result<Vec<model::ContentRepository>, RegistryError> {
+    let installed = PathBuf::from("/usr/share/daia/content-repositories");
+
+    let directory = if installed.is_dir() {
+        installed
+    } else {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../registry/content-repositories")
+    };
+
+    let repository = ContentRepositoryRepository::load_directory(&directory)?;
+
+    Ok(repository.repositories().to_vec())
 }
 
 /// State accumulated while configuring an appliance through the wizard.

@@ -1,6 +1,6 @@
 //! DAIA command-line interface.
 
-use application::{WizardState, load_appliance_profiles};
+use application::{WizardState, load_appliance_profiles, load_content_repositories};
 use engine::{
     BootstrapConfig, BuildContext, DryRunContentImportOperationExecutor,
     DryRunInstallationExecutor, Engine, InstallationOperation, SystemInstallationOperationExecutor,
@@ -1361,15 +1361,13 @@ fn execute_wizard_dry_run(
     print_installation_operations(&installation_executor);
 }
 
-fn load_content_repositories() -> Result<Vec<model::ContentRepository>, String> {
-    let repository = ContentRepositoryRepository::load_directory(&content_repository_directory())
-        .map_err(|error| format!("Error loading content repositories: {error}"))?;
-
-    Ok(repository.repositories().to_vec())
+fn load_wizard_content_repository_definitions() -> Result<Vec<model::ContentRepository>, String> {
+    load_content_repositories()
+        .map_err(|error| format!("Error loading content repositories: {error}"))
 }
 
 fn load_wizard_content_repositories(state: &mut WizardState) -> Result<(), String> {
-    state.set_content_repositories(load_content_repositories()?);
+    state.set_content_repositories(load_wizard_content_repository_definitions()?);
     Ok(())
 }
 
