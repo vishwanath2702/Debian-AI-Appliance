@@ -6,6 +6,8 @@ use crossterm::{
     execute,
     terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
+use engine::Engine;
+use inspector::{ContentInspector, LocalFilesystemContentInspector};
 use ratatui::{
     Terminal,
     backend::CrosstermBackend,
@@ -62,12 +64,25 @@ struct CredentialState {
 }
 
 /// Presentation state owned by the terminal interface.
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+enum ExternalContentFocus {
+    Items,
+    SaveAndContinue,
+    ContinueWithoutLocalContent,
+    Back,
+}
+
 struct TuiState {
     wizard: WizardState,
     appliance_profiles: Vec<model::ApplianceProfile>,
     selected_profile_index: usize,
     selected_content_repository_index: usize,
+    selected_external_content_index: usize,
+    pending_external_content: Vec<model::ExternalContentItemId>,
+    pending_model_names: Vec<(model::ExternalContentItemId, String)>,
+    pending_model_name_index: Option<usize>,
+    external_content_error: Option<String>,
+    external_content_focus: ExternalContentFocus,
     credentials: CredentialState,
     administrator_username: String,
     administrator_display_name: String,
@@ -94,6 +109,12 @@ impl TuiState {
             appliance_profiles,
             selected_profile_index: 0,
             selected_content_repository_index: 0,
+            selected_external_content_index: 0,
+            pending_external_content: Vec::new(),
+            pending_model_names: Vec::new(),
+            pending_model_name_index: None,
+            external_content_error: None,
+            external_content_focus: ExternalContentFocus::ContinueWithoutLocalContent,
             credentials: CredentialState::default(),
             administrator_username: String::new(),
             administrator_display_name: String::new(),
@@ -140,13 +161,32 @@ impl TuiState {
             .wizard
             .content_repositories()
             .get(self.selected_content_repository_index)
+            .cloned()
         else {
             return;
         };
 
         let repository_id = repository.id().clone();
+        let engine = Engine::from_registry(registry::Registry::default());
+        let inspector = LocalFilesystemContentInspector::new();
 
-        self.wizard.select_content_repository(repository_id);
+        if discover_external_content(&engine, &mut self.wizard, &repository, &inspector).is_err() {
+            return;
+        }
+
+        debug_assert_eq!(
+            self.wizard.selected_content_repository(),
+            Some(&repository_id)
+        );
+
+        self.selected_external_content_index = 0;
+        self.pending_external_content = self.wizard.selected_external_content().to_vec();
+        self.external_content_focus = if self.wizard.external_content_items().is_empty() {
+            ExternalContentFocus::ContinueWithoutLocalContent
+        } else {
+            ExternalContentFocus::Items
+        };
+
         self.next_screen();
     }
 
@@ -333,6 +373,227 @@ impl TuiState {
         };
     }
 
+    fn next_external_content(&mut self) {
+        if self.wizard.external_content_items().is_empty() {
+            self.external_content_focus = match self.external_content_focus {
+                ExternalContentFocus::ContinueWithoutLocalContent => ExternalContentFocus::Back,
+                ExternalContentFocus::Back => ExternalContentFocus::Back,
+                _ => ExternalContentFocus::ContinueWithoutLocalContent,
+            };
+            return;
+        }
+
+        match self.external_content_focus {
+            ExternalContentFocus::Items => {
+                if self.selected_external_content_index + 1
+                    < self.wizard.external_content_items().len()
+                {
+                    self.selected_external_content_index += 1;
+                } else {
+                    self.external_content_focus = ExternalContentFocus::SaveAndContinue;
+                }
+            }
+            ExternalContentFocus::SaveAndContinue => {
+                self.external_content_focus = ExternalContentFocus::ContinueWithoutLocalContent;
+            }
+            ExternalContentFocus::ContinueWithoutLocalContent => {
+                self.external_content_focus = ExternalContentFocus::Back;
+            }
+            ExternalContentFocus::Back => {}
+        }
+    }
+
+    fn previous_external_content(&mut self) {
+        if self.wizard.external_content_items().is_empty() {
+            self.external_content_focus = match self.external_content_focus {
+                ExternalContentFocus::Back => ExternalContentFocus::ContinueWithoutLocalContent,
+                _ => ExternalContentFocus::ContinueWithoutLocalContent,
+            };
+            return;
+        }
+
+        match self.external_content_focus {
+            ExternalContentFocus::Items => {
+                self.selected_external_content_index =
+                    self.selected_external_content_index.saturating_sub(1);
+            }
+            ExternalContentFocus::SaveAndContinue => {
+                self.external_content_focus = ExternalContentFocus::Items;
+                self.selected_external_content_index =
+                    self.wizard.external_content_items().len() - 1;
+            }
+            ExternalContentFocus::ContinueWithoutLocalContent => {
+                self.external_content_focus = ExternalContentFocus::SaveAndContinue;
+            }
+            ExternalContentFocus::Back => {
+                self.external_content_focus = ExternalContentFocus::ContinueWithoutLocalContent;
+            }
+        }
+    }
+
+    fn toggle_external_content(&mut self) {
+        if self.external_content_focus != ExternalContentFocus::Items {
+            return;
+        }
+
+        let Some(item) = self
+            .wizard
+            .external_content_items()
+            .get(self.selected_external_content_index)
+        else {
+            return;
+        };
+
+        let item_id = item.id().clone();
+
+        if let Some(index) = self
+            .pending_external_content
+            .iter()
+            .position(|selected| selected == &item_id)
+        {
+            self.pending_external_content.remove(index);
+        } else {
+            self.pending_external_content.push(item_id);
+        }
+    }
+
+    fn confirm_external_content(&mut self) {
+        match self.external_content_focus {
+            ExternalContentFocus::Items => {}
+            ExternalContentFocus::SaveAndContinue => {
+                self.external_content_error = None;
+                self.pending_model_names.clear();
+                self.pending_model_name_index = None;
+
+                if self.pending_external_content.is_empty() {
+                    self.wizard.select_external_content(Vec::new());
+                    self.wizard.set_model_realization_intents(Vec::new());
+                    self.next_screen();
+                    return;
+                }
+
+                let engine = Engine::from_registry(registry::Registry::default());
+
+                for item_id in &self.pending_external_content {
+                    let Some(item) = self
+                        .wizard
+                        .external_content_items()
+                        .iter()
+                        .find(|item| item.id() == item_id)
+                    else {
+                        self.external_content_error =
+                            Some("Selected external content is no longer available.".to_owned());
+                        return;
+                    };
+
+                    match engine.inspect_external_model(item) {
+                        Ok(Some(_)) => {
+                            self.pending_model_names
+                                .push((item.id().clone(), String::new()));
+                        }
+                        Ok(None) => {}
+                        Err(error) => {
+                            self.external_content_error = Some(format!(
+                                "Error inspecting external content {}: {error}",
+                                item.path().display()
+                            ));
+                            self.pending_model_names.clear();
+                            return;
+                        }
+                    }
+                }
+
+                if self.pending_model_names.is_empty() {
+                    self.wizard
+                        .select_external_content(self.pending_external_content.clone());
+                    self.wizard.set_model_realization_intents(Vec::new());
+                    self.next_screen();
+                } else {
+                    self.pending_model_name_index = Some(0);
+                }
+            }
+            ExternalContentFocus::ContinueWithoutLocalContent => {
+                self.pending_external_content.clear();
+                self.wizard.select_external_content(Vec::new());
+                self.next_screen();
+            }
+            ExternalContentFocus::Back => {
+                self.previous_screen();
+            }
+        }
+    }
+
+    fn push_external_model_name_character(&mut self, character: char) {
+        let Some(index) = self.pending_model_name_index else {
+            return;
+        };
+
+        if let Some((_, name)) = self.pending_model_names.get_mut(index) {
+            name.push(character);
+            self.external_content_error = None;
+        }
+    }
+
+    fn pop_external_model_name_character(&mut self) {
+        let Some(index) = self.pending_model_name_index else {
+            return;
+        };
+
+        if let Some((_, name)) = self.pending_model_names.get_mut(index) {
+            name.pop();
+            self.external_content_error = None;
+        }
+    }
+
+    fn cancel_external_model_naming(&mut self) {
+        self.pending_model_names.clear();
+        self.pending_model_name_index = None;
+        self.external_content_error = None;
+        self.external_content_focus = ExternalContentFocus::SaveAndContinue;
+    }
+
+    fn confirm_external_model_name(&mut self) {
+        let Some(index) = self.pending_model_name_index else {
+            return;
+        };
+
+        let Some((_, name)) = self.pending_model_names.get(index) else {
+            return;
+        };
+
+        if name.trim().is_empty() {
+            self.external_content_error = Some("DAIA model name cannot be empty.".to_owned());
+            return;
+        }
+
+        if index + 1 < self.pending_model_names.len() {
+            self.pending_model_name_index = Some(index + 1);
+            self.external_content_error = None;
+            return;
+        }
+
+        let realization_intents = self
+            .pending_model_names
+            .iter()
+            .map(|(item_id, name)| {
+                model::ModelRealizationIntent::new(
+                    model::ModelRealizationId::new(name.trim()),
+                    model::InferenceEngineId::ollama(),
+                    item_id.clone(),
+                )
+            })
+            .collect::<Vec<_>>();
+
+        self.wizard
+            .select_external_content(self.pending_external_content.clone());
+        self.wizard
+            .set_model_realization_intents(realization_intents);
+
+        self.pending_model_name_index = None;
+        self.external_content_error = None;
+        self.next_screen();
+    }
+
     fn previous_screen(&mut self) {
         self.screen = match self.screen {
             WizardScreen::Welcome => WizardScreen::Welcome,
@@ -344,6 +605,23 @@ impl TuiState {
             WizardScreen::Review => WizardScreen::Administrator,
         };
     }
+}
+
+fn discover_external_content<I>(
+    engine: &Engine,
+    state: &mut WizardState,
+    repository: &model::ContentRepository,
+    inspector: &I,
+) -> Result<(), inspector::ContentInspectError>
+where
+    I: ContentInspector,
+{
+    let items = engine.repository_content_items(repository, inspector)?;
+
+    state.select_content_repository(repository.id().clone());
+    state.set_external_content_items(items);
+
+    Ok(())
 }
 
 fn screen_title(screen: WizardScreen) -> &'static str {
@@ -473,6 +751,98 @@ fn render(frame: &mut ratatui::Frame<'_>, state: &TuiState) {
                 )
             }
         }
+        WizardScreen::ExternalContent => {
+            if let Some(model_index) = state.pending_model_name_index {
+                let (item_id, model_name) = &state.pending_model_names[model_index];
+
+                let path = state
+                    .wizard
+                    .external_content_items()
+                    .iter()
+                    .find(|item| item.id() == item_id)
+                    .map(|item| item.path().display().to_string())
+                    .unwrap_or_else(|| item_id.to_string());
+
+                let error = state
+                    .external_content_error
+                    .as_deref()
+                    .map_or(String::new(), |error| {
+                        format!("\n\n                     Error: {error}")
+                    });
+
+                format!(
+                    "External Content\n\n                     Configure selected model {} of {}\n\n                     Model: {path}\n                     DAIA model name: {model_name}\n\n                     Enter: Save model name\n                     Esc: Return to content selection{error}",
+                    model_index + 1,
+                    state.pending_model_names.len(),
+                )
+            } else {
+                let continue_marker = if state.external_content_focus
+                    == ExternalContentFocus::ContinueWithoutLocalContent
+                {
+                    ">"
+                } else {
+                    " "
+                };
+                let back_marker = if state.external_content_focus == ExternalContentFocus::Back {
+                    ">"
+                } else {
+                    " "
+                };
+
+                let error = state
+                    .external_content_error
+                    .as_deref()
+                    .map_or(String::new(), |error| {
+                        format!("\n\n                     Error: {error}")
+                    });
+
+                if state.wizard.external_content_items().is_empty() {
+                    format!(
+                        "External Content\n\n                     No local content was discovered.\n\n                     {continue_marker} Continue without local content\n                     {back_marker} Back\n\n                     Models and other content can be added after installation.{error}"
+                    )
+                } else {
+                    let items = state
+                        .wizard
+                        .external_content_items()
+                        .iter()
+                        .enumerate()
+                        .map(|(index, item)| {
+                            let cursor = if state.external_content_focus
+                                == ExternalContentFocus::Items
+                                && index == state.selected_external_content_index
+                            {
+                                ">"
+                            } else {
+                                " "
+                            };
+                            let selected = if state
+                                .pending_external_content
+                                .iter()
+                                .any(|selected| selected == item.id())
+                            {
+                                "x"
+                            } else {
+                                " "
+                            };
+
+                            format!("{cursor} [{selected}] {}", item.path().display())
+                        })
+                        .collect::<Vec<_>>()
+                        .join("\n");
+
+                    let save_marker =
+                        if state.external_content_focus == ExternalContentFocus::SaveAndContinue {
+                            ">"
+                        } else {
+                            " "
+                        };
+
+                    format!(
+                        "External Content\n\n                     Content discovered in the selected repository:\n\n                     {items}\n\n                     {save_marker} Save and Continue\n                     {continue_marker} Continue without local content\n                     {back_marker} Back\n\n                     Space toggles the highlighted content. Models and other content can also be added after installation.{error}"
+                    )
+                }
+            }
+        }
         WizardScreen::Administrator => {
             let username = if state.administrator_username.is_empty() {
                 "Not configured"
@@ -551,6 +921,13 @@ fn render(frame: &mut ratatui::Frame<'_>, state: &TuiState) {
 
     let controls = match state.screen {
         WizardScreen::Welcome => "↑ / ↓: Navigate    Enter: Select",
+        WizardScreen::ExternalContent if state.pending_model_name_index.is_some() => {
+            "Type: Model name    Enter: Save    Backspace: Edit    Esc: Cancel"
+        }
+        WizardScreen::ExternalContent if !state.wizard.external_content_items().is_empty() => {
+            "↑ / ↓: Navigate    Space: Toggle    Enter: Select    Esc: Back"
+        }
+        WizardScreen::ExternalContent => "↑ / ↓: Navigate    Enter: Select    Esc: Back",
         WizardScreen::Administrator => {
             "↑ / ↓: Navigate    Enter: Select    Esc: Back    Backspace: Edit"
         }
@@ -582,6 +959,12 @@ fn run() -> io::Result<()> {
         };
 
         match key.code {
+            KeyCode::Esc
+                if state.screen == WizardScreen::ExternalContent
+                    && state.pending_model_name_index.is_some() =>
+            {
+                state.cancel_external_model_naming();
+            }
             KeyCode::Esc if state.screen != WizardScreen::Welcome => {
                 state.previous_screen();
                 state.screen_action = ScreenAction::Continue;
@@ -619,26 +1002,54 @@ fn run() -> io::Result<()> {
                 state.confirm_content_repository();
             }
             KeyCode::Down
-                if matches!(
-                    state.screen,
-                    WizardScreen::ExternalContent | WizardScreen::Storage | WizardScreen::Review
-                ) =>
+                if state.screen == WizardScreen::ExternalContent
+                    && state.pending_model_name_index.is_none() =>
+            {
+                state.next_external_content();
+            }
+            KeyCode::Up
+                if state.screen == WizardScreen::ExternalContent
+                    && state.pending_model_name_index.is_none() =>
+            {
+                state.previous_external_content();
+            }
+            KeyCode::Char(' ')
+                if state.screen == WizardScreen::ExternalContent
+                    && state.pending_model_name_index.is_none() =>
+            {
+                state.toggle_external_content();
+            }
+            KeyCode::Down
+                if matches!(state.screen, WizardScreen::Storage | WizardScreen::Review) =>
             {
                 state.next_screen_action();
             }
-            KeyCode::Up
-                if matches!(
-                    state.screen,
-                    WizardScreen::ExternalContent | WizardScreen::Storage | WizardScreen::Review
-                ) =>
-            {
+            KeyCode::Up if matches!(state.screen, WizardScreen::Storage | WizardScreen::Review) => {
                 state.previous_screen_action();
             }
+            KeyCode::Backspace
+                if state.screen == WizardScreen::ExternalContent
+                    && state.pending_model_name_index.is_some() =>
+            {
+                state.pop_external_model_name_character();
+            }
+            KeyCode::Char(character)
+                if state.screen == WizardScreen::ExternalContent
+                    && state.pending_model_name_index.is_some() =>
+            {
+                state.push_external_model_name_character(character);
+            }
             KeyCode::Enter
-                if matches!(
-                    state.screen,
-                    WizardScreen::ExternalContent | WizardScreen::Storage | WizardScreen::Review
-                ) =>
+                if state.screen == WizardScreen::ExternalContent
+                    && state.pending_model_name_index.is_some() =>
+            {
+                state.confirm_external_model_name();
+            }
+            KeyCode::Enter if state.screen == WizardScreen::ExternalContent => {
+                state.confirm_external_content();
+            }
+            KeyCode::Enter
+                if matches!(state.screen, WizardScreen::Storage | WizardScreen::Review) =>
             {
                 state.confirm_screen_action();
             }
@@ -675,7 +1086,10 @@ fn main() -> io::Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{AdministratorField, ScreenAction, TuiState, WelcomeAction, WizardScreen};
+    use super::{
+        AdministratorField, ExternalContentFocus, ScreenAction, TuiState, WelcomeAction,
+        WizardScreen,
+    };
 
     #[test]
     fn starts_at_welcome_screen_with_empty_wizard_state() {
@@ -718,6 +1132,202 @@ mod tests {
 
         assert_eq!(state.wizard.profile_name(), Some(selected_name.as_str()));
         assert_eq!(state.screen, WizardScreen::ContentRepository);
+    }
+
+    #[test]
+    fn continues_without_external_content_and_advances() {
+        let mut state = TuiState::new();
+
+        let source_id = model::ContentSourceId::new("test-source");
+        let item = model::ExternalContentItem::new(source_id, "/media/models/model.gguf");
+        let item_id = item.id().clone();
+
+        state.wizard.set_external_content_items(vec![item]);
+        state.wizard.select_external_content(vec![item_id.clone()]);
+        state.pending_external_content = vec![item_id];
+        state.screen = WizardScreen::ExternalContent;
+        state.external_content_focus = ExternalContentFocus::ContinueWithoutLocalContent;
+
+        state.confirm_external_content();
+
+        assert!(state.pending_external_content.is_empty());
+        assert!(state.wizard.selected_external_content().is_empty());
+        assert_eq!(state.screen, WizardScreen::Storage);
+    }
+
+    #[test]
+    fn external_content_back_returns_to_content_repository() {
+        let mut state = TuiState::new();
+
+        state.screen = WizardScreen::ExternalContent;
+        state.external_content_focus = ExternalContentFocus::Back;
+
+        state.confirm_external_content();
+
+        assert_eq!(state.screen, WizardScreen::ContentRepository);
+    }
+
+    #[test]
+    fn rejects_empty_external_model_name() {
+        let mut state = TuiState::new();
+
+        let item_id = model::ExternalContentItemId::new("test-model");
+        state.pending_model_names = vec![(item_id, String::new())];
+        state.pending_model_name_index = Some(0);
+        state.screen = WizardScreen::ExternalContent;
+
+        state.confirm_external_model_name();
+
+        assert_eq!(state.pending_model_name_index, Some(0));
+        assert_eq!(
+            state.external_content_error.as_deref(),
+            Some("DAIA model name cannot be empty.")
+        );
+        assert_eq!(state.screen, WizardScreen::ExternalContent);
+    }
+
+    #[test]
+    fn advances_through_external_model_names_and_commits_final_selection() {
+        let mut state = TuiState::new();
+
+        let source_id = model::ContentSourceId::new("test-source");
+        let first = model::ExternalContentItem::new(source_id.clone(), "/media/models/first.gguf");
+        let second = model::ExternalContentItem::new(source_id, "/media/models/second.gguf");
+
+        let first_id = first.id().clone();
+        let second_id = second.id().clone();
+
+        state.wizard.set_external_content_items(vec![first, second]);
+        state.pending_external_content = vec![first_id.clone(), second_id.clone()];
+        state.pending_model_names = vec![
+            (first_id.clone(), "first-model".to_owned()),
+            (second_id.clone(), "second-model".to_owned()),
+        ];
+        state.pending_model_name_index = Some(0);
+        state.screen = WizardScreen::ExternalContent;
+
+        state.confirm_external_model_name();
+
+        assert_eq!(state.pending_model_name_index, Some(1));
+        assert!(state.wizard.selected_external_content().is_empty());
+        assert_eq!(state.screen, WizardScreen::ExternalContent);
+
+        state.confirm_external_model_name();
+
+        assert_eq!(state.pending_model_name_index, None);
+        assert_eq!(
+            state.wizard.selected_external_content(),
+            &[first_id, second_id]
+        );
+        assert_eq!(state.wizard.model_realization_intents().len(), 2);
+        assert_eq!(state.screen, WizardScreen::Storage);
+    }
+
+    #[test]
+    fn cancels_external_model_naming_without_committing() {
+        let mut state = TuiState::new();
+
+        let item_id = model::ExternalContentItemId::new("test-model");
+        state.pending_external_content = vec![item_id.clone()];
+        state.pending_model_names = vec![(item_id, "pending-name".to_owned())];
+        state.pending_model_name_index = Some(0);
+        state.external_content_error = Some("test error".to_owned());
+        state.external_content_focus = ExternalContentFocus::SaveAndContinue;
+        state.screen = WizardScreen::ExternalContent;
+
+        state.cancel_external_model_naming();
+
+        assert!(state.pending_model_names.is_empty());
+        assert_eq!(state.pending_model_name_index, None);
+        assert_eq!(state.external_content_error, None);
+        assert!(state.wizard.selected_external_content().is_empty());
+        assert_eq!(
+            state.external_content_focus,
+            ExternalContentFocus::SaveAndContinue
+        );
+        assert_eq!(state.screen, WizardScreen::ExternalContent);
+    }
+
+    #[test]
+    fn toggles_external_content_as_pending_without_committing() {
+        let mut state = TuiState::new();
+
+        let source_id = model::ContentSourceId::new("test-source");
+        let first = model::ExternalContentItem::new(source_id.clone(), "/media/models/first.gguf");
+        let second = model::ExternalContentItem::new(source_id, "/media/models/second.gguf");
+        let second_id = second.id().clone();
+
+        state.wizard.set_external_content_items(vec![first, second]);
+        state.screen = WizardScreen::ExternalContent;
+        state.external_content_focus = ExternalContentFocus::Items;
+
+        assert_eq!(state.selected_external_content_index, 0);
+        assert!(state.pending_external_content.is_empty());
+        assert!(state.wizard.selected_external_content().is_empty());
+
+        state.next_external_content();
+        assert_eq!(state.selected_external_content_index, 1);
+
+        state.toggle_external_content();
+
+        assert_eq!(state.pending_external_content, vec![second_id]);
+        assert!(state.wizard.selected_external_content().is_empty());
+
+        state.toggle_external_content();
+
+        assert!(state.pending_external_content.is_empty());
+        assert!(state.wizard.selected_external_content().is_empty());
+    }
+
+    #[test]
+    fn discovers_external_content_into_wizard_state() {
+        struct TestContentInspector;
+
+        impl inspector::ContentInspector for TestContentInspector {
+            fn inspect(
+                &self,
+                source: &model::ContentSource,
+            ) -> Result<Vec<model::DiscoveredContent>, inspector::ContentInspectError> {
+                Ok(vec![model::DiscoveredContent::new(
+                    source.id().clone(),
+                    "/media/models",
+                )])
+            }
+
+            fn items(
+                &self,
+                content: &model::DiscoveredContent,
+            ) -> Result<Vec<model::ExternalContentItem>, inspector::ContentInspectError>
+            {
+                Ok(vec![model::ExternalContentItem::new(
+                    content.source_id().clone(),
+                    "/media/models/model.gguf",
+                )])
+            }
+        }
+
+        let repository_id = model::ContentRepositoryId::new("local-models");
+        let repository = model::ContentRepository::with_sources(
+            "local-models",
+            "Local model files",
+            vec![model::ContentSource::new(
+                "local-models-directory",
+                repository_id,
+                "/media/models",
+            )],
+        );
+
+        let engine = engine::Engine::from_registry(registry::Registry::new());
+        let mut state = super::WizardState::new();
+
+        super::discover_external_content(&engine, &mut state, &repository, &TestContentInspector)
+            .expect("external content discovery should succeed");
+
+        assert_eq!(state.external_content_items().len(), 1);
+        assert_eq!(
+            state.external_content_items()[0].path(),
+            std::path::Path::new("/media/models/model.gguf")
+        );
     }
 
     #[test]

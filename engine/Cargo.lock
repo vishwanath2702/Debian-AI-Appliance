@@ -727,8 +727,11 @@ version = "0.1.0"
 dependencies = [
  "application",
  "crossterm",
+ "engine",
+ "inspector",
  "model",
  "ratatui",
+ "registry",
 ]
 
 [[package]]
