@@ -1,6 +1,8 @@
 //! DAIA terminal user interface.
 
-use application::{WizardState, load_appliance_profiles, load_content_repositories};
+use application::{
+    WizardState, load_appliance_profiles, load_content_repositories, load_provider_registry,
+};
 use crossterm::{
     event::{self, Event, KeyCode},
     execute,
@@ -28,6 +30,7 @@ enum WizardScreen {
     Storage,
     Administrator,
     Review,
+    ConfirmInstallation,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -100,6 +103,7 @@ struct TuiState {
     administrator_display_name: String,
     administrator_field: AdministratorField,
     administrator_error: Option<String>,
+    review_error: Option<String>,
     welcome_action: WelcomeAction,
     screen_action: ScreenAction,
     screen: WizardScreen,
@@ -135,6 +139,7 @@ impl TuiState {
             administrator_display_name: String::new(),
             administrator_field: AdministratorField::default(),
             administrator_error: None,
+            review_error: None,
             welcome_action: WelcomeAction::default(),
             screen_action: ScreenAction::default(),
             screen: WizardScreen::Welcome,
@@ -215,11 +220,51 @@ impl TuiState {
 
     fn confirm_screen_action(&mut self) {
         match self.screen_action {
+            ScreenAction::Continue if self.screen == WizardScreen::Review => {
+                self.prepare_review_installation();
+            }
             ScreenAction::Continue => self.next_screen(),
             ScreenAction::Back => self.previous_screen(),
         }
 
         self.screen_action = ScreenAction::Continue;
+    }
+
+    fn prepare_review_installation(&mut self) {
+        self.review_error = None;
+
+        let registry = match load_provider_registry() {
+            Ok(registry) => registry,
+            Err(error) => {
+                self.review_error = Some(format!("Error loading provider registry: {error}"));
+                return;
+            }
+        };
+
+        let engine = Engine::from_registry(registry);
+        let content_inspector = LocalFilesystemContentInspector::new();
+        let storage_inspector = LinuxStorageInspector::new();
+
+        match prepare_appliance_installation(
+            &engine,
+            &self.wizard,
+            &self.appliance_profiles,
+            &content_inspector,
+            &storage_inspector,
+        ) {
+            Ok(_) => {}
+            Err(error) => {
+                self.review_error = Some(error);
+                return;
+            }
+        }
+
+        if let Err(error) = engine::validate_installation_commands() {
+            self.review_error = Some(format!("Error validating installation commands: {error}"));
+            return;
+        }
+
+        self.screen = WizardScreen::ConfirmInstallation;
     }
 
     fn next_welcome_action(&mut self) {
@@ -312,6 +357,7 @@ impl TuiState {
             WizardScreen::Storage => WizardScreen::Administrator,
             WizardScreen::Administrator => WizardScreen::Review,
             WizardScreen::Review => WizardScreen::Review,
+            WizardScreen::ConfirmInstallation => WizardScreen::ConfirmInstallation,
         };
     }
 
@@ -691,6 +737,7 @@ impl TuiState {
             WizardScreen::Storage => WizardScreen::ExternalContent,
             WizardScreen::Administrator => WizardScreen::Storage,
             WizardScreen::Review => WizardScreen::Administrator,
+            WizardScreen::ConfirmInstallation => WizardScreen::Review,
         };
     }
 }
@@ -707,6 +754,62 @@ where
     state.set_discovered_storage(storage);
 
     Ok(())
+}
+
+fn prepare_appliance_installation<I, S>(
+    engine: &Engine,
+    state: &WizardState,
+    profiles: &[model::ApplianceProfile],
+    content_inspector: &I,
+    storage_inspector: &S,
+) -> Result<engine::PreparedApplianceInstallation, String>
+where
+    I: ContentInspector,
+    S: StorageInspector,
+{
+    let profile_name = state
+        .profile_name()
+        .ok_or_else(|| "installer configuration is missing an appliance profile".to_owned())?;
+
+    let profile = profiles
+        .iter()
+        .find(|profile| profile.name() == profile_name)
+        .ok_or_else(|| {
+            format!("selected appliance profile \"{profile_name}\" is no longer available")
+        })?;
+
+    let repository_id = state
+        .selected_content_repository()
+        .ok_or_else(|| "installer configuration is missing a content repository".to_owned())?;
+
+    let repository = state
+        .content_repositories()
+        .iter()
+        .find(|repository| repository.id() == repository_id)
+        .ok_or_else(|| {
+            format!(
+                "selected content repository \"{}\" is no longer available",
+                repository_id.as_str()
+            )
+        })?;
+
+    let storage = engine
+        .discover_storage(storage_inspector)
+        .map_err(|error| format!("Error discovering storage: {error}"))?;
+
+    let config = state
+        .clone()
+        .into_config()
+        .ok_or_else(|| "installer configuration is incomplete".to_owned())?;
+
+    engine.prepare_appliance_configuration(
+        &config.appliance_configuration(),
+        profile,
+        repository,
+        content_inspector,
+        &storage,
+        model::ContentImportDestination::new("/var/lib/daia/content"),
+    )
 }
 
 fn discover_external_content<I>(
@@ -735,6 +838,7 @@ fn screen_title(screen: WizardScreen) -> &'static str {
         WizardScreen::Storage => "Installation Storage",
         WizardScreen::Administrator => "Administrator",
         WizardScreen::Review => "Review",
+        WizardScreen::ConfirmInstallation => "Confirm Installation",
     }
 }
 
@@ -1099,6 +1203,11 @@ fn render(frame: &mut ratatui::Frame<'_>, state: &TuiState) {
                 &state.administrator_display_name
             };
 
+            let error = state
+                .review_error
+                .as_deref()
+                .map_or(String::new(), |error| format!("\n\nError: {error}"));
+
             format!(
                 "Review Configuration\n\n\
                  Appliance profile: {profile}\n\
@@ -1109,7 +1218,22 @@ fn render(frame: &mut ratatui::Frame<'_>, state: &TuiState) {
                  Display name: {display_name}\n\n\
                  Root and administrator passwords are configured but are not displayed.\n\n\
                  {continue_marker} Continue\n\
-                 {back_marker} Back"
+                 {back_marker} Back{error}"
+            )
+        }
+        WizardScreen::ConfirmInstallation => {
+            let storage = state
+                .wizard
+                .selected_storage_device()
+                .map(|storage| storage.device_path().display().to_string())
+                .unwrap_or_else(|| "Not selected".to_owned());
+
+            format!(
+                "Confirm Installation\n\n\
+                 WARNING: Installation will erase the selected target disk.\n\n\
+                 Target disk: {storage}\n\n\
+                 Installation has not started.\n\
+                 Press Esc to return to Review."
             )
         }
     };
@@ -1562,6 +1686,101 @@ mod tests {
                 .expect("Storage should be selected")
                 .as_str(),
             "second-disk"
+        );
+    }
+
+    #[test]
+    fn prepares_appliance_installation_from_completed_wizard_state() {
+        struct TestStorageInspector;
+
+        impl inspector::StorageInspector for TestStorageInspector {
+            fn inspect(
+                &self,
+            ) -> Result<Vec<model::DiscoveredStorage>, inspector::StorageInspectError> {
+                Ok(vec![
+                    model::DiscoveredStorage::new(
+                        "install-disk",
+                        model::StorageKind::Secondary,
+                        "/dev/install",
+                    )
+                    .with_size_bytes(512 * 1024 * 1024 * 1024),
+                ])
+            }
+        }
+
+        struct TestContentInspector;
+
+        impl inspector::ContentInspector for TestContentInspector {
+            fn inspect(
+                &self,
+                _source: &model::ContentSource,
+            ) -> Result<Vec<model::DiscoveredContent>, inspector::ContentInspectError> {
+                Ok(Vec::new())
+            }
+
+            fn items(
+                &self,
+                _content: &model::DiscoveredContent,
+            ) -> Result<Vec<model::ExternalContentItem>, inspector::ContentInspectError>
+            {
+                Ok(Vec::new())
+            }
+        }
+
+        let mut state = TuiState::new();
+
+        let profile = state
+            .appliance_profiles
+            .first()
+            .expect("test appliance profile should exist")
+            .clone();
+        state.wizard.set_profile_name(profile.name());
+
+        let repository = state
+            .wizard
+            .content_repositories()
+            .first()
+            .expect("test content repository should exist")
+            .clone();
+        state
+            .wizard
+            .select_content_repository(repository.id().clone());
+
+        state.wizard.set_discovered_storage(vec![
+            model::DiscoveredStorage::new(
+                "install-disk",
+                model::StorageKind::Secondary,
+                "/dev/install",
+            )
+            .with_size_bytes(512 * 1024 * 1024 * 1024),
+        ]);
+        state
+            .wizard
+            .select_storage(model::DiscoveredStorageId::new("install-disk"));
+        state
+            .wizard
+            .set_user_identity("daia-admin", "DAIA Administrator");
+
+        let registry = super::load_provider_registry()
+            .expect("provider registry should load for preparation test");
+        let engine = engine::Engine::from_registry(registry);
+
+        let prepared = super::prepare_appliance_installation(
+            &engine,
+            &state.wizard,
+            &state.appliance_profiles,
+            &TestContentInspector,
+            &TestStorageInspector,
+        )
+        .expect("completed wizard configuration should prepare installation");
+
+        assert_eq!(
+            prepared.installation().storage().id().as_str(),
+            "install-disk"
+        );
+        assert_eq!(
+            prepared.installation().storage().device_path(),
+            std::path::Path::new("/dev/install")
         );
     }
 

@@ -27,6 +27,27 @@ pub fn load_appliance_profiles() -> Result<ApplianceProfileRepository, RegistryE
     ApplianceProfileRepository::from_directory(directory)
 }
 
+/// Loads the provider registry used to plan DAIA capabilities.
+///
+/// Installed systems use the packaged DAIA provider directory. Development
+/// builds fall back to the provider definitions in the source tree.
+///
+/// # Errors
+///
+/// Returns a [`RegistryError`] if the provider directory cannot be read or
+/// contains an invalid provider definition.
+pub fn load_provider_registry() -> Result<registry::Registry, RegistryError> {
+    let installed = PathBuf::from("/usr/share/daia/providers");
+
+    let directory = if installed.is_dir() {
+        installed
+    } else {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../registry/providers")
+    };
+
+    registry::Registry::from_directory(directory)
+}
+
 /// Loads the content repositories available to interactive DAIA presentations.
 ///
 /// Installed systems use the packaged DAIA repository directory. Development
