@@ -1,6 +1,6 @@
 //! DAIA command-line interface.
 
-use application::WizardState;
+use application::{WizardState, load_appliance_profiles};
 use engine::{
     BootstrapConfig, BuildContext, DryRunContentImportOperationExecutor,
     DryRunInstallationExecutor, Engine, InstallationOperation, SystemInstallationOperationExecutor,
@@ -520,8 +520,7 @@ fn parse_appliance_profile_selection(input: &str, item_count: usize) -> Result<u
 }
 
 fn load_wizard_appliance_profiles() -> Result<registry::ApplianceProfileRepository, String> {
-    appliance_profile_repository::load()
-        .map_err(|error| format!("Error loading appliance profiles: {error}"))
+    load_appliance_profiles().map_err(|error| format!("Error loading appliance profiles: {error}"))
 }
 
 fn format_appliance_profile(profile: &model::ApplianceProfile) -> String {

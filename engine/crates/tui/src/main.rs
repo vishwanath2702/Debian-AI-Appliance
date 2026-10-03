@@ -1,6 +1,6 @@
 //! DAIA terminal user interface.
 
-use application::WizardState;
+use application::{WizardState, load_appliance_profiles};
 use crossterm::{
     event::{self, Event, KeyCode},
     execute,
@@ -65,6 +65,8 @@ struct CredentialState {
 #[derive(Debug)]
 struct TuiState {
     wizard: WizardState,
+    appliance_profiles: Vec<model::ApplianceProfile>,
+    selected_profile_index: usize,
     credentials: CredentialState,
     administrator_username: String,
     administrator_display_name: String,
@@ -77,8 +79,14 @@ struct TuiState {
 
 impl TuiState {
     fn new() -> Self {
+        let appliance_profiles = load_appliance_profiles()
+            .map(|repository| repository.profiles().to_vec())
+            .unwrap_or_default();
+
         Self {
             wizard: WizardState::new(),
+            appliance_profiles,
+            selected_profile_index: 0,
             credentials: CredentialState::default(),
             administrator_username: String::new(),
             administrator_display_name: String::new(),
@@ -88,6 +96,25 @@ impl TuiState {
             screen_action: ScreenAction::default(),
             screen: WizardScreen::Welcome,
         }
+    }
+
+    fn next_profile(&mut self) {
+        if self.selected_profile_index + 1 < self.appliance_profiles.len() {
+            self.selected_profile_index += 1;
+        }
+    }
+
+    fn previous_profile(&mut self) {
+        self.selected_profile_index = self.selected_profile_index.saturating_sub(1);
+    }
+
+    fn confirm_profile(&mut self) {
+        let Some(profile) = self.appliance_profiles.get(self.selected_profile_index) else {
+            return;
+        };
+
+        self.wizard.set_profile_name(profile.name());
+        self.next_screen();
     }
 
     fn next_screen_action(&mut self) {
@@ -349,6 +376,40 @@ fn render(frame: &mut ratatui::Frame<'_>, state: &TuiState) {
                 "Welcome to Debian AI Appliance\n\n                 {start_marker} Start\n                 {quit_marker} Quit"
             )
         }
+        WizardScreen::Profile => {
+            if state.appliance_profiles.is_empty() {
+                "No appliance profiles are available.".to_owned()
+            } else {
+                let profiles = state
+                    .appliance_profiles
+                    .iter()
+                    .enumerate()
+                    .map(|(index, profile)| {
+                        let marker = if index == state.selected_profile_index {
+                            ">"
+                        } else {
+                            " "
+                        };
+
+                        let capabilities = profile
+                            .capabilities()
+                            .iter()
+                            .map(model::Capability::as_str)
+                            .collect::<Vec<_>>()
+                            .join(", ");
+
+                        format!(
+                            "{marker} {}\n    {}\n    Capabilities: {capabilities}",
+                            profile.name(),
+                            profile.description(),
+                        )
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n\n");
+
+                format!("Choose the appliance profile that DAIA will configure.\n\n{profiles}")
+            }
+        }
         WizardScreen::Administrator => {
             let username = if state.administrator_username.is_empty() {
                 "Not configured"
@@ -476,11 +537,19 @@ fn run() -> io::Result<()> {
                 WelcomeAction::Start => state.next_screen(),
                 WelcomeAction::Quit => break Ok(()),
             },
+            KeyCode::Down if state.screen == WizardScreen::Profile => {
+                state.next_profile();
+            }
+            KeyCode::Up if state.screen == WizardScreen::Profile => {
+                state.previous_profile();
+            }
+            KeyCode::Enter if state.screen == WizardScreen::Profile => {
+                state.confirm_profile();
+            }
             KeyCode::Down
                 if matches!(
                     state.screen,
-                    WizardScreen::Profile
-                        | WizardScreen::ContentRepository
+                    WizardScreen::ContentRepository
                         | WizardScreen::ExternalContent
                         | WizardScreen::Storage
                         | WizardScreen::Review
@@ -491,8 +560,7 @@ fn run() -> io::Result<()> {
             KeyCode::Up
                 if matches!(
                     state.screen,
-                    WizardScreen::Profile
-                        | WizardScreen::ContentRepository
+                    WizardScreen::ContentRepository
                         | WizardScreen::ExternalContent
                         | WizardScreen::Storage
                         | WizardScreen::Review
@@ -503,8 +571,7 @@ fn run() -> io::Result<()> {
             KeyCode::Enter
                 if matches!(
                     state.screen,
-                    WizardScreen::Profile
-                        | WizardScreen::ContentRepository
+                    WizardScreen::ContentRepository
                         | WizardScreen::ExternalContent
                         | WizardScreen::Storage
                         | WizardScreen::Review
@@ -569,6 +636,25 @@ mod tests {
 
         state.previous_welcome_action();
         assert_eq!(state.welcome_action, WelcomeAction::Start);
+    }
+
+    #[test]
+    fn selects_appliance_profile_and_advances() {
+        let mut state = TuiState::new();
+
+        assert!(
+            !state.appliance_profiles.is_empty(),
+            "repository should provide appliance profiles"
+        );
+
+        state.screen = WizardScreen::Profile;
+
+        let selected_name = state.appliance_profiles[0].name().to_owned();
+
+        state.confirm_profile();
+
+        assert_eq!(state.wizard.profile_name(), Some(selected_name.as_str()));
+        assert_eq!(state.screen, WizardScreen::ContentRepository);
     }
 
     #[test]

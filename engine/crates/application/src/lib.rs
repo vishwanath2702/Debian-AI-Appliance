@@ -5,7 +5,30 @@ use model::{
     StorageKind, UserConfiguration,
 };
 #[cfg(test)]
-use registry::{ApplianceProfileRepository, ContentRepositoryRepository};
+use registry::ContentRepositoryRepository;
+use registry::{ApplianceProfileRepository, RegistryError};
+use std::path::PathBuf;
+/// Loads the appliance profiles available to interactive DAIA presentations.
+///
+/// Installed systems use the packaged DAIA profile directory. Development
+/// builds fall back to the repository profile definitions.
+///
+/// # Errors
+///
+/// Returns a [`RegistryError`] if the profile directory cannot be read or
+/// contains an invalid appliance profile definition.
+pub fn load_appliance_profiles() -> Result<ApplianceProfileRepository, RegistryError> {
+    let installed = PathBuf::from("/usr/share/daia/appliance-profiles");
+
+    let directory = if installed.is_dir() {
+        installed
+    } else {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../registry/appliance-profiles")
+    };
+
+    ApplianceProfileRepository::from_directory(directory)
+}
+
 /// State accumulated while configuring an appliance through the wizard.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct WizardState {

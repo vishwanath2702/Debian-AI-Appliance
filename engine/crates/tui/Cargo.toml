@@ -10,6 +10,7 @@ path = "src/main.rs"
 
 [dependencies]
 application = { path = "../application" }
+model = { path = "../model" }
 crossterm = "0.28"
 ratatui = "0.29"
 

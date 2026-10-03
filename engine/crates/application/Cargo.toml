@@ -6,8 +6,6 @@ license.workspace = true
 
 [dependencies]
 model = { path = "../model" }
-
-[dev-dependencies]
 registry = { path = "../registry" }
 
 [lints]
