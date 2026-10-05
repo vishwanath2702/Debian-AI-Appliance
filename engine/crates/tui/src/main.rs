@@ -32,6 +32,9 @@ enum WizardScreen {
     Administrator,
     Review,
     ConfirmInstallation,
+    Installing,
+    InstallationComplete,
+    InstallationFailed,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -402,6 +405,9 @@ impl TuiState {
             WizardScreen::Administrator => WizardScreen::Review,
             WizardScreen::Review => WizardScreen::Review,
             WizardScreen::ConfirmInstallation => WizardScreen::ConfirmInstallation,
+            WizardScreen::Installing => WizardScreen::Installing,
+            WizardScreen::InstallationComplete => WizardScreen::InstallationComplete,
+            WizardScreen::InstallationFailed => WizardScreen::InstallationFailed,
         };
     }
 
@@ -782,6 +788,9 @@ impl TuiState {
             WizardScreen::Administrator => WizardScreen::Storage,
             WizardScreen::Review => WizardScreen::Administrator,
             WizardScreen::ConfirmInstallation => WizardScreen::Review,
+            WizardScreen::Installing => WizardScreen::Installing,
+            WizardScreen::InstallationComplete => WizardScreen::InstallationComplete,
+            WizardScreen::InstallationFailed => WizardScreen::InstallationFailed,
         };
     }
 }
@@ -894,6 +903,9 @@ fn screen_title(screen: WizardScreen) -> &'static str {
         WizardScreen::Administrator => "Administrator",
         WizardScreen::Review => "Review",
         WizardScreen::ConfirmInstallation => "Confirm Installation",
+        WizardScreen::Installing => "Installing",
+        WizardScreen::InstallationComplete => "Installation Complete",
+        WizardScreen::InstallationFailed => "Installation Failed",
     }
 }
 
@@ -1303,6 +1315,24 @@ fn render(frame: &mut ratatui::Frame<'_>, state: &TuiState) {
                  {back_marker} Back"
             )
         }
+        WizardScreen::Installing => {
+            "Installing DAIA\n\n             Installation is in progress.\n             Do not power off the computer."
+                .to_owned()
+        }
+        WizardScreen::InstallationComplete => {
+            "Installation Complete\n\n             DAIA was installed successfully.\n\n             Press Enter to exit the installer."
+                .to_owned()
+        }
+        WizardScreen::InstallationFailed => {
+            let error = state
+                .review_error
+                .as_deref()
+                .unwrap_or("Installation failed.");
+
+            format!(
+                "Installation Failed\n\n                 DAIA could not complete the installation.\n\n                 Error: {error}\n\n                 Press Enter to exit the installer."
+            )
+        }
     };
 
     let body = Paragraph::new(format!("{navigation}\n\n{detail}")).block(
@@ -1324,6 +1354,8 @@ fn render(frame: &mut ratatui::Frame<'_>, state: &TuiState) {
             "↑ / ↓: Navigate    Enter: Select    Esc: Back    Backspace: Edit"
         }
         WizardScreen::ConfirmInstallation => "↑ / ↓: Navigate    Enter: Select    Esc: Back",
+        WizardScreen::Installing => "Installation in progress",
+        WizardScreen::InstallationComplete | WizardScreen::InstallationFailed => "Enter: Exit",
         _ => "↑ / ↓: Navigate    Enter: Select    Esc: Back",
     };
 
@@ -1348,11 +1380,15 @@ fn run() -> io::Result<()> {
         terminal.draw(|frame| render(frame, &state))?;
 
         if state.take_installation_request() {
+            state.review_error = None;
+            state.screen = WizardScreen::Installing;
+            terminal.draw(|frame| render(frame, &state))?;
+
             let registry = match load_provider_registry() {
                 Ok(registry) => registry,
                 Err(error) => {
                     state.review_error = Some(format!("Error loading provider registry: {error}"));
-                    state.screen = WizardScreen::Review;
+                    state.screen = WizardScreen::InstallationFailed;
                     continue;
                 }
             };
@@ -1371,21 +1407,21 @@ fn run() -> io::Result<()> {
                 Ok(prepared) => prepared,
                 Err(error) => {
                     state.review_error = Some(error);
-                    state.screen = WizardScreen::Review;
+                    state.screen = WizardScreen::InstallationFailed;
                     continue;
                 }
             };
 
             if let Err(error) = load_package_repository() {
                 state.review_error = Some(format!("Error loading package repository: {error}"));
-                state.screen = WizardScreen::Review;
+                state.screen = WizardScreen::InstallationFailed;
                 continue;
             }
 
             if let Err(error) = engine::validate_installation_commands() {
                 state.review_error =
                     Some(format!("Error validating installation commands: {error}"));
-                state.screen = WizardScreen::Review;
+                state.screen = WizardScreen::InstallationFailed;
                 continue;
             }
 
@@ -1399,11 +1435,12 @@ fn run() -> io::Result<()> {
 
             if let Err(error) = execute_appliance_installation(&engine, &prepared, &mut executor) {
                 state.review_error = Some(format!("Installation failed: {error}"));
-                state.screen = WizardScreen::Review;
+                state.screen = WizardScreen::InstallationFailed;
                 continue;
             }
 
-            break Ok(());
+            state.screen = WizardScreen::InstallationComplete;
+            continue;
         }
 
         let Event::Key(key) = event::read()? else {
@@ -1417,7 +1454,12 @@ fn run() -> io::Result<()> {
             {
                 state.cancel_external_model_naming();
             }
-            KeyCode::Esc if state.screen != WizardScreen::Welcome => {
+            KeyCode::Esc
+                if state.screen != WizardScreen::Welcome
+                    && state.screen != WizardScreen::Installing
+                    && state.screen != WizardScreen::InstallationComplete
+                    && state.screen != WizardScreen::InstallationFailed =>
+            {
                 state.previous_screen();
                 state.screen_action = ScreenAction::Continue;
 
@@ -1430,6 +1472,14 @@ fn run() -> io::Result<()> {
             }
             KeyCode::Up if state.screen == WizardScreen::Welcome => {
                 state.previous_welcome_action();
+            }
+            KeyCode::Enter
+                if matches!(
+                    state.screen,
+                    WizardScreen::InstallationComplete | WizardScreen::InstallationFailed
+                ) =>
+            {
+                break Ok(());
             }
             KeyCode::Enter if state.screen == WizardScreen::Welcome => match state.welcome_action {
                 WelcomeAction::Start => state.next_screen(),
@@ -1670,6 +1720,34 @@ mod tests {
 
         assert_eq!(executor.operations, expected_operations);
         assert!(!executor.operations.is_empty());
+    }
+
+    #[test]
+    fn installation_lifecycle_screens_do_not_navigate_backward() {
+        for screen in [
+            WizardScreen::Installing,
+            WizardScreen::InstallationComplete,
+            WizardScreen::InstallationFailed,
+        ] {
+            let mut state = TuiState::new();
+            state.screen = screen;
+
+            state.previous_screen();
+
+            assert_eq!(state.screen, screen);
+        }
+    }
+
+    #[test]
+    fn installation_request_is_consumed_once() {
+        let mut state = TuiState::new();
+
+        state.screen = WizardScreen::ConfirmInstallation;
+        state.installation_action = InstallationAction::Install;
+        state.confirm_installation_action();
+
+        assert!(state.take_installation_request());
+        assert!(!state.take_installation_request());
     }
 
     #[test]
