@@ -64,6 +64,16 @@ impl LiveRootfsPreparer for SystemLiveRootfsPreparer {
             copy_file(daia_binary, &destination)?;
         }
 
+        if let Some(daia_tui_binary) = build_context.daia_tui_binary() {
+            let usr_bin = build_context.rootfs().join("usr/bin");
+
+            create_directory(&usr_bin)?;
+
+            let destination = usr_bin.join("daia-tui");
+
+            copy_file(daia_tui_binary, &destination)?;
+        }
+
         let systemd_directory = build_context.rootfs().join("etc/systemd/system");
 
         let multi_user_wants = systemd_directory.join("multi-user.target.wants");
@@ -94,7 +104,7 @@ Conflicts=graphical.target
 
 [Service]
 Type=simple
-ExecStart=/usr/bin/daia install
+ExecStart=/usr/bin/daia-tui
 StandardInput=tty
 StandardOutput=tty
 StandardError=tty
@@ -654,6 +664,7 @@ mod tests {
         let content_repository_directory = registry_directory.join("content-repositories");
 
         let daia_binary = temp.path().join("daia");
+        let daia_tui_binary = temp.path().join("daia-tui");
 
         fs::create_dir_all(&rootfs).expect("rootfs should be created");
 
@@ -677,6 +688,8 @@ mod tests {
         .expect("content repository fixture should be written");
 
         fs::write(&daia_binary, b"daia").expect("DAIA binary fixture should be written");
+        fs::write(&daia_tui_binary, b"daia-tui")
+            .expect("DAIA TUI binary fixture should be written");
 
         let getty_wants = rootfs.join("etc/systemd/system/getty.target.wants");
         fs::create_dir_all(&getty_wants).expect("getty wants directory should be created");
@@ -693,7 +706,8 @@ mod tests {
             asset_directory,
             BootstrapConfig::default(),
         )
-        .with_daia_binary(&daia_binary);
+        .with_daia_binary(&daia_binary)
+        .with_daia_tui_binary(&daia_tui_binary);
 
         let mut preparer = SystemLiveRootfsPreparer;
 
@@ -704,6 +718,24 @@ mod tests {
         assert_eq!(
             fs::read(rootfs.join("usr/bin/daia")).expect("DAIA binary should be copied"),
             b"daia"
+        );
+
+        assert_eq!(
+            fs::read(rootfs.join("usr/bin/daia-tui")).expect("DAIA TUI binary should be copied"),
+            b"daia-tui"
+        );
+
+        let installer_service =
+            fs::read_to_string(rootfs.join("etc/systemd/system/daia-installer.service"))
+                .expect("DAIA installer service should be readable");
+
+        assert!(
+            installer_service.contains("ExecStart=/usr/bin/daia-tui"),
+            "live installer service must launch the DAIA terminal installer"
+        );
+        assert!(
+            !installer_service.contains("ExecStart=/usr/bin/daia install"),
+            "live installer service must not launch the legacy CLI installer presentation"
         );
 
         assert_eq!(

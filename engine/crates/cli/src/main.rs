@@ -450,6 +450,16 @@ fn create_build_context(
     .into());
     }
 
+    let daia_tui_binary =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/release/daia-tui");
+    if !daia_tui_binary.is_file() {
+        return Err(format!(
+            "DAIA terminal installer release binary not found at {}. Build it first with: cargo build --release -p tui",
+            daia_tui_binary.display()
+        )
+        .into());
+    }
+
     if !options.daia_payload_directory.is_dir() {
         return Err(format!(
             "DAIA payload directory not found at {}",
@@ -467,6 +477,7 @@ fn create_build_context(
         bootstrap,
     )
     .with_daia_binary(daia_binary)
+    .with_daia_tui_binary(daia_tui_binary)
     .with_daia_payload_directory(options.daia_payload_directory.clone()))
 }
 
