@@ -113,6 +113,7 @@ struct TuiState {
     administrator_error: Option<String>,
     review_error: Option<String>,
     installation_action: InstallationAction,
+    installation_requested: bool,
     welcome_action: WelcomeAction,
     screen_action: ScreenAction,
     screen: WizardScreen,
@@ -150,6 +151,7 @@ impl TuiState {
             administrator_error: None,
             review_error: None,
             installation_action: InstallationAction::Back,
+            installation_requested: false,
             welcome_action: WelcomeAction::default(),
             screen_action: ScreenAction::default(),
             screen: WizardScreen::Welcome,
@@ -238,11 +240,20 @@ impl TuiState {
 
     fn confirm_installation_action(&mut self) {
         match self.installation_action {
-            InstallationAction::Install => {}
-            InstallationAction::Back => self.previous_screen(),
+            InstallationAction::Install => {
+                self.installation_requested = true;
+            }
+            InstallationAction::Back => {
+                self.installation_requested = false;
+                self.previous_screen();
+            }
         }
 
         self.installation_action = InstallationAction::Back;
+    }
+
+    fn take_installation_request(&mut self) -> bool {
+        std::mem::take(&mut self.installation_requested)
     }
 
     fn confirm_screen_action(&mut self) {
@@ -789,6 +800,17 @@ where
     Ok(())
 }
 
+fn execute_appliance_installation<E>(
+    engine: &Engine,
+    prepared: &engine::PreparedApplianceInstallation,
+    executor: &mut E,
+) -> Result<(), E::Error>
+where
+    E: engine::InstallationOperationExecutor,
+{
+    engine.execute_appliance_installation(prepared, executor)
+}
+
 fn prepare_appliance_installation<I, S>(
     engine: &Engine,
     state: &WizardState,
@@ -1325,6 +1347,65 @@ fn run() -> io::Result<()> {
     let result = loop {
         terminal.draw(|frame| render(frame, &state))?;
 
+        if state.take_installation_request() {
+            let registry = match load_provider_registry() {
+                Ok(registry) => registry,
+                Err(error) => {
+                    state.review_error = Some(format!("Error loading provider registry: {error}"));
+                    state.screen = WizardScreen::Review;
+                    continue;
+                }
+            };
+
+            let engine = Engine::from_registry(registry);
+            let content_inspector = LocalFilesystemContentInspector::new();
+            let storage_inspector = LinuxStorageInspector::new();
+
+            let prepared = match prepare_appliance_installation(
+                &engine,
+                &state.wizard,
+                &state.appliance_profiles,
+                &content_inspector,
+                &storage_inspector,
+            ) {
+                Ok(prepared) => prepared,
+                Err(error) => {
+                    state.review_error = Some(error);
+                    state.screen = WizardScreen::Review;
+                    continue;
+                }
+            };
+
+            if let Err(error) = load_package_repository() {
+                state.review_error = Some(format!("Error loading package repository: {error}"));
+                state.screen = WizardScreen::Review;
+                continue;
+            }
+
+            if let Err(error) = engine::validate_installation_commands() {
+                state.review_error =
+                    Some(format!("Error validating installation commands: {error}"));
+                state.screen = WizardScreen::Review;
+                continue;
+            }
+
+            let root_password = state.credentials.root_password.clone();
+            let administrator_password = state.credentials.administrator_password.clone();
+
+            let mut executor = engine::SystemInstallationOperationExecutor::new(
+                root_password,
+                administrator_password,
+            );
+
+            if let Err(error) = execute_appliance_installation(&engine, &prepared, &mut executor) {
+                state.review_error = Some(format!("Installation failed: {error}"));
+                state.screen = WizardScreen::Review;
+                continue;
+            }
+
+            break Ok(());
+        }
+
         let Event::Key(key) = event::read()? else {
             continue;
         };
@@ -1473,9 +1554,123 @@ fn main() -> io::Result<()> {
 mod tests {
     use super::{
         AdministratorField, ExternalContentFocus, InstallationAction, ScreenAction, TuiState,
-        WelcomeAction, WizardScreen, render,
+        WelcomeAction, WizardScreen, execute_appliance_installation, render,
     };
     use ratatui::{Terminal, backend::TestBackend};
+
+    #[derive(Default)]
+    struct RecordingInstallationExecutor {
+        operations: Vec<engine::InstallationOperation>,
+    }
+
+    impl engine::InstallationOperationExecutor for RecordingInstallationExecutor {
+        type Error = std::convert::Infallible;
+
+        fn execute_operation(
+            &mut self,
+            operation: &engine::InstallationOperation,
+        ) -> Result<(), Self::Error> {
+            self.operations.push(operation.clone());
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn executes_prepared_installation_through_engine() {
+        let mut state = TuiState::new();
+
+        let storage = model::DiscoveredStorage::new(
+            "install-disk",
+            model::StorageKind::Secondary,
+            "/dev/install",
+        )
+        .with_size_bytes(128 * 1024 * 1024 * 1024);
+        let storage_id = storage.id().clone();
+
+        state.wizard.set_discovered_storage(vec![storage]);
+        state.wizard.select_storage(storage_id);
+
+        let profile = state
+            .appliance_profiles
+            .first()
+            .expect("at least one appliance profile should exist")
+            .clone();
+        state.wizard.set_profile_name(profile.name());
+
+        let repositories =
+            application::load_content_repositories().expect("content repositories should load");
+        let repository = repositories
+            .first()
+            .expect("at least one content repository should exist")
+            .clone();
+        let repository_id = repository.id().clone();
+
+        state.wizard.set_content_repositories(repositories);
+        state.wizard.select_content_repository(repository_id);
+        state.wizard.set_external_content_items(Vec::new());
+        state.wizard.select_external_content(Vec::new());
+        state
+            .wizard
+            .set_user_identity("install-admin", "Install Administrator");
+
+        let registry = super::load_provider_registry().expect("provider registry should load");
+        let engine = engine::Engine::from_registry(registry);
+
+        struct EmptyContentInspector;
+
+        impl inspector::ContentInspector for EmptyContentInspector {
+            fn inspect(
+                &self,
+                _source: &model::ContentSource,
+            ) -> Result<Vec<model::DiscoveredContent>, inspector::ContentInspectError> {
+                Ok(Vec::new())
+            }
+
+            fn items(
+                &self,
+                _content: &model::DiscoveredContent,
+            ) -> Result<Vec<model::ExternalContentItem>, inspector::ContentInspectError>
+            {
+                Ok(Vec::new())
+            }
+        }
+
+        struct FixedStorageInspector {
+            storage: Vec<model::DiscoveredStorage>,
+        }
+
+        impl inspector::StorageInspector for FixedStorageInspector {
+            fn inspect(
+                &self,
+            ) -> Result<Vec<model::DiscoveredStorage>, inspector::StorageInspectError> {
+                Ok(self.storage.clone())
+            }
+        }
+
+        let content_inspector = EmptyContentInspector;
+        let storage_inspector = FixedStorageInspector {
+            storage: state.wizard.selectable_storage().cloned().collect(),
+        };
+
+        let prepared = super::prepare_appliance_installation(
+            &engine,
+            &state.wizard,
+            &state.appliance_profiles,
+            &content_inspector,
+            &storage_inspector,
+        )
+        .expect("installation should prepare");
+
+        let expected_operations = prepared.installation_plan().operations().to_vec();
+
+        let mut executor = RecordingInstallationExecutor::default();
+
+        execute_appliance_installation(&engine, &prepared, &mut executor)
+            .expect("prepared installation should execute");
+
+        assert_eq!(executor.operations, expected_operations);
+        assert!(!executor.operations.is_empty());
+    }
 
     #[test]
     fn installation_confirmation_defaults_to_back() {
@@ -1492,7 +1687,7 @@ mod tests {
     }
 
     #[test]
-    fn selecting_install_is_inert_until_execution_is_wired() {
+    fn selecting_install_requests_execution_without_executing() {
         let mut state = TuiState::new();
 
         state.screen = WizardScreen::ConfirmInstallation;
@@ -1502,6 +1697,8 @@ mod tests {
 
         assert_eq!(state.screen, WizardScreen::ConfirmInstallation);
         assert_eq!(state.installation_action, InstallationAction::Back);
+        assert!(state.take_installation_request());
+        assert!(!state.take_installation_request());
     }
 
     #[test]
@@ -1515,6 +1712,7 @@ mod tests {
 
         assert_eq!(state.screen, WizardScreen::Review);
         assert_eq!(state.installation_action, InstallationAction::Back);
+        assert!(!state.take_installation_request());
     }
 
     #[test]
