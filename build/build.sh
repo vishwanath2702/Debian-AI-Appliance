@@ -23,8 +23,12 @@ echo "[3/5] Building DAIA payload..."
 "$SCRIPT_DIR/build-payload.sh"
 
 echo
-echo "[4/5] Building DAIA release binary..."
-cargo build     --release     --manifest-path "$PROJECT_ROOT/engine/Cargo.toml"     -p cli
+echo "[4/5] Building DAIA release binaries..."
+cargo build \
+    --release \
+    --manifest-path "$PROJECT_ROOT/engine/Cargo.toml" \
+    -p cli \
+    -p tui
 
 echo
 echo "[5/5] Building DAIA ISO with Rust engine..."
