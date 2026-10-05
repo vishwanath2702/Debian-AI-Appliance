@@ -4,7 +4,9 @@ use model::{
     DiscoveredStorageId, ExternalContentItem, ExternalContentItemId, ModelRealizationIntent,
     StorageKind, UserConfiguration,
 };
-use registry::{ApplianceProfileRepository, ContentRepositoryRepository, RegistryError};
+use registry::{
+    ApplianceProfileRepository, ContentRepositoryRepository, PackageRepository, RegistryError,
+};
 use std::path::PathBuf;
 /// Loads the appliance profiles available to interactive DAIA presentations.
 ///
@@ -46,6 +48,27 @@ pub fn load_provider_registry() -> Result<registry::Registry, RegistryError> {
     };
 
     registry::Registry::from_directory(directory)
+}
+
+/// Loads the package repository used to validate DAIA installation packages.
+///
+/// Installed systems use the packaged DAIA package-manifest directory.
+/// Development builds fall back to the package manifests in the source tree.
+///
+/// # Errors
+///
+/// Returns a [`RegistryError`] if the package-manifest directory cannot be
+/// read or contains an invalid package manifest.
+pub fn load_package_repository() -> Result<PackageRepository, RegistryError> {
+    let installed = PathBuf::from("/usr/share/daia/package-manifests");
+
+    let directory = if installed.is_dir() {
+        installed
+    } else {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../registry/package-manifests")
+    };
+
+    PackageRepository::from_directory(directory)
 }
 
 /// Loads the content repositories available to interactive DAIA presentations.

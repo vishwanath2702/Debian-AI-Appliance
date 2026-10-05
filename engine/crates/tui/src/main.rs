@@ -1,7 +1,8 @@
 //! DAIA terminal user interface.
 
 use application::{
-    WizardState, load_appliance_profiles, load_content_repositories, load_provider_registry,
+    WizardState, load_appliance_profiles, load_content_repositories, load_package_repository,
+    load_provider_registry,
 };
 use crossterm::{
     event::{self, Event, KeyCode},
@@ -44,6 +45,13 @@ enum StorageFocus {
 enum ScreenAction {
     #[default]
     Continue,
+    Back,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+enum InstallationAction {
+    Install,
+    #[default]
     Back,
 }
 
@@ -104,6 +112,7 @@ struct TuiState {
     administrator_field: AdministratorField,
     administrator_error: Option<String>,
     review_error: Option<String>,
+    installation_action: InstallationAction,
     welcome_action: WelcomeAction,
     screen_action: ScreenAction,
     screen: WizardScreen,
@@ -140,6 +149,7 @@ impl TuiState {
             administrator_field: AdministratorField::default(),
             administrator_error: None,
             review_error: None,
+            installation_action: InstallationAction::Back,
             welcome_action: WelcomeAction::default(),
             screen_action: ScreenAction::default(),
             screen: WizardScreen::Welcome,
@@ -218,6 +228,23 @@ impl TuiState {
         self.screen_action = ScreenAction::Continue;
     }
 
+    fn next_installation_action(&mut self) {
+        self.installation_action = InstallationAction::Back;
+    }
+
+    fn previous_installation_action(&mut self) {
+        self.installation_action = InstallationAction::Install;
+    }
+
+    fn confirm_installation_action(&mut self) {
+        match self.installation_action {
+            InstallationAction::Install => {}
+            InstallationAction::Back => self.previous_screen(),
+        }
+
+        self.installation_action = InstallationAction::Back;
+    }
+
     fn confirm_screen_action(&mut self) {
         match self.screen_action {
             ScreenAction::Continue if self.screen == WizardScreen::Review => {
@@ -259,11 +286,17 @@ impl TuiState {
             }
         }
 
+        if let Err(error) = load_package_repository() {
+            self.review_error = Some(format!("Error loading package repository: {error}"));
+            return;
+        }
+
         if let Err(error) = engine::validate_installation_commands() {
             self.review_error = Some(format!("Error validating installation commands: {error}"));
             return;
         }
 
+        self.installation_action = InstallationAction::Back;
         self.screen = WizardScreen::ConfirmInstallation;
     }
 
@@ -1228,12 +1261,24 @@ fn render(frame: &mut ratatui::Frame<'_>, state: &TuiState) {
                 .map(|storage| storage.device_path().display().to_string())
                 .unwrap_or_else(|| "Not selected".to_owned());
 
+            let install_marker = if state.installation_action == InstallationAction::Install {
+                ">"
+            } else {
+                " "
+            };
+            let back_marker = if state.installation_action == InstallationAction::Back {
+                ">"
+            } else {
+                " "
+            };
+
             format!(
                 "Confirm Installation\n\n\
                  WARNING: Installation will erase the selected target disk.\n\n\
                  Target disk: {storage}\n\n\
-                 Installation has not started.\n\
-                 Press Esc to return to Review."
+                 Installation has not started.\n\n\
+                 {install_marker} Install\n\
+                 {back_marker} Back"
             )
         }
     };
@@ -1256,6 +1301,7 @@ fn render(frame: &mut ratatui::Frame<'_>, state: &TuiState) {
         WizardScreen::Administrator => {
             "↑ / ↓: Navigate    Enter: Select    Esc: Back    Backspace: Edit"
         }
+        WizardScreen::ConfirmInstallation => "↑ / ↓: Navigate    Enter: Select    Esc: Back",
         _ => "↑ / ↓: Navigate    Enter: Select    Esc: Back",
     };
 
@@ -1350,11 +1396,17 @@ fn run() -> io::Result<()> {
             KeyCode::Down if state.screen == WizardScreen::Review => {
                 state.next_screen_action();
             }
+            KeyCode::Down if state.screen == WizardScreen::ConfirmInstallation => {
+                state.next_installation_action();
+            }
             KeyCode::Up if state.screen == WizardScreen::Storage => {
                 state.previous_storage();
             }
             KeyCode::Up if state.screen == WizardScreen::Review => {
                 state.previous_screen_action();
+            }
+            KeyCode::Up if state.screen == WizardScreen::ConfirmInstallation => {
+                state.previous_installation_action();
             }
             KeyCode::Backspace
                 if state.screen == WizardScreen::ExternalContent
@@ -1382,6 +1434,9 @@ fn run() -> io::Result<()> {
             }
             KeyCode::Enter if state.screen == WizardScreen::Review => {
                 state.confirm_screen_action();
+            }
+            KeyCode::Enter if state.screen == WizardScreen::ConfirmInstallation => {
+                state.confirm_installation_action();
             }
             KeyCode::Down if state.screen == WizardScreen::Administrator => {
                 state.next_administrator_field();
@@ -1417,10 +1472,50 @@ fn main() -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::{
-        AdministratorField, ExternalContentFocus, ScreenAction, TuiState, WelcomeAction,
-        WizardScreen, render,
+        AdministratorField, ExternalContentFocus, InstallationAction, ScreenAction, TuiState,
+        WelcomeAction, WizardScreen, render,
     };
     use ratatui::{Terminal, backend::TestBackend};
+
+    #[test]
+    fn installation_confirmation_defaults_to_back() {
+        let mut state = TuiState::new();
+
+        state.installation_action = InstallationAction::Install;
+        state.screen = WizardScreen::Review;
+
+        state.installation_action = InstallationAction::Back;
+        state.screen = WizardScreen::ConfirmInstallation;
+
+        assert_eq!(state.screen, WizardScreen::ConfirmInstallation);
+        assert_eq!(state.installation_action, InstallationAction::Back);
+    }
+
+    #[test]
+    fn selecting_install_is_inert_until_execution_is_wired() {
+        let mut state = TuiState::new();
+
+        state.screen = WizardScreen::ConfirmInstallation;
+        state.installation_action = InstallationAction::Install;
+
+        state.confirm_installation_action();
+
+        assert_eq!(state.screen, WizardScreen::ConfirmInstallation);
+        assert_eq!(state.installation_action, InstallationAction::Back);
+    }
+
+    #[test]
+    fn confirming_installation_back_returns_to_review() {
+        let mut state = TuiState::new();
+
+        state.screen = WizardScreen::ConfirmInstallation;
+        state.installation_action = InstallationAction::Back;
+
+        state.confirm_installation_action();
+
+        assert_eq!(state.screen, WizardScreen::Review);
+        assert_eq!(state.installation_action, InstallationAction::Back);
+    }
 
     #[test]
     fn renders_review_configuration_summary() {
