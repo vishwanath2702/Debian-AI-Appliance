@@ -19,7 +19,7 @@ use ratatui::{
     layout::{Constraint, Direction, Layout},
     widgets::{Block, Borders, Paragraph},
 };
-use std::io::{self, stdout};
+use std::io::{self, Stdout, stdout};
 
 /// Screens presented by the DAIA configuration wizard.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1366,17 +1366,47 @@ fn render(frame: &mut ratatui::Frame<'_>, state: &TuiState) {
     frame.render_widget(controls, areas[2]);
 }
 
+struct TerminalSession {
+    terminal: Terminal<CrosstermBackend<Stdout>>,
+}
+
+impl TerminalSession {
+    fn enter() -> io::Result<Self> {
+        enable_raw_mode()?;
+
+        let mut output = stdout();
+        if let Err(error) = execute!(output, EnterAlternateScreen) {
+            let _ = disable_raw_mode();
+            return Err(error);
+        }
+
+        let backend = CrosstermBackend::new(output);
+        match Terminal::new(backend) {
+            Ok(terminal) => Ok(Self { terminal }),
+            Err(error) => {
+                let _ = disable_raw_mode();
+                let mut output = stdout();
+                let _ = execute!(output, LeaveAlternateScreen);
+                Err(error)
+            }
+        }
+    }
+}
+
+impl Drop for TerminalSession {
+    fn drop(&mut self) {
+        let _ = disable_raw_mode();
+        let _ = execute!(self.terminal.backend_mut(), LeaveAlternateScreen);
+        let _ = self.terminal.show_cursor();
+    }
+}
+
 fn run() -> io::Result<()> {
-    enable_raw_mode()?;
-
-    let mut output = stdout();
-    execute!(output, EnterAlternateScreen)?;
-
-    let backend = CrosstermBackend::new(output);
-    let mut terminal = Terminal::new(backend)?;
+    let mut session = TerminalSession::enter()?;
+    let terminal = &mut session.terminal;
     let mut state = TuiState::new();
 
-    let result = loop {
+    loop {
         terminal.draw(|frame| render(frame, &state))?;
 
         if state.take_installation_request() {
@@ -1587,13 +1617,7 @@ fn run() -> io::Result<()> {
             KeyCode::Enter => state.next_screen(),
             _ => {}
         }
-    };
-
-    disable_raw_mode()?;
-    execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
-    terminal.show_cursor()?;
-
-    result
+    }
 }
 
 fn main() -> io::Result<()> {
