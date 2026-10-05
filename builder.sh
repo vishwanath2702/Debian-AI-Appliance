@@ -81,24 +81,32 @@ build_iso() {
 }
 
 find_source_iso() {
-    local source_iso
+    local -a source_isos=()
 
-    source_iso="$(
+    mapfile -t source_isos < <(
         find "${ISO_DIRECTORY}" \
             -maxdepth 1 \
             -type f \
             -name 'debian-*-amd64-netinst.iso' \
             -print \
-            -quit
-    )"
+            | sort
+    )
 
-    if [[ -z "${source_iso}" ]]; then
+    if [[ "${#source_isos[@]}" -eq 0 ]]; then
         printf 'Error: no Debian amd64 netinst ISO found in: %s\n' \
             "${ISO_DIRECTORY}" >&2
         return 1
     fi
 
-    printf '%s\n' "${source_iso}"
+    if [[ "${#source_isos[@]}" -ne 1 ]]; then
+        printf 'Error: multiple Debian amd64 netinst ISOs found in: %s\n' \
+            "${ISO_DIRECTORY}" >&2
+        printf 'Set DAIA_SOURCE_ISO explicitly to select one.\n' >&2
+        printf '  %s\n' "${source_isos[@]}" >&2
+        return 1
+    fi
+
+    printf '%s\n' "${source_isos[0]}"
 }
 
 run_cli() {

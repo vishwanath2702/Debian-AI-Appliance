@@ -21,14 +21,41 @@ EXTRACT_DIR="$WORK_DIR/extract"
 
 VERSION_FILE="$PROJECT_ROOT/VERSION"
 
-# Automatically locate Debian ISO
-SOURCE_ISO=$(find "$ISO_DIR" -maxdepth 1 -type f \
-    -name "debian-*-amd64-netinst.iso" | head -n1)
+# Select the Debian source ISO.
+#
+# DAIA_SOURCE_ISO takes precedence. Automatic discovery is allowed
+# only when exactly one matching ISO exists.
+if [[ -n "${DAIA_SOURCE_ISO:-}" ]]; then
+    SOURCE_ISO="$DAIA_SOURCE_ISO"
 
-if [[ -z "$SOURCE_ISO" ]]; then
-    echo "ERROR: No Debian netinst ISO found in:"
-    echo "  $ISO_DIR"
-    exit 1
+    if [[ ! -f "$SOURCE_ISO" ]]; then
+        echo "ERROR: Selected Debian netinst ISO not found:"
+        echo "  $SOURCE_ISO"
+        exit 1
+    fi
+else
+    mapfile -t SOURCE_ISOS < <(
+        find "$ISO_DIR" -maxdepth 1 -type f \
+            -name "debian-*-amd64-netinst.iso" \
+            -print \
+            | sort
+    )
+
+    if [[ "${#SOURCE_ISOS[@]}" -eq 0 ]]; then
+        echo "ERROR: No Debian netinst ISO found in:"
+        echo "  $ISO_DIR"
+        exit 1
+    fi
+
+    if [[ "${#SOURCE_ISOS[@]}" -ne 1 ]]; then
+        echo "ERROR: Multiple Debian netinst ISOs found in:"
+        echo "  $ISO_DIR"
+        echo "Set DAIA_SOURCE_ISO explicitly to select one."
+        printf '  %s\n' "${SOURCE_ISOS[@]}"
+        exit 1
+    fi
+
+    SOURCE_ISO="${SOURCE_ISOS[0]}"
 fi
 
 ISO_NAME="$(basename "$SOURCE_ISO")"
