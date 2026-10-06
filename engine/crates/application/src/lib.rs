@@ -105,6 +105,7 @@ pub struct WizardState {
     model_realization_intents: Vec<ModelRealizationIntent>,
     discovered_storage: Vec<DiscoveredStorage>,
     selected_storage: Option<DiscoveredStorageId>,
+    appliance_identity: Option<model::ApplianceIdentity>,
     user: Option<UserConfiguration>,
 }
 impl WizardState {
@@ -120,8 +121,24 @@ impl WizardState {
             model_realization_intents: Vec::new(),
             discovered_storage: Vec::new(),
             selected_storage: None,
+            appliance_identity: None,
             user: None,
         }
+    }
+
+    /// Sets the network identity of the appliance.
+    pub fn set_appliance_identity(
+        &mut self,
+        hostname: impl Into<String>,
+        domain_name: impl Into<String>,
+    ) {
+        self.appliance_identity = Some(model::ApplianceIdentity::new(hostname, domain_name));
+    }
+
+    /// Returns the configured appliance network identity.
+    #[must_use]
+    pub fn appliance_identity(&self) -> Option<&model::ApplianceIdentity> {
+        self.appliance_identity.as_ref()
     }
 
     /// Sets the human administrator identity for the appliance.
@@ -317,6 +334,7 @@ impl WizardState {
             external_content: self.selected_external_content,
             model_realization_intents: self.model_realization_intents,
             storage_id: self.selected_storage?,
+            appliance_identity: self.appliance_identity?,
             user: self.user?,
         })
     }
@@ -331,6 +349,7 @@ pub struct WizardConfig {
     external_content: Vec<ExternalContentItemId>,
     model_realization_intents: Vec<ModelRealizationIntent>,
     storage_id: DiscoveredStorageId,
+    appliance_identity: model::ApplianceIdentity,
     user: UserConfiguration,
 }
 impl WizardConfig {
@@ -397,6 +416,7 @@ impl WizardConfig {
             self.profile_name.clone(),
             self.content_repository_id.clone(),
             self.external_content.clone(),
+            self.appliance_identity.clone(),
             self.storage_id.clone(),
             self.user_configuration().clone(),
         )
@@ -414,6 +434,10 @@ mod tests {
         UserConfiguration,
     };
     use registry::{ApplianceProfileRepository, ContentRepositoryRepository};
+
+    fn select_test_appliance_identity(state: &mut WizardState) {
+        state.set_appliance_identity("daia", "home.arpa");
+    }
 
     fn select_test_storage(state: &mut WizardState) {
         state.set_discovered_storage(vec![DiscoveredStorage::new(
@@ -473,6 +497,7 @@ mod tests {
         state.select_external_content(vec![item_id.clone()]);
         select_test_storage(&mut state);
 
+        select_test_appliance_identity(&mut state);
         select_test_user(&mut state);
 
         let config = state
@@ -508,6 +533,7 @@ mod tests {
         select_test_content_repository(&mut state);
         select_test_storage(&mut state);
 
+        select_test_appliance_identity(&mut state);
         select_test_user(&mut state);
 
         let config = state
@@ -538,6 +564,7 @@ mod tests {
         )]);
         select_test_storage(&mut state);
 
+        select_test_appliance_identity(&mut state);
         select_test_user(&mut state);
 
         let config = state
@@ -672,6 +699,7 @@ mod tests {
         state.set_profile_name("desktop");
         select_test_content_repository(&mut state);
         select_test_storage(&mut state);
+        select_test_appliance_identity(&mut state);
         select_test_user(&mut state);
 
         let item = ExternalContentItem::new(
@@ -906,6 +934,7 @@ mod tests {
         select_test_content_repository(&mut state);
         select_test_storage(&mut state);
 
+        select_test_appliance_identity(&mut state);
         select_test_user(&mut state);
 
         let config = state
@@ -921,6 +950,40 @@ mod tests {
     }
 
     #[test]
+    fn appliance_identity_is_required_for_completed_wizard_configuration() {
+        let mut state = WizardState::new();
+
+        state.set_profile_name("desktop");
+        select_test_content_repository(&mut state);
+        select_test_storage(&mut state);
+        select_test_user(&mut state);
+
+        assert!(state.into_config().is_none());
+    }
+
+    #[test]
+    fn wizard_configuration_preserves_appliance_identity() {
+        let mut state = WizardState::new();
+
+        state.set_profile_name("desktop");
+        select_test_content_repository(&mut state);
+        select_test_storage(&mut state);
+        select_test_appliance_identity(&mut state);
+        select_test_user(&mut state);
+
+        let config = state
+            .into_config()
+            .expect("completed wizard state should build configuration");
+
+        let identity = config.appliance_configuration();
+        let identity = identity.appliance_identity();
+
+        assert_eq!(identity.hostname(), "daia");
+        assert_eq!(identity.domain_name(), "home.arpa");
+        assert_eq!(identity.fqdn(), "daia.home.arpa");
+    }
+
+    #[test]
     fn completed_wizard_state_builds_configuration() {
         let mut state = WizardState::new();
 
@@ -928,6 +991,7 @@ mod tests {
         select_test_content_repository(&mut state);
         select_test_storage(&mut state);
 
+        select_test_appliance_identity(&mut state);
         select_test_user(&mut state);
 
         let config = state

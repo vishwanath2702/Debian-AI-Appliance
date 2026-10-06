@@ -2083,6 +2083,7 @@ pub struct ApplianceConfiguration {
     content_repository_id: ContentRepositoryId,
     content_import: ContentImportIntent,
     model_realization_intents: Vec<ModelRealizationIntent>,
+    appliance_identity: ApplianceIdentity,
     installation: InstallationIntent,
 }
 
@@ -2093,6 +2094,7 @@ impl ApplianceConfiguration {
         profile_name: impl Into<String>,
         content_repository_id: ContentRepositoryId,
         content_import: ContentImportIntent,
+        appliance_identity: ApplianceIdentity,
         installation: InstallationIntent,
     ) -> Self {
         Self {
@@ -2100,6 +2102,7 @@ impl ApplianceConfiguration {
             content_repository_id,
             content_import,
             model_realization_intents: Vec::new(),
+            appliance_identity,
             installation,
         }
     }
@@ -2110,6 +2113,7 @@ impl ApplianceConfiguration {
         profile_name: impl Into<String>,
         content_repository_id: ContentRepositoryId,
         external_content: Vec<ExternalContentItemId>,
+        appliance_identity: ApplianceIdentity,
         storage_id: DiscoveredStorageId,
         user: UserConfiguration,
     ) -> Self {
@@ -2119,6 +2123,7 @@ impl ApplianceConfiguration {
             profile_name.clone(),
             content_repository_id,
             ContentImportIntent::new(external_content),
+            appliance_identity,
             InstallationIntent::new(profile_name, storage_id, user),
         )
     }
@@ -2154,6 +2159,12 @@ impl ApplianceConfiguration {
         &self.model_realization_intents
     }
 
+    /// Returns the configured appliance network identity.
+    #[must_use]
+    pub const fn appliance_identity(&self) -> &ApplianceIdentity {
+        &self.appliance_identity
+    }
+
     /// Returns the confirmed installation intent.
     #[must_use]
     pub const fn installation(&self) -> &InstallationIntent {
@@ -2177,6 +2188,42 @@ impl ContentImportIntent {
     #[must_use]
     pub fn items(&self) -> &[ExternalContentItemId] {
         &self.items
+    }
+}
+
+/// Describes the network identity of the installed DAIA appliance.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ApplianceIdentity {
+    hostname: String,
+    domain_name: String,
+}
+
+impl ApplianceIdentity {
+    /// Creates an appliance network identity.
+    #[must_use]
+    pub fn new(hostname: impl Into<String>, domain_name: impl Into<String>) -> Self {
+        Self {
+            hostname: hostname.into(),
+            domain_name: domain_name.into(),
+        }
+    }
+
+    /// Returns the appliance hostname.
+    #[must_use]
+    pub fn hostname(&self) -> &str {
+        &self.hostname
+    }
+
+    /// Returns the appliance domain name.
+    #[must_use]
+    pub fn domain_name(&self) -> &str {
+        &self.domain_name
+    }
+
+    /// Returns the fully-qualified domain name of the appliance.
+    #[must_use]
+    pub fn fqdn(&self) -> String {
+        format!("{}.{}", self.hostname, self.domain_name)
     }
 }
 
@@ -2276,6 +2323,15 @@ mod tests {
     }
 
     #[test]
+    fn appliance_identity_exposes_hostname_domain_and_fqdn() {
+        let identity = ApplianceIdentity::new("daia", "home.arpa");
+
+        assert_eq!(identity.hostname(), "daia");
+        assert_eq!(identity.domain_name(), "home.arpa");
+        assert_eq!(identity.fqdn(), "daia.home.arpa");
+    }
+
+    #[test]
     fn user_configuration_exposes_non_secret_identity() {
         let user = UserConfiguration::new("admin", "DAIA Administrator");
 
@@ -2317,8 +2373,8 @@ mod tests {
     }
 
     use super::{
-        Action, ApplianceConfiguration, ArchitecturalComponentId, AssetId, Capability,
-        CapabilityId, ConditionResult, ContentImportDestination, ContentImportIntent,
+        Action, ApplianceConfiguration, ApplianceIdentity, ArchitecturalComponentId, AssetId,
+        Capability, CapabilityId, ConditionResult, ContentImportDestination, ContentImportIntent,
         ContentRepository, ContentRepositoryId, ContentSource, ContentSourceId, CurrentResource,
         CurrentRevision, CurrentStateProposal, DesiredGeneration, DesiredResource,
         DiscoveredContent, DiscoveredStorage, DiscoveredStorageId, EvidenceId, EvidenceSourceId,
@@ -2713,6 +2769,7 @@ mod tests {
             "desktop",
             ContentRepositoryId::new("local-models"),
             vec![item_id.clone()],
+            ApplianceIdentity::new("daia", "home.arpa"),
             DiscoveredStorageId::new("serial:usb-disk"),
             UserConfiguration::new("admin", "DAIA Administrator"),
         );
@@ -2746,6 +2803,7 @@ mod tests {
             "desktop",
             ContentRepositoryId::new("local-models"),
             content_import.clone(),
+            ApplianceIdentity::new("daia", "home.arpa"),
             installation.clone(),
         );
 
