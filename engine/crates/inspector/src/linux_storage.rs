@@ -319,6 +319,10 @@ echo '/dev/nvme0n1p2'
             wwn: Some("eui.2c3ebffff000220b".to_owned()),
             serial: Some("AA000000000000008715".to_owned()),
             size: 0,
+            filesystem_type: None,
+            label: None,
+            mountpoint: None,
+            children: Vec::new(),
         };
 
         assert_eq!(storage_identity(&device), "wwn:eui.2c3ebffff000220b");
@@ -333,6 +337,10 @@ echo '/dev/nvme0n1p2'
             wwn: None,
             serial: Some("E0D55E6B6466E78088300791".to_owned()),
             size: 0,
+            filesystem_type: None,
+            label: None,
+            mountpoint: None,
+            children: Vec::new(),
         };
 
         assert_eq!(storage_identity(&device), "serial:E0D55E6B6466E78088300791");
@@ -347,6 +355,10 @@ echo '/dev/nvme0n1p2'
             wwn: None,
             serial: None,
             size: 0,
+            filesystem_type: None,
+            label: None,
+            mountpoint: None,
+            children: Vec::new(),
         };
 
         assert_eq!(storage_identity(&device), "path:/dev/sdz");

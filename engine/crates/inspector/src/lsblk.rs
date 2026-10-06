@@ -18,6 +18,18 @@ pub struct LsblkDevice {
     pub wwn: Option<String>,
     pub serial: Option<String>,
     pub size: u64,
+
+    #[serde(rename = "fstype", default)]
+    pub filesystem_type: Option<String>,
+
+    #[serde(default)]
+    pub label: Option<String>,
+
+    #[serde(default)]
+    pub mountpoint: Option<String>,
+
+    #[serde(default)]
+    pub children: Vec<LsblkDevice>,
 }
 
 #[cfg(test)]

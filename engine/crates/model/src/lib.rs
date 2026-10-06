@@ -1451,6 +1451,78 @@ impl DiscoveredStorage {
     }
 }
 
+/// Describes a filesystem volume that can supply external DAIA content.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DiscoveredContentVolume {
+    device_path: PathBuf,
+    parent_device_path: PathBuf,
+    filesystem_type: String,
+    label: Option<String>,
+    mountpoint: Option<PathBuf>,
+}
+
+impl DiscoveredContentVolume {
+    /// Creates a discovered external-content volume.
+    #[must_use]
+    pub fn new(
+        device_path: impl Into<PathBuf>,
+        parent_device_path: impl Into<PathBuf>,
+        filesystem_type: impl Into<String>,
+    ) -> Self {
+        Self {
+            device_path: device_path.into(),
+            parent_device_path: parent_device_path.into(),
+            filesystem_type: filesystem_type.into(),
+            label: None,
+            mountpoint: None,
+        }
+    }
+
+    /// Sets the filesystem label when one was discovered.
+    #[must_use]
+    pub fn with_label(mut self, label: impl Into<String>) -> Self {
+        self.label = Some(label.into());
+        self
+    }
+
+    /// Sets the current mountpoint when the volume is already mounted.
+    #[must_use]
+    pub fn with_mountpoint(mut self, mountpoint: impl Into<PathBuf>) -> Self {
+        self.mountpoint = Some(mountpoint.into());
+        self
+    }
+
+    /// Returns the filesystem device path.
+    #[must_use]
+    pub fn device_path(&self) -> &Path {
+        &self.device_path
+    }
+
+    /// Returns the whole disk that owns this filesystem.
+    #[must_use]
+    pub fn parent_device_path(&self) -> &Path {
+        &self.parent_device_path
+    }
+
+    /// Returns the filesystem type.
+    #[must_use]
+    pub fn filesystem_type(&self) -> &str {
+        &self.filesystem_type
+    }
+
+    /// Returns the filesystem label when present.
+    #[must_use]
+    pub fn label(&self) -> Option<&str> {
+        self.label.as_deref()
+    }
+
+    /// Returns the current mountpoint when already mounted.
+    #[must_use]
+    pub fn mountpoint(&self) -> Option<&Path> {
+        self.mountpoint.as_deref()
+    }
+}
+
 /// Describes the role of a DAIA storage target.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum StorageKind {
