@@ -28,6 +28,7 @@ enum WizardScreen {
     Profile,
     ContentRepository,
     ExternalContent,
+    ApplianceIdentity,
     Storage,
     Administrator,
     Review,
@@ -35,6 +36,15 @@ enum WizardScreen {
     Installing,
     InstallationComplete,
     InstallationFailed,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+enum ApplianceIdentityField {
+    #[default]
+    Hostname,
+    DomainName,
+    Continue,
+    Back,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -106,6 +116,10 @@ struct TuiState {
     pending_model_name_index: Option<usize>,
     external_content_error: Option<String>,
     external_content_focus: ExternalContentFocus,
+    appliance_hostname: String,
+    appliance_domain_name: String,
+    appliance_identity_field: ApplianceIdentityField,
+    appliance_identity_error: Option<String>,
     selected_storage_index: usize,
     storage_error: Option<String>,
     storage_focus: StorageFocus,
@@ -144,6 +158,10 @@ impl TuiState {
             pending_model_name_index: None,
             external_content_error: None,
             external_content_focus: ExternalContentFocus::ContinueWithoutLocalContent,
+            appliance_hostname: String::new(),
+            appliance_domain_name: String::new(),
+            appliance_identity_field: ApplianceIdentityField::default(),
+            appliance_identity_error: None,
             selected_storage_index: 0,
             storage_error: None,
             storage_focus: StorageFocus::Devices,
@@ -373,6 +391,12 @@ impl TuiState {
         }
     }
 
+    fn enter_appliance_identity(&mut self) {
+        self.appliance_identity_error = None;
+        self.appliance_identity_field = ApplianceIdentityField::Hostname;
+        self.screen = WizardScreen::ApplianceIdentity;
+    }
+
     fn enter_storage(&mut self) {
         let engine = Engine::from_registry(registry::Registry::default());
         let inspector = LinuxStorageInspector::new();
@@ -400,7 +424,8 @@ impl TuiState {
             WizardScreen::Welcome => WizardScreen::Profile,
             WizardScreen::Profile => WizardScreen::ContentRepository,
             WizardScreen::ContentRepository => WizardScreen::ExternalContent,
-            WizardScreen::ExternalContent => WizardScreen::Storage,
+            WizardScreen::ExternalContent => WizardScreen::ApplianceIdentity,
+            WizardScreen::ApplianceIdentity => WizardScreen::Storage,
             WizardScreen::Storage => WizardScreen::Administrator,
             WizardScreen::Administrator => WizardScreen::Review,
             WizardScreen::Review => WizardScreen::Review,
@@ -409,6 +434,84 @@ impl TuiState {
             WizardScreen::InstallationComplete => WizardScreen::InstallationComplete,
             WizardScreen::InstallationFailed => WizardScreen::InstallationFailed,
         };
+    }
+
+    fn push_appliance_identity_character(&mut self, character: char) {
+        match self.appliance_identity_field {
+            ApplianceIdentityField::Hostname => self.appliance_hostname.push(character),
+            ApplianceIdentityField::DomainName => self.appliance_domain_name.push(character),
+            ApplianceIdentityField::Continue | ApplianceIdentityField::Back => {}
+        }
+
+        self.appliance_identity_error = None;
+    }
+
+    fn pop_appliance_identity_character(&mut self) {
+        match self.appliance_identity_field {
+            ApplianceIdentityField::Hostname => {
+                self.appliance_hostname.pop();
+            }
+            ApplianceIdentityField::DomainName => {
+                self.appliance_domain_name.pop();
+            }
+            ApplianceIdentityField::Continue | ApplianceIdentityField::Back => {}
+        }
+
+        self.appliance_identity_error = None;
+    }
+
+    fn next_appliance_identity_field(&mut self) {
+        self.appliance_identity_field = match self.appliance_identity_field {
+            ApplianceIdentityField::Hostname => ApplianceIdentityField::DomainName,
+            ApplianceIdentityField::DomainName => ApplianceIdentityField::Continue,
+            ApplianceIdentityField::Continue => ApplianceIdentityField::Back,
+            ApplianceIdentityField::Back => ApplianceIdentityField::Back,
+        };
+    }
+
+    fn previous_appliance_identity_field(&mut self) {
+        self.appliance_identity_field = match self.appliance_identity_field {
+            ApplianceIdentityField::Hostname => ApplianceIdentityField::Hostname,
+            ApplianceIdentityField::DomainName => ApplianceIdentityField::Hostname,
+            ApplianceIdentityField::Continue => ApplianceIdentityField::DomainName,
+            ApplianceIdentityField::Back => ApplianceIdentityField::Continue,
+        };
+    }
+
+    fn confirm_appliance_identity(&mut self) {
+        match self.appliance_identity_field {
+            ApplianceIdentityField::Hostname => {
+                self.appliance_identity_field = ApplianceIdentityField::DomainName;
+            }
+            ApplianceIdentityField::DomainName => {
+                self.appliance_identity_field = ApplianceIdentityField::Continue;
+            }
+            ApplianceIdentityField::Continue => {
+                let hostname = self.appliance_hostname.trim();
+                let domain_name = self.appliance_domain_name.trim();
+
+                if hostname.is_empty() {
+                    self.appliance_identity_error = Some("Hostname cannot be empty.".to_owned());
+                    self.appliance_identity_field = ApplianceIdentityField::Hostname;
+                    return;
+                }
+
+                if domain_name.is_empty() {
+                    self.appliance_identity_error = Some("Domain name cannot be empty.".to_owned());
+                    self.appliance_identity_field = ApplianceIdentityField::DomainName;
+                    return;
+                }
+
+                self.wizard
+                    .set_appliance_identity(hostname.to_owned(), domain_name.to_owned());
+                self.appliance_identity_error = None;
+                self.enter_storage();
+            }
+            ApplianceIdentityField::Back => {
+                self.appliance_identity_error = None;
+                self.previous_screen();
+            }
+        }
     }
 
     fn push_administrator_character(&mut self, character: char) {
@@ -652,7 +755,7 @@ impl TuiState {
                 if self.pending_external_content.is_empty() {
                     self.wizard.select_external_content(Vec::new());
                     self.wizard.set_model_realization_intents(Vec::new());
-                    self.enter_storage();
+                    self.enter_appliance_identity();
                     return;
                 }
 
@@ -691,7 +794,7 @@ impl TuiState {
                     self.wizard
                         .select_external_content(self.pending_external_content.clone());
                     self.wizard.set_model_realization_intents(Vec::new());
-                    self.enter_storage();
+                    self.enter_appliance_identity();
                 } else {
                     self.pending_model_name_index = Some(0);
                 }
@@ -699,7 +802,7 @@ impl TuiState {
             ExternalContentFocus::ContinueWithoutLocalContent => {
                 self.pending_external_content.clear();
                 self.wizard.select_external_content(Vec::new());
-                self.enter_storage();
+                self.enter_appliance_identity();
             }
             ExternalContentFocus::Back => {
                 self.previous_screen();
@@ -775,7 +878,7 @@ impl TuiState {
 
         self.pending_model_name_index = None;
         self.external_content_error = None;
-        self.enter_storage();
+        self.enter_appliance_identity();
     }
 
     fn previous_screen(&mut self) {
@@ -784,7 +887,8 @@ impl TuiState {
             WizardScreen::Profile => WizardScreen::Welcome,
             WizardScreen::ContentRepository => WizardScreen::Profile,
             WizardScreen::ExternalContent => WizardScreen::ContentRepository,
-            WizardScreen::Storage => WizardScreen::ExternalContent,
+            WizardScreen::ApplianceIdentity => WizardScreen::ExternalContent,
+            WizardScreen::Storage => WizardScreen::ApplianceIdentity,
             WizardScreen::Administrator => WizardScreen::Storage,
             WizardScreen::Review => WizardScreen::Administrator,
             WizardScreen::ConfirmInstallation => WizardScreen::Review,
@@ -899,6 +1003,7 @@ fn screen_title(screen: WizardScreen) -> &'static str {
         WizardScreen::Profile => "Appliance Profile",
         WizardScreen::ContentRepository => "Content Repository",
         WizardScreen::ExternalContent => "External Content",
+        WizardScreen::ApplianceIdentity => "Appliance Identity",
         WizardScreen::Storage => "Installation Storage",
         WizardScreen::Administrator => "Administrator",
         WizardScreen::Review => "Review",
@@ -929,6 +1034,7 @@ fn render(frame: &mut ratatui::Frame<'_>, state: &TuiState) {
         WizardScreen::Profile,
         WizardScreen::ContentRepository,
         WizardScreen::ExternalContent,
+        WizardScreen::ApplianceIdentity,
         WizardScreen::Storage,
         WizardScreen::Administrator,
         WizardScreen::Review,
@@ -1116,6 +1222,52 @@ fn render(frame: &mut ratatui::Frame<'_>, state: &TuiState) {
                 }
             }
         }
+        WizardScreen::ApplianceIdentity => {
+            let hostname = if state.appliance_hostname.is_empty() {
+                "Not configured"
+            } else {
+                &state.appliance_hostname
+            };
+
+            let domain_name = if state.appliance_domain_name.is_empty() {
+                "Not configured"
+            } else {
+                &state.appliance_domain_name
+            };
+
+            let fqdn = if state.appliance_hostname.trim().is_empty()
+                || state.appliance_domain_name.trim().is_empty()
+            {
+                "Not configured".to_owned()
+            } else {
+                format!(
+                    "{}.{}",
+                    state.appliance_hostname.trim(),
+                    state.appliance_domain_name.trim()
+                )
+            };
+
+            let marker = |field| {
+                if state.appliance_identity_field == field {
+                    ">"
+                } else {
+                    " "
+                }
+            };
+
+            let error = state
+                .appliance_identity_error
+                .as_deref()
+                .map_or(String::new(), |error| format!("\n\nError: {error}"));
+
+            format!(
+                "Appliance Identity\n\n                 Configure the network identity of this DAIA appliance.\n\n                 {} Hostname: {hostname}\n                 {} Domain name: {domain_name}\n                   FQDN: {fqdn}\n\n                 {} Continue\n                 {} Back{error}",
+                marker(ApplianceIdentityField::Hostname),
+                marker(ApplianceIdentityField::DomainName),
+                marker(ApplianceIdentityField::Continue),
+                marker(ApplianceIdentityField::Back),
+            )
+        }
         WizardScreen::Storage => {
             let storage = state
                 .wizard
@@ -1258,6 +1410,21 @@ fn render(frame: &mut ratatui::Frame<'_>, state: &TuiState) {
 
             let local_content = state.wizard.selected_external_content().len();
 
+            let (hostname, domain_name, fqdn) =
+                if let Some(identity) = state.wizard.appliance_identity() {
+                    (
+                        identity.hostname().to_owned(),
+                        identity.domain_name().to_owned(),
+                        identity.fqdn(),
+                    )
+                } else {
+                    (
+                        "Not configured".to_owned(),
+                        "Not configured".to_owned(),
+                        "Not configured".to_owned(),
+                    )
+                };
+
             let username = if state.administrator_username.is_empty() {
                 "Not configured"
             } else {
@@ -1280,6 +1447,9 @@ fn render(frame: &mut ratatui::Frame<'_>, state: &TuiState) {
                  Appliance profile: {profile}\n\
                  Content repository: {repository}\n\
                  Local content selected: {local_content}\n\
+                 Hostname: {hostname}\n\
+                 Domain: {domain_name}\n\
+                 FQDN: {fqdn}\n\
                  Installation storage: {storage}\n\
                  Administrator: {username}\n\
                  Display name: {display_name}\n\n\
@@ -1551,6 +1721,21 @@ fn run() -> io::Result<()> {
             {
                 state.toggle_external_content();
             }
+            KeyCode::Down if state.screen == WizardScreen::ApplianceIdentity => {
+                state.next_appliance_identity_field();
+            }
+            KeyCode::Up if state.screen == WizardScreen::ApplianceIdentity => {
+                state.previous_appliance_identity_field();
+            }
+            KeyCode::Backspace if state.screen == WizardScreen::ApplianceIdentity => {
+                state.pop_appliance_identity_character();
+            }
+            KeyCode::Char(character) if state.screen == WizardScreen::ApplianceIdentity => {
+                state.push_appliance_identity_character(character);
+            }
+            KeyCode::Enter if state.screen == WizardScreen::ApplianceIdentity => {
+                state.confirm_appliance_identity();
+            }
             KeyCode::Down if state.screen == WizardScreen::Storage => {
                 state.next_storage();
             }
@@ -1627,8 +1812,9 @@ fn main() -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::{
-        AdministratorField, ExternalContentFocus, InstallationAction, ScreenAction, TuiState,
-        WelcomeAction, WizardScreen, execute_appliance_installation, render,
+        AdministratorField, ApplianceIdentityField, ExternalContentFocus, InstallationAction,
+        ScreenAction, TuiState, WelcomeAction, WizardScreen, execute_appliance_installation,
+        render,
     };
     use ratatui::{Terminal, backend::TestBackend};
 
@@ -1683,6 +1869,7 @@ mod tests {
         state.wizard.select_content_repository(repository_id);
         state.wizard.set_external_content_items(Vec::new());
         state.wizard.select_external_content(Vec::new());
+        state.wizard.set_appliance_identity("daia", "home.arpa");
         state
             .wizard
             .set_user_identity("install-admin", "Install Administrator");
@@ -1831,6 +2018,7 @@ mod tests {
 
         state.wizard.set_discovered_storage(vec![storage]);
         state.wizard.select_storage(storage_id);
+        state.wizard.set_appliance_identity("daia", "home.arpa");
         state
             .wizard
             .set_user_identity("review-admin", "Review Administrator");
@@ -1851,6 +2039,9 @@ mod tests {
         assert!(rendered.contains("Review Configuration"));
         assert!(rendered.contains("/dev/review"));
         assert!(rendered.contains("review-disk"));
+        assert!(rendered.contains("Hostname: daia"));
+        assert!(rendered.contains("Domain: home.arpa"));
+        assert!(rendered.contains("FQDN: daia.home.arpa"));
         assert!(rendered.contains("review-admin"));
         assert!(rendered.contains("Review Administrator"));
         assert!(rendered.contains("Root and administrator passwords are configured"));
@@ -1917,7 +2108,7 @@ mod tests {
 
         assert!(state.pending_external_content.is_empty());
         assert!(state.wizard.selected_external_content().is_empty());
-        assert_eq!(state.screen, WizardScreen::Storage);
+        assert_eq!(state.screen, WizardScreen::ApplianceIdentity);
     }
 
     #[test]
@@ -1985,7 +2176,7 @@ mod tests {
             &[first_id, second_id]
         );
         assert_eq!(state.wizard.model_realization_intents().len(), 2);
-        assert_eq!(state.screen, WizardScreen::Storage);
+        assert_eq!(state.screen, WizardScreen::ApplianceIdentity);
     }
 
     #[test]
@@ -2152,6 +2343,7 @@ mod tests {
         state
             .wizard
             .select_storage(model::DiscoveredStorageId::new("install-disk"));
+        state.wizard.set_appliance_identity("daia", "home.arpa");
         state
             .wizard
             .set_user_identity("daia-admin", "DAIA Administrator");
@@ -2431,9 +2623,13 @@ mod tests {
         state.previous_screen();
         assert_eq!(state.screen, WizardScreen::ContentRepository);
 
-        state.screen = WizardScreen::Storage;
+        state.screen = WizardScreen::ApplianceIdentity;
         state.previous_screen();
         assert_eq!(state.screen, WizardScreen::ExternalContent);
+
+        state.screen = WizardScreen::Storage;
+        state.previous_screen();
+        assert_eq!(state.screen, WizardScreen::ApplianceIdentity);
 
         state.screen = WizardScreen::Administrator;
         state.previous_screen();
@@ -2449,6 +2645,63 @@ mod tests {
     }
 
     #[test]
+    fn appliance_identity_requires_hostname_and_domain_name() {
+        let mut state = TuiState::new();
+
+        state.screen = WizardScreen::ApplianceIdentity;
+        state.appliance_identity_field = ApplianceIdentityField::Continue;
+        state.confirm_appliance_identity();
+
+        assert_eq!(state.screen, WizardScreen::ApplianceIdentity);
+        assert_eq!(
+            state.appliance_identity_error.as_deref(),
+            Some("Hostname cannot be empty.")
+        );
+        assert_eq!(
+            state.appliance_identity_field,
+            ApplianceIdentityField::Hostname
+        );
+        assert_eq!(state.wizard.appliance_identity(), None);
+
+        state.appliance_hostname = "daia".to_owned();
+        state.appliance_identity_field = ApplianceIdentityField::Continue;
+        state.confirm_appliance_identity();
+
+        assert_eq!(state.screen, WizardScreen::ApplianceIdentity);
+        assert_eq!(
+            state.appliance_identity_error.as_deref(),
+            Some("Domain name cannot be empty.")
+        );
+        assert_eq!(
+            state.appliance_identity_field,
+            ApplianceIdentityField::DomainName
+        );
+        assert_eq!(state.wizard.appliance_identity(), None);
+    }
+
+    #[test]
+    fn appliance_identity_is_committed_before_entering_storage() {
+        let mut state = TuiState::new();
+
+        state.screen = WizardScreen::ApplianceIdentity;
+        state.appliance_hostname = "  daia  ".to_owned();
+        state.appliance_domain_name = "  home.arpa  ".to_owned();
+        state.appliance_identity_field = ApplianceIdentityField::Continue;
+        state.confirm_appliance_identity();
+
+        let identity = state
+            .wizard
+            .appliance_identity()
+            .expect("appliance identity should be committed");
+
+        assert_eq!(identity.hostname(), "daia");
+        assert_eq!(identity.domain_name(), "home.arpa");
+        assert_eq!(identity.fqdn(), "daia.home.arpa");
+        assert_eq!(state.screen, WizardScreen::Storage);
+        assert_eq!(state.appliance_identity_error, None);
+    }
+
+    #[test]
     fn navigates_forward_and_backward_through_wizard_screens() {
         let mut state = TuiState::new();
 
@@ -2456,6 +2709,7 @@ mod tests {
             WizardScreen::Profile,
             WizardScreen::ContentRepository,
             WizardScreen::ExternalContent,
+            WizardScreen::ApplianceIdentity,
             WizardScreen::Storage,
             WizardScreen::Administrator,
             WizardScreen::Review,
@@ -2469,7 +2723,7 @@ mod tests {
         state.next_screen();
         assert_eq!(state.screen, WizardScreen::Review);
 
-        for screen in screens[..5].iter().rev() {
+        for screen in screens[..6].iter().rev() {
             state.previous_screen();
             assert_eq!(state.screen, *screen);
         }
