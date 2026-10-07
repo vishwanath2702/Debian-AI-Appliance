@@ -130,12 +130,29 @@ WantedBy=multi-user.target
             &installer_link,
         )?;
 
-        let tty1_getty_link = build_context
+        let getty_wants = build_context
             .rootfs()
-            .join("etc/systemd/system/getty.target.wants/getty@tty1.service");
+            .join("etc/systemd/system/getty.target.wants");
+
+        create_directory(&getty_wants)?;
+
+        let tty1_getty_link = getty_wants.join("getty@tty1.service");
 
         if tty1_getty_link.exists() {
             remove_file(&tty1_getty_link)?;
+        }
+
+        for tty in 2..=6 {
+            let getty_link = getty_wants.join(format!("getty@tty{tty}.service"));
+
+            if std::fs::symlink_metadata(&getty_link).is_ok() {
+                remove_file(&getty_link)?;
+            }
+
+            create_symlink(
+                std::path::Path::new("/usr/lib/systemd/system/getty@.service"),
+                &getty_link,
+            )?;
         }
 
         clean_live_rootfs(build_context.rootfs())?;
@@ -766,6 +783,20 @@ mod tests {
             !tty1_getty_link.exists(),
             "tty1 getty must be removed before the DAIA installer owns tty1"
         );
+
+        for tty in 2..=6 {
+            let getty_link = getty_wants.join(format!("getty@tty{tty}.service"));
+
+            assert!(
+                getty_link.is_symlink(),
+                "live rootfs must enable a troubleshooting getty on tty{tty}"
+            );
+
+            assert_eq!(
+                fs::read_link(&getty_link).expect("troubleshooting getty link should be readable"),
+                std::path::PathBuf::from("/usr/lib/systemd/system/getty@.service")
+            );
+        }
     }
 
     #[test]
