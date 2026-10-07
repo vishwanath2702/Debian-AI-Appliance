@@ -2040,6 +2040,7 @@ mod tests {
             "desktop",
             ContentRepositoryId::new("local-models"),
             Vec::new(),
+            model::ApplianceIdentity::new("daia", "example.test"),
             DiscoveredStorageId::new("serial:usb-disk"),
             model::UserConfiguration::new("admin", "DAIA Administrator"),
         );
@@ -2082,6 +2083,7 @@ mod tests {
             "desktop",
             ContentRepositoryId::new("local-models"),
             ContentImportIntent::new(Vec::new()),
+            model::ApplianceIdentity::new("daia", "example.test"),
             InstallationIntent::new(
                 "desktop",
                 DiscoveredStorageId::new("serial:usb-disk"),
@@ -2126,6 +2128,7 @@ mod tests {
             "desktop",
             ContentRepositoryId::new("local-models"),
             Vec::new(),
+            model::ApplianceIdentity::new("daia", "example.test"),
             DiscoveredStorageId::new("serial:usb-disk"),
             model::UserConfiguration::new("admin", "DAIA Administrator"),
         );
