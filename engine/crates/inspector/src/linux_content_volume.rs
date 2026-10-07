@@ -32,6 +32,7 @@ pub struct LinuxContentVolumeInspector {
 impl ContentVolumeInspector for LinuxContentVolumeInspector {
     fn inspect(&self) -> Result<Vec<DiscoveredContentVolume>, StorageInspectError> {
         let system_disk_path = self.system_disk_path()?;
+        let live_medium_disk_path = self.live_medium_disk_path()?;
 
         let output = Command::new(&self.command)
             .arg("--json")
@@ -55,6 +56,7 @@ impl ContentVolumeInspector for LinuxContentVolumeInspector {
         Ok(content_volumes(
             &parsed.blockdevices,
             system_disk_path.as_deref(),
+            live_medium_disk_path.as_deref(),
         ))
     }
 }
@@ -157,18 +159,68 @@ impl LinuxContentVolumeInspector {
 
         Ok(Some(PathBuf::from(parent)))
     }
+
+    fn live_medium_disk_path(&self) -> Result<Option<PathBuf>, StorageInspectError> {
+        let output = Command::new(&self.findmnt_command)
+            .arg("--noheadings")
+            .arg("--output")
+            .arg("SOURCE")
+            .arg("/run/live/medium")
+            .output()?;
+
+        if !output.status.success() {
+            return Ok(None);
+        }
+
+        let source = String::from_utf8_lossy(&output.stdout);
+        let source = source.trim();
+
+        if source.is_empty() || !source.starts_with("/dev") {
+            return Ok(None);
+        }
+
+        let output = Command::new(&self.command)
+            .arg("--paths")
+            .arg("--noheadings")
+            .arg("--output")
+            .arg("PKNAME")
+            .arg(source)
+            .output()?;
+
+        if !output.status.success() {
+            return Err(StorageInspectError::ProcessFailed {
+                command: self.command.display().to_string(),
+                status: output.status,
+                stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+            });
+        }
+
+        let parent = String::from_utf8_lossy(&output.stdout);
+        let parent = parent.trim();
+
+        if parent.is_empty() {
+            return Err(StorageInspectError::InvalidOutput(
+                "lsblk returned an empty live-medium parent disk".to_owned(),
+            ));
+        }
+
+        Ok(Some(PathBuf::from(parent)))
+    }
 }
 
 fn content_volumes(
     devices: &[LsblkDevice],
     system_disk_path: Option<&Path>,
+    live_medium_disk_path: Option<&Path>,
 ) -> Vec<DiscoveredContentVolume> {
     let mut volumes = Vec::new();
 
     for disk in devices.iter().filter(|device| device.device_type == "disk") {
         let disk_path = Path::new(&disk.path);
 
-        if system_disk_path.is_some_and(|system_disk| disk_path == system_disk) {
+        if system_disk_path.is_some_and(|system_disk| disk_path == system_disk)
+            || live_medium_disk_path.is_some_and(|live_medium_disk| disk_path == live_medium_disk)
+        {
             continue;
         }
 
@@ -382,6 +434,99 @@ cat <<'JSON'
           "fstype": "ext4",
           "label": "DAIA-MODELS",
           "mountpoint": null
+        }
+      ]
+    }
+  ]
+}
+JSON
+"#,
+        );
+
+        let inspector = LinuxContentVolumeInspector::new()
+            .with_command(command)
+            .with_findmnt_command(findmnt_command);
+
+        let volumes = inspector
+            .inspect()
+            .expect("eligible content volumes should be discovered");
+
+        assert_eq!(volumes.len(), 1);
+        assert_eq!(volumes[0].device_path(), std::path::Path::new("/dev/sdb1"));
+        assert_eq!(
+            volumes[0].parent_device_path(),
+            std::path::Path::new("/dev/sdb")
+        );
+        assert_eq!(volumes[0].label(), Some("DAIA-MODELS"));
+    }
+
+    #[test]
+    fn excludes_filesystems_on_live_installation_medium() {
+        let (_findmnt_directory, findmnt_command) = command_script(
+            r#"#!/bin/sh
+case "$*" in
+    *"/run/live/medium"*)
+        echo '/dev/sdc1'
+        ;;
+    *" /")
+        echo 'overlay'
+        ;;
+    *)
+        exit 1
+        ;;
+esac
+"#,
+        );
+
+        let (_directory, command) = command_script(
+            r#"#!/bin/sh
+if [ "$4" = "PKNAME" ] && [ "$5" = "/dev/sdc1" ]; then
+    echo '/dev/sdc'
+    exit 0
+fi
+
+cat <<'JSON'
+{
+  "blockdevices": [
+    {
+      "path": "/dev/sdb",
+      "type": "disk",
+      "rm": true,
+      "wwn": null,
+      "serial": "CONTENT001",
+      "size": 61917364224,
+      "children": [
+        {
+          "path": "/dev/sdb1",
+          "type": "part",
+          "rm": true,
+          "wwn": null,
+          "serial": null,
+          "size": 61915267072,
+          "fstype": "ext4",
+          "label": "DAIA-MODELS",
+          "mountpoint": null
+        }
+      ]
+    },
+    {
+      "path": "/dev/sdc",
+      "type": "disk",
+      "rm": true,
+      "wwn": null,
+      "serial": "DAIA-LIVE001",
+      "size": 16000000000,
+      "children": [
+        {
+          "path": "/dev/sdc1",
+          "type": "part",
+          "rm": true,
+          "wwn": null,
+          "serial": null,
+          "size": 15900000000,
+          "fstype": "iso9660",
+          "label": "DAIA-LIVE",
+          "mountpoint": "/run/live/medium"
         }
       ]
     }
