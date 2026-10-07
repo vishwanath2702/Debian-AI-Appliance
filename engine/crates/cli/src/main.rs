@@ -1273,6 +1273,14 @@ fn installation_operation_name(operation: &InstallationOperation) -> String {
 
         InstallationOperation::ConfigureFstab { .. } => "Configure filesystem table".to_owned(),
 
+        InstallationOperation::ConfigureLocalization { localization, .. } => {
+            format!(
+                "Configure localization: {} ({})",
+                localization.locale(),
+                localization.keyboard_layout()
+            )
+        }
+
         InstallationOperation::PrepareTargetRuntime { root } => {
             format!("Prepare target runtime at {}", root.display())
         }

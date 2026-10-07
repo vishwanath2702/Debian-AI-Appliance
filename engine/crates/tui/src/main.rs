@@ -1,8 +1,8 @@
 //! DAIA terminal user interface.
 
 use application::{
-    WizardState, load_appliance_profiles, load_content_repositories, load_package_repository,
-    load_provider_registry,
+    KEYBOARD_LAYOUTS, WizardState, load_appliance_profiles, load_content_repositories,
+    load_package_repository, load_provider_registry,
 };
 use crossterm::{
     event::{self, Event, KeyCode},
@@ -13,6 +13,7 @@ use engine::Engine;
 use inspector::{
     ContentInspector, LinuxStorageInspector, LocalFilesystemContentInspector, StorageInspector,
 };
+use model::LocalizationConfiguration;
 use ratatui::{
     Terminal,
     backend::CrosstermBackend,
@@ -25,10 +26,13 @@ use std::io::{self, Stdout, stdout};
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum WizardScreen {
     Welcome,
+    Localization,
+    HardwareCheck,
     Profile,
     ContentRepository,
     ExternalContent,
     ApplianceIdentity,
+    RootCredentials,
     Storage,
     Administrator,
     Review,
@@ -77,15 +81,30 @@ enum WelcomeAction {
 
 /// Credentials retained only for the active installer session.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-enum AdministratorField {
+enum RootCredentialsField {
     #[default]
     RootPassword,
     RootPasswordConfirmation,
+    Back,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+enum AdministratorField {
+    #[default]
     Username,
     DisplayName,
     AdministratorPassword,
     AdministratorPasswordConfirmation,
     Back,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct HardwareSummary {
+    architecture: String,
+    logical_processor_count: usize,
+    total_memory_bytes: u64,
+    gpus: Vec<String>,
+    accelerators: Vec<String>,
 }
 
 #[derive(Debug, Default)]
@@ -107,6 +126,10 @@ enum ExternalContentFocus {
 
 struct TuiState {
     wizard: WizardState,
+    localization_field: usize,
+    localization_indices: [usize; 4],
+    hardware: Option<HardwareSummary>,
+    hardware_error: Option<String>,
     appliance_profiles: Vec<model::ApplianceProfile>,
     selected_profile_index: usize,
     selected_content_repository_index: usize,
@@ -124,6 +147,8 @@ struct TuiState {
     storage_error: Option<String>,
     storage_focus: StorageFocus,
     credentials: CredentialState,
+    root_credentials_field: RootCredentialsField,
+    root_credentials_error: Option<String>,
     administrator_username: String,
     administrator_display_name: String,
     administrator_field: AdministratorField,
@@ -149,6 +174,10 @@ impl TuiState {
 
         Self {
             wizard,
+            localization_field: 0,
+            localization_indices: [0; 4],
+            hardware: None,
+            hardware_error: None,
             appliance_profiles,
             selected_profile_index: 0,
             selected_content_repository_index: 0,
@@ -166,6 +195,8 @@ impl TuiState {
             storage_error: None,
             storage_focus: StorageFocus::Devices,
             credentials: CredentialState::default(),
+            root_credentials_field: RootCredentialsField::default(),
+            root_credentials_error: None,
             administrator_username: String::new(),
             administrator_display_name: String::new(),
             administrator_field: AdministratorField::default(),
@@ -176,6 +207,77 @@ impl TuiState {
             welcome_action: WelcomeAction::default(),
             screen_action: ScreenAction::default(),
             screen: WizardScreen::Welcome,
+        }
+    }
+
+    fn localization_options(&self, field: usize) -> &'static [&'static str] {
+        const LANGUAGES: &[&str] = &["en", "hi", "fr", "de", "ja"];
+        const COUNTRIES: &[&str] = &["IN", "US", "GB", "FR", "DE", "JP"];
+        const LOCALES: &[&str] = &[
+            "en_IN.UTF-8",
+            "hi_IN.UTF-8",
+            "en_US.UTF-8",
+            "en_GB.UTF-8",
+            "fr_FR.UTF-8",
+            "de_DE.UTF-8",
+            "ja_JP.UTF-8",
+        ];
+
+        match field {
+            0 => LANGUAGES,
+            1 => COUNTRIES,
+            2 => LOCALES,
+            _ => &[],
+        }
+    }
+
+    fn next_localization_field(&mut self) {
+        self.localization_field = (self.localization_field + 1).min(5);
+    }
+
+    fn previous_localization_field(&mut self) {
+        self.localization_field = self.localization_field.saturating_sub(1);
+    }
+
+    fn cycle_localization_option(&mut self, forward: bool) {
+        let field = self.localization_field;
+        if field >= 4 {
+            return;
+        }
+
+        let count = if field == 3 {
+            KEYBOARD_LAYOUTS.len()
+        } else {
+            self.localization_options(field).len()
+        };
+
+        if count == 0 {
+            return;
+        }
+
+        let current = self.localization_indices[field];
+        self.localization_indices[field] = if forward {
+            (current + 1) % count
+        } else {
+            (current + count - 1) % count
+        };
+    }
+
+    fn confirm_localization(&mut self) {
+        match self.localization_field {
+            4 => {
+                let language = self.localization_options(0)[self.localization_indices[0]];
+                let country = self.localization_options(1)[self.localization_indices[1]];
+                let locale = self.localization_options(2)[self.localization_indices[2]];
+                let keyboard = KEYBOARD_LAYOUTS[self.localization_indices[3]].id;
+
+                self.wizard.set_localization(LocalizationConfiguration::new(
+                    language, country, locale, keyboard,
+                ));
+                self.next_screen();
+            }
+            5 => self.previous_screen(),
+            _ => self.next_localization_field(),
         }
     }
 
@@ -279,6 +381,8 @@ impl TuiState {
 
     fn confirm_screen_action(&mut self) {
         match self.screen_action {
+            ScreenAction::Continue
+                if self.screen == WizardScreen::HardwareCheck && self.hardware.is_none() => {}
             ScreenAction::Continue if self.screen == WizardScreen::Review => {
                 self.prepare_review_installation();
             }
@@ -391,12 +495,6 @@ impl TuiState {
         }
     }
 
-    fn enter_appliance_identity(&mut self) {
-        self.appliance_identity_error = None;
-        self.appliance_identity_field = ApplianceIdentityField::Hostname;
-        self.screen = WizardScreen::ApplianceIdentity;
-    }
-
     fn enter_storage(&mut self) {
         let engine = Engine::from_registry(registry::Registry::default());
         let inspector = LinuxStorageInspector::new();
@@ -419,15 +517,70 @@ impl TuiState {
         }
     }
 
+    fn discover_hardware(&mut self) {
+        if self.hardware.is_some() {
+            return;
+        }
+
+        self.hardware_error = None;
+
+        let registry = match load_provider_registry() {
+            Ok(registry) => registry,
+            Err(error) => {
+                self.hardware_error = Some(format!("Error loading provider registry: {error}"));
+                return;
+            }
+        };
+
+        let engine = Engine::from_registry(registry);
+
+        match engine.discover_hardware() {
+            Ok(hardware) => {
+                self.hardware = Some(HardwareSummary {
+                    architecture: hardware.cpu().architecture().to_owned(),
+                    logical_processor_count: hardware.cpu().logical_processor_count(),
+                    total_memory_bytes: hardware.memory().total_bytes(),
+                    gpus: hardware
+                        .gpus()
+                        .iter()
+                        .map(|gpu| gpu.identifier().to_owned())
+                        .collect(),
+                    accelerators: hardware
+                        .accelerators()
+                        .iter()
+                        .map(|accelerator| accelerator.identifier().to_owned())
+                        .collect(),
+                });
+            }
+            Err(error) => {
+                self.hardware_error = Some(format!("Error discovering hardware: {error}"));
+            }
+        }
+    }
+
+    fn enter_hardware_check(&mut self) {
+        self.discover_hardware();
+        self.screen_action = ScreenAction::Continue;
+        self.screen = WizardScreen::HardwareCheck;
+    }
+
     fn next_screen(&mut self) {
+        if self.screen == WizardScreen::Localization {
+            self.enter_hardware_check();
+            return;
+        }
+
         self.screen = match self.screen {
-            WizardScreen::Welcome => WizardScreen::Profile,
+            WizardScreen::Welcome => WizardScreen::Localization,
+            WizardScreen::Localization => WizardScreen::HardwareCheck,
+            WizardScreen::HardwareCheck => WizardScreen::ApplianceIdentity,
+            WizardScreen::ApplianceIdentity => WizardScreen::RootCredentials,
+            WizardScreen::RootCredentials => WizardScreen::Administrator,
+            WizardScreen::Administrator => WizardScreen::Profile,
             WizardScreen::Profile => WizardScreen::ContentRepository,
             WizardScreen::ContentRepository => WizardScreen::ExternalContent,
-            WizardScreen::ExternalContent => WizardScreen::ApplianceIdentity,
-            WizardScreen::ApplianceIdentity => WizardScreen::Storage,
-            WizardScreen::Storage => WizardScreen::Administrator,
-            WizardScreen::Administrator => WizardScreen::Review,
+            WizardScreen::ExternalContent => WizardScreen::Storage,
+            WizardScreen::Storage => WizardScreen::Review,
             WizardScreen::Review => WizardScreen::Review,
             WizardScreen::ConfirmInstallation => WizardScreen::ConfirmInstallation,
             WizardScreen::Installing => WizardScreen::Installing,
@@ -505,7 +658,7 @@ impl TuiState {
                 self.wizard
                     .set_appliance_identity(hostname.to_owned(), domain_name.to_owned());
                 self.appliance_identity_error = None;
-                self.enter_storage();
+                self.next_screen();
             }
             ApplianceIdentityField::Back => {
                 self.appliance_identity_error = None;
@@ -514,14 +667,90 @@ impl TuiState {
         }
     }
 
-    fn push_administrator_character(&mut self, character: char) {
-        match self.administrator_field {
-            AdministratorField::RootPassword => {
+    fn push_root_credentials_character(&mut self, character: char) {
+        match self.root_credentials_field {
+            RootCredentialsField::RootPassword => {
                 self.credentials.root_password.push(character);
             }
-            AdministratorField::RootPasswordConfirmation => {
+            RootCredentialsField::RootPasswordConfirmation => {
                 self.credentials.root_password_confirmation.push(character);
             }
+            RootCredentialsField::Back => {}
+        }
+    }
+
+    fn pop_root_credentials_character(&mut self) {
+        match self.root_credentials_field {
+            RootCredentialsField::RootPassword => {
+                self.credentials.root_password.pop();
+            }
+            RootCredentialsField::RootPasswordConfirmation => {
+                self.credentials.root_password_confirmation.pop();
+            }
+            RootCredentialsField::Back => {}
+        }
+    }
+
+    fn next_root_credentials_field(&mut self) {
+        self.root_credentials_field = match self.root_credentials_field {
+            RootCredentialsField::RootPassword => RootCredentialsField::RootPasswordConfirmation,
+            RootCredentialsField::RootPasswordConfirmation => RootCredentialsField::Back,
+            RootCredentialsField::Back => RootCredentialsField::Back,
+        };
+    }
+
+    fn previous_root_credentials_field(&mut self) {
+        self.root_credentials_field = match self.root_credentials_field {
+            RootCredentialsField::RootPassword => RootCredentialsField::RootPassword,
+            RootCredentialsField::RootPasswordConfirmation => RootCredentialsField::RootPassword,
+            RootCredentialsField::Back => RootCredentialsField::RootPasswordConfirmation,
+        };
+    }
+
+    fn validate_root_credentials(&mut self) -> bool {
+        let error = if self.credentials.root_password.is_empty() {
+            Some((
+                RootCredentialsField::RootPassword,
+                "Root password cannot be empty",
+            ))
+        } else if self.credentials.root_password != self.credentials.root_password_confirmation {
+            Some((
+                RootCredentialsField::RootPasswordConfirmation,
+                "Root passwords do not match",
+            ))
+        } else {
+            None
+        };
+
+        if let Some((field, error)) = error {
+            self.root_credentials_field = field;
+            self.root_credentials_error = Some(error.to_owned());
+            return false;
+        }
+
+        self.root_credentials_error = None;
+        true
+    }
+
+    fn confirm_root_credentials_field(&mut self) {
+        match self.root_credentials_field {
+            RootCredentialsField::RootPasswordConfirmation => {
+                if self.validate_root_credentials() {
+                    self.next_screen();
+                }
+            }
+            RootCredentialsField::Back => {
+                self.previous_screen();
+                self.root_credentials_field = RootCredentialsField::RootPassword;
+            }
+            RootCredentialsField::RootPassword => {
+                self.next_root_credentials_field();
+            }
+        }
+    }
+
+    fn push_administrator_character(&mut self, character: char) {
+        match self.administrator_field {
             AdministratorField::Username => {
                 self.administrator_username.push(character);
             }
@@ -542,12 +771,6 @@ impl TuiState {
 
     fn pop_administrator_character(&mut self) {
         match self.administrator_field {
-            AdministratorField::RootPassword => {
-                self.credentials.root_password.pop();
-            }
-            AdministratorField::RootPasswordConfirmation => {
-                self.credentials.root_password_confirmation.pop();
-            }
             AdministratorField::Username => {
                 self.administrator_username.pop();
             }
@@ -566,8 +789,6 @@ impl TuiState {
 
     fn next_administrator_field(&mut self) {
         self.administrator_field = match self.administrator_field {
-            AdministratorField::RootPassword => AdministratorField::RootPasswordConfirmation,
-            AdministratorField::RootPasswordConfirmation => AdministratorField::Username,
             AdministratorField::Username => AdministratorField::DisplayName,
             AdministratorField::DisplayName => AdministratorField::AdministratorPassword,
             AdministratorField::AdministratorPassword => {
@@ -579,17 +800,7 @@ impl TuiState {
     }
 
     fn validate_administrator(&mut self) -> bool {
-        let error = if self.credentials.root_password.is_empty() {
-            Some((
-                AdministratorField::RootPassword,
-                "Root password cannot be empty",
-            ))
-        } else if self.credentials.root_password != self.credentials.root_password_confirmation {
-            Some((
-                AdministratorField::RootPasswordConfirmation,
-                "Root passwords do not match",
-            ))
-        } else if self.administrator_username.trim().is_empty() {
+        let error = if self.administrator_username.trim().is_empty() {
             Some((
                 AdministratorField::Username,
                 "Administrator username cannot be empty",
@@ -638,7 +849,7 @@ impl TuiState {
             }
             AdministratorField::Back => {
                 self.previous_screen();
-                self.administrator_field = AdministratorField::RootPassword;
+                self.administrator_field = AdministratorField::Username;
             }
             _ => {
                 self.next_administrator_field();
@@ -648,10 +859,8 @@ impl TuiState {
 
     fn previous_administrator_field(&mut self) {
         self.administrator_field = match self.administrator_field {
-            AdministratorField::RootPassword => AdministratorField::RootPassword,
             AdministratorField::Back => AdministratorField::AdministratorPasswordConfirmation,
-            AdministratorField::RootPasswordConfirmation => AdministratorField::RootPassword,
-            AdministratorField::Username => AdministratorField::RootPasswordConfirmation,
+            AdministratorField::Username => AdministratorField::Username,
             AdministratorField::DisplayName => AdministratorField::Username,
             AdministratorField::AdministratorPassword => AdministratorField::DisplayName,
             AdministratorField::AdministratorPasswordConfirmation => {
@@ -755,7 +964,7 @@ impl TuiState {
                 if self.pending_external_content.is_empty() {
                     self.wizard.select_external_content(Vec::new());
                     self.wizard.set_model_realization_intents(Vec::new());
-                    self.enter_appliance_identity();
+                    self.enter_storage();
                     return;
                 }
 
@@ -794,7 +1003,7 @@ impl TuiState {
                     self.wizard
                         .select_external_content(self.pending_external_content.clone());
                     self.wizard.set_model_realization_intents(Vec::new());
-                    self.enter_appliance_identity();
+                    self.enter_storage();
                 } else {
                     self.pending_model_name_index = Some(0);
                 }
@@ -802,7 +1011,7 @@ impl TuiState {
             ExternalContentFocus::ContinueWithoutLocalContent => {
                 self.pending_external_content.clear();
                 self.wizard.select_external_content(Vec::new());
-                self.enter_appliance_identity();
+                self.enter_storage();
             }
             ExternalContentFocus::Back => {
                 self.previous_screen();
@@ -878,19 +1087,22 @@ impl TuiState {
 
         self.pending_model_name_index = None;
         self.external_content_error = None;
-        self.enter_appliance_identity();
+        self.enter_storage();
     }
 
     fn previous_screen(&mut self) {
         self.screen = match self.screen {
             WizardScreen::Welcome => WizardScreen::Welcome,
-            WizardScreen::Profile => WizardScreen::Welcome,
+            WizardScreen::Localization => WizardScreen::Welcome,
+            WizardScreen::HardwareCheck => WizardScreen::Localization,
+            WizardScreen::ApplianceIdentity => WizardScreen::HardwareCheck,
+            WizardScreen::RootCredentials => WizardScreen::ApplianceIdentity,
+            WizardScreen::Administrator => WizardScreen::RootCredentials,
+            WizardScreen::Profile => WizardScreen::Administrator,
             WizardScreen::ContentRepository => WizardScreen::Profile,
             WizardScreen::ExternalContent => WizardScreen::ContentRepository,
-            WizardScreen::ApplianceIdentity => WizardScreen::ExternalContent,
-            WizardScreen::Storage => WizardScreen::ApplianceIdentity,
-            WizardScreen::Administrator => WizardScreen::Storage,
-            WizardScreen::Review => WizardScreen::Administrator,
+            WizardScreen::Storage => WizardScreen::ExternalContent,
+            WizardScreen::Review => WizardScreen::Storage,
             WizardScreen::ConfirmInstallation => WizardScreen::Review,
             WizardScreen::Installing => WizardScreen::Installing,
             WizardScreen::InstallationComplete => WizardScreen::InstallationComplete,
@@ -1000,10 +1212,13 @@ where
 fn screen_title(screen: WizardScreen) -> &'static str {
     match screen {
         WizardScreen::Welcome => "Welcome",
+        WizardScreen::Localization => "Localization",
+        WizardScreen::HardwareCheck => "Hardware Check",
         WizardScreen::Profile => "Appliance Profile",
         WizardScreen::ContentRepository => "Content Repository",
         WizardScreen::ExternalContent => "External Content",
         WizardScreen::ApplianceIdentity => "Appliance Identity",
+        WizardScreen::RootCredentials => "Root Credentials",
         WizardScreen::Storage => "Installation Storage",
         WizardScreen::Administrator => "Administrator",
         WizardScreen::Review => "Review",
@@ -1031,12 +1246,15 @@ fn render(frame: &mut ratatui::Frame<'_>, state: &TuiState) {
 
     let screens = [
         WizardScreen::Welcome,
+        WizardScreen::Localization,
+        WizardScreen::HardwareCheck,
+        WizardScreen::ApplianceIdentity,
+        WizardScreen::RootCredentials,
+        WizardScreen::Administrator,
         WizardScreen::Profile,
         WizardScreen::ContentRepository,
         WizardScreen::ExternalContent,
-        WizardScreen::ApplianceIdentity,
         WizardScreen::Storage,
-        WizardScreen::Administrator,
         WizardScreen::Review,
     ];
 
@@ -1050,6 +1268,81 @@ fn render(frame: &mut ratatui::Frame<'_>, state: &TuiState) {
         .join("\n");
 
     let detail = match state.screen {
+        WizardScreen::Localization => {
+            let labels = ["Language", "Country / Region", "Locale", "Keyboard"];
+            let mut rows = Vec::new();
+
+            for (field, label) in labels.iter().enumerate() {
+                let value = if field == 3 {
+                    KEYBOARD_LAYOUTS[state.localization_indices[field]].label
+                } else {
+                    state.localization_options(field)[state.localization_indices[field]]
+                };
+
+                let marker = if state.localization_field == field {
+                    ">"
+                } else {
+                    " "
+                };
+
+                rows.push(format!("{marker} {label}: {value}"));
+            }
+
+            let continue_marker = if state.localization_field == 4 { ">" } else { " " };
+            let back_marker = if state.localization_field == 5 { ">" } else { " " };
+
+            format!(
+                "Localization\\n\\n{}\\n\\n{continue_marker} Continue\\n{back_marker} Back",
+                rows.join("\\n")
+            )
+        }
+        WizardScreen::HardwareCheck => {
+            let continue_marker = if state.screen_action == ScreenAction::Continue {
+                ">"
+            } else {
+                " "
+            };
+            let back_marker = if state.screen_action == ScreenAction::Back {
+                ">"
+            } else {
+                " "
+            };
+
+            if let Some(hardware) = state.hardware.as_ref() {
+                let memory_gib =
+                    hardware.total_memory_bytes as f64 / (1024.0 * 1024.0 * 1024.0);
+
+                let gpus = if hardware.gpus.is_empty() {
+                    "None detected".to_owned()
+                } else {
+                    hardware.gpus.join(", ")
+                };
+
+                let accelerators = if hardware.accelerators.is_empty() {
+                    "None detected".to_owned()
+                } else {
+                    hardware.accelerators.join(", ")
+                };
+
+                format!(
+                    "Hardware Check\n\n                     Architecture : {}\n                     Processors   : {} logical\n                     Memory       : {:.1} GiB\n                     GPUs         : {}\n                     Accelerators : {}\n\n                     {continue_marker} Continue\n                     {back_marker} Back",
+                    hardware.architecture,
+                    hardware.logical_processor_count,
+                    memory_gib,
+                    gpus,
+                    accelerators,
+                )
+            } else {
+                let error = state
+                    .hardware_error
+                    .as_deref()
+                    .unwrap_or("Hardware information is unavailable.");
+
+                format!(
+                    "Hardware Check\n\n                     {error}\n\n                     Hardware discovery must succeed before continuing.\n\n                     {back_marker} Back"
+                )
+            }
+        }
         WizardScreen::Welcome => {
             let start_marker = if state.welcome_action == WelcomeAction::Start {
                 ">"
@@ -1326,6 +1619,33 @@ fn render(frame: &mut ratatui::Frame<'_>, state: &TuiState) {
                 )
             }
         }
+        WizardScreen::RootCredentials => {
+            let root_password = "*".repeat(state.credentials.root_password.chars().count());
+            let root_confirmation =
+                "*".repeat(state.credentials.root_password_confirmation.chars().count());
+
+            let marker = |field| {
+                if state.root_credentials_field == field {
+                    ">"
+                } else {
+                    " "
+                }
+            };
+
+            let error = state
+                .root_credentials_error
+                .as_deref()
+                .map_or(String::new(), |error| {
+                    format!("\n\n                 Error: {error}")
+                });
+
+            format!(
+                "Root Credentials\n\n                 {} Root password: {root_password}\n                 {} Confirm password: {root_confirmation}\n\n                 {} Back{error}",
+                marker(RootCredentialsField::RootPassword),
+                marker(RootCredentialsField::RootPasswordConfirmation),
+                marker(RootCredentialsField::Back),
+            )
+        }
         WizardScreen::Administrator => {
             let username = if state.administrator_username.is_empty() {
                 "Not configured"
@@ -1339,9 +1659,6 @@ fn render(frame: &mut ratatui::Frame<'_>, state: &TuiState) {
                 &state.administrator_display_name
             };
 
-            let root_password = "*".repeat(state.credentials.root_password.chars().count());
-            let root_confirmation =
-                "*".repeat(state.credentials.root_password_confirmation.chars().count());
             let administrator_password =
                 "*".repeat(state.credentials.administrator_password.chars().count());
             let administrator_confirmation = "*".repeat(
@@ -1368,9 +1685,7 @@ fn render(frame: &mut ratatui::Frame<'_>, state: &TuiState) {
                 });
 
             format!(
-                "Administrator\n\n                 Root account\n                 {} Root password: {root_password}\n                 {} Confirm password: {root_confirmation}\n\n                 Administrator account\n                 {} Username: {username}\n                 {} Display name: {display_name}\n                 {} Password: {administrator_password}\n                 {} Confirm password: {administrator_confirmation}\n\n                 {} Back{error}",
-                marker(AdministratorField::RootPassword),
-                marker(AdministratorField::RootPasswordConfirmation),
+                "Administrator\n\n                 {} Username: {username}\n                 {} Display name: {display_name}\n                 {} Password: {administrator_password}\n                 {} Confirm password: {administrator_confirmation}\n\n                 {} Back{error}",
                 marker(AdministratorField::Username),
                 marker(AdministratorField::DisplayName),
                 marker(AdministratorField::AdministratorPassword),
@@ -1513,6 +1828,9 @@ fn render(frame: &mut ratatui::Frame<'_>, state: &TuiState) {
 
     let controls = match state.screen {
         WizardScreen::Welcome => "↑ / ↓: Navigate    Enter: Select",
+        WizardScreen::Localization => {
+            "↑ / ↓: Fields    ← / →: Change selection    Enter: Select    Esc: Back"
+        }
         WizardScreen::ExternalContent if state.pending_model_name_index.is_some() => {
             "Type: Model name    Enter: Save    Backspace: Edit    Esc: Cancel"
         }
@@ -1520,7 +1838,7 @@ fn render(frame: &mut ratatui::Frame<'_>, state: &TuiState) {
             "↑ / ↓: Navigate    Space: Toggle    Enter: Select    Esc: Back"
         }
         WizardScreen::ExternalContent => "↑ / ↓: Navigate    Enter: Select    Esc: Back",
-        WizardScreen::Administrator => {
+        WizardScreen::RootCredentials | WizardScreen::Administrator => {
             "↑ / ↓: Navigate    Enter: Select    Esc: Back    Backspace: Edit"
         }
         WizardScreen::ConfirmInstallation => "↑ / ↓: Navigate    Enter: Select    Esc: Back",
@@ -1663,9 +1981,28 @@ fn run() -> io::Result<()> {
                 state.previous_screen();
                 state.screen_action = ScreenAction::Continue;
 
-                if state.screen == WizardScreen::Administrator {
-                    state.administrator_field = AdministratorField::RootPassword;
+                if state.screen == WizardScreen::RootCredentials {
+                    state.root_credentials_field = RootCredentialsField::RootPassword;
                 }
+
+                if state.screen == WizardScreen::Administrator {
+                    state.administrator_field = AdministratorField::Username;
+                }
+            }
+            KeyCode::Down if state.screen == WizardScreen::Localization => {
+                state.next_localization_field();
+            }
+            KeyCode::Up if state.screen == WizardScreen::Localization => {
+                state.previous_localization_field();
+            }
+            KeyCode::Right if state.screen == WizardScreen::Localization => {
+                state.cycle_localization_option(true);
+            }
+            KeyCode::Left if state.screen == WizardScreen::Localization => {
+                state.cycle_localization_option(false);
+            }
+            KeyCode::Enter if state.screen == WizardScreen::Localization => {
+                state.confirm_localization();
             }
             KeyCode::Down if state.screen == WizardScreen::Welcome => {
                 state.next_welcome_action();
@@ -1784,6 +2121,21 @@ fn run() -> io::Result<()> {
             KeyCode::Enter if state.screen == WizardScreen::ConfirmInstallation => {
                 state.confirm_installation_action();
             }
+            KeyCode::Down if state.screen == WizardScreen::RootCredentials => {
+                state.next_root_credentials_field();
+            }
+            KeyCode::Up if state.screen == WizardScreen::RootCredentials => {
+                state.previous_root_credentials_field();
+            }
+            KeyCode::Backspace if state.screen == WizardScreen::RootCredentials => {
+                state.pop_root_credentials_character();
+            }
+            KeyCode::Char(character) if state.screen == WizardScreen::RootCredentials => {
+                state.push_root_credentials_character(character);
+            }
+            KeyCode::Enter if state.screen == WizardScreen::RootCredentials => {
+                state.confirm_root_credentials_field();
+            }
             KeyCode::Down if state.screen == WizardScreen::Administrator => {
                 state.next_administrator_field();
             }
@@ -1812,9 +2164,9 @@ fn main() -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::{
-        AdministratorField, ApplianceIdentityField, ExternalContentFocus, InstallationAction,
-        ScreenAction, TuiState, WelcomeAction, WizardScreen, execute_appliance_installation,
-        render,
+        AdministratorField, ApplianceIdentityField, ExternalContentFocus, HardwareSummary,
+        InstallationAction, RootCredentialsField, ScreenAction, TuiState, WelcomeAction,
+        WizardScreen, execute_appliance_installation, render,
     };
     use ratatui::{Terminal, backend::TestBackend};
 
@@ -2048,6 +2400,76 @@ mod tests {
     }
 
     #[test]
+    fn localization_can_select_indian_keyboard() {
+        let mut state = TuiState::new();
+        state.screen = WizardScreen::Localization;
+        state.localization_field = 3;
+
+        let indian_index = application::KEYBOARD_LAYOUTS
+            .iter()
+            .position(|layout| layout.id == "in")
+            .expect("Indian keyboard must be available");
+
+        state.localization_indices[3] = indian_index;
+        state.localization_field = 4;
+        state.confirm_localization();
+
+        let selected = state.wizard.localization().expect("localization saved");
+        assert_eq!(selected.country(), "IN");
+        assert_eq!(selected.locale(), "en_IN.UTF-8");
+        assert_eq!(selected.keyboard_layout(), "in");
+        assert_eq!(state.screen, WizardScreen::HardwareCheck);
+    }
+
+    #[test]
+    fn localization_supports_us_keyboard_for_india() {
+        let mut state = TuiState::new();
+        state.screen = WizardScreen::Localization;
+        state.localization_field = 4;
+        state.confirm_localization();
+
+        let selected = state.wizard.localization().expect("localization saved");
+        assert_eq!(selected.country(), "IN");
+        assert_eq!(selected.keyboard_layout(), "us");
+    }
+
+    #[test]
+    fn localization_back_preserves_pending_selections() {
+        let mut state = TuiState::new();
+        state.screen = WizardScreen::Localization;
+        state.localization_field = 3;
+        state.cycle_localization_option(true);
+        let selected_index = state.localization_indices[3];
+
+        state.previous_screen();
+        assert_eq!(state.screen, WizardScreen::Welcome);
+
+        state.next_screen();
+        assert_eq!(state.screen, WizardScreen::Localization);
+        assert_eq!(state.localization_indices[3], selected_index);
+    }
+
+    #[test]
+    fn localization_field_navigation_is_bounded() {
+        let mut state = TuiState::new();
+
+        state.previous_localization_field();
+        assert_eq!(state.localization_field, 0);
+
+        for _ in 0..10 {
+            state.next_localization_field();
+        }
+        assert_eq!(state.localization_field, 5);
+
+        state.localization_field = 3;
+        let original = state.localization_indices[3];
+        state.cycle_localization_option(true);
+        assert_ne!(state.localization_indices[3], original);
+        state.cycle_localization_option(false);
+        assert_eq!(state.localization_indices[3], original);
+    }
+
+    #[test]
     fn starts_at_welcome_screen_with_empty_wizard_state() {
         let state = TuiState::new();
 
@@ -2108,7 +2530,7 @@ mod tests {
 
         assert!(state.pending_external_content.is_empty());
         assert!(state.wizard.selected_external_content().is_empty());
-        assert_eq!(state.screen, WizardScreen::ApplianceIdentity);
+        assert_eq!(state.screen, WizardScreen::Storage);
     }
 
     #[test]
@@ -2176,7 +2598,7 @@ mod tests {
             &[first_id, second_id]
         );
         assert_eq!(state.wizard.model_realization_intents().len(), 2);
-        assert_eq!(state.screen, WizardScreen::ApplianceIdentity);
+        assert_eq!(state.screen, WizardScreen::Storage);
     }
 
     #[test]
@@ -2264,7 +2686,7 @@ mod tests {
 
         state.confirm_storage();
 
-        assert_eq!(state.screen, WizardScreen::Administrator);
+        assert_eq!(state.screen, WizardScreen::Review);
         assert_eq!(
             state
                 .wizard
@@ -2499,13 +2921,134 @@ mod tests {
     }
 
     #[test]
+    fn hardware_check_requires_discovered_hardware_to_continue() {
+        let mut state = TuiState::new();
+        state.screen = WizardScreen::HardwareCheck;
+        state.hardware_error = Some("hardware discovery failed".to_owned());
+
+        state.confirm_screen_action();
+
+        assert_eq!(state.screen, WizardScreen::HardwareCheck);
+        assert_eq!(state.hardware, None);
+    }
+
+    #[test]
+    fn hardware_check_with_discovered_hardware_advances() {
+        let mut state = TuiState::new();
+        state.screen = WizardScreen::HardwareCheck;
+        state.hardware = Some(HardwareSummary {
+            architecture: "x86_64".to_owned(),
+            logical_processor_count: 4,
+            total_memory_bytes: 8 * 1024 * 1024 * 1024,
+            gpus: Vec::new(),
+            accelerators: Vec::new(),
+        });
+
+        state.confirm_screen_action();
+
+        assert_eq!(state.screen, WizardScreen::ApplianceIdentity);
+    }
+
+    #[test]
+    fn hardware_check_back_returns_to_localization() {
+        let mut state = TuiState::new();
+        state.screen = WizardScreen::HardwareCheck;
+        state.screen_action = ScreenAction::Back;
+
+        state.confirm_screen_action();
+
+        assert_eq!(state.screen, WizardScreen::Localization);
+    }
+
+    #[test]
+    fn root_credentials_fields_advance_through_back() {
+        let mut state = TuiState::new();
+        state.screen = WizardScreen::RootCredentials;
+
+        assert_eq!(
+            state.root_credentials_field,
+            RootCredentialsField::RootPassword
+        );
+
+        state.next_root_credentials_field();
+        assert_eq!(
+            state.root_credentials_field,
+            RootCredentialsField::RootPasswordConfirmation
+        );
+
+        state.next_root_credentials_field();
+        assert_eq!(state.root_credentials_field, RootCredentialsField::Back);
+
+        state.next_root_credentials_field();
+        assert_eq!(state.root_credentials_field, RootCredentialsField::Back);
+
+        state.previous_root_credentials_field();
+        assert_eq!(
+            state.root_credentials_field,
+            RootCredentialsField::RootPasswordConfirmation
+        );
+    }
+
+    #[test]
+    fn valid_root_credentials_advance_to_administrator() {
+        let mut state = TuiState::new();
+        state.screen = WizardScreen::RootCredentials;
+        state.root_credentials_field = RootCredentialsField::RootPasswordConfirmation;
+        state.credentials.root_password = "root-secret".to_owned();
+        state.credentials.root_password_confirmation = "root-secret".to_owned();
+
+        state.confirm_root_credentials_field();
+
+        assert_eq!(state.screen, WizardScreen::Administrator);
+        assert_eq!(state.root_credentials_error, None);
+    }
+
+    #[test]
+    fn empty_root_password_does_not_advance() {
+        let mut state = TuiState::new();
+        state.screen = WizardScreen::RootCredentials;
+        state.root_credentials_field = RootCredentialsField::RootPasswordConfirmation;
+
+        state.confirm_root_credentials_field();
+
+        assert_eq!(state.screen, WizardScreen::RootCredentials);
+        assert_eq!(
+            state.root_credentials_error.as_deref(),
+            Some("Root password cannot be empty")
+        );
+        assert_eq!(
+            state.root_credentials_field,
+            RootCredentialsField::RootPassword
+        );
+    }
+
+    #[test]
+    fn mismatched_root_passwords_do_not_advance() {
+        let mut state = TuiState::new();
+        state.screen = WizardScreen::RootCredentials;
+        state.root_credentials_field = RootCredentialsField::RootPasswordConfirmation;
+        state.credentials.root_password = "first".to_owned();
+        state.credentials.root_password_confirmation = "second".to_owned();
+
+        state.confirm_root_credentials_field();
+
+        assert_eq!(state.screen, WizardScreen::RootCredentials);
+        assert_eq!(
+            state.root_credentials_error.as_deref(),
+            Some("Root passwords do not match")
+        );
+        assert_eq!(
+            state.root_credentials_field,
+            RootCredentialsField::RootPasswordConfirmation
+        );
+    }
+
+    #[test]
     fn administrator_fields_advance_through_back() {
         let mut state = TuiState::new();
         state.screen = WizardScreen::Administrator;
 
         let fields = [
-            AdministratorField::RootPasswordConfirmation,
-            AdministratorField::Username,
             AdministratorField::DisplayName,
             AdministratorField::AdministratorPassword,
             AdministratorField::AdministratorPasswordConfirmation,
@@ -2528,24 +3071,22 @@ mod tests {
     }
 
     #[test]
-    fn administrator_back_returns_to_storage() {
+    fn administrator_back_returns_to_root_credentials() {
         let mut state = TuiState::new();
         state.screen = WizardScreen::Administrator;
         state.administrator_field = AdministratorField::Back;
 
         state.confirm_administrator_field();
 
-        assert_eq!(state.screen, WizardScreen::Storage);
-        assert_eq!(state.administrator_field, AdministratorField::RootPassword);
+        assert_eq!(state.screen, WizardScreen::RootCredentials);
+        assert_eq!(state.administrator_field, AdministratorField::Username);
     }
 
     #[test]
-    fn final_administrator_confirmation_advances_to_review() {
+    fn final_administrator_confirmation_advances_to_profile() {
         let mut state = TuiState::new();
         state.screen = WizardScreen::Administrator;
         state.administrator_field = AdministratorField::AdministratorPasswordConfirmation;
-        state.credentials.root_password = "root-secret".to_owned();
-        state.credentials.root_password_confirmation = "root-secret".to_owned();
         state.administrator_username = "daia-admin".to_owned();
         state.administrator_display_name = "DAIA Administrator".to_owned();
         state.credentials.administrator_password = "admin-secret".to_owned();
@@ -2553,7 +3094,7 @@ mod tests {
 
         state.confirm_administrator_field();
 
-        assert_eq!(state.screen, WizardScreen::Review);
+        assert_eq!(state.screen, WizardScreen::Profile);
         assert_eq!(state.administrator_error, None);
 
         let user = state
@@ -2575,9 +3116,9 @@ mod tests {
         assert_eq!(state.screen, WizardScreen::Administrator);
         assert_eq!(
             state.administrator_error.as_deref(),
-            Some("Root password cannot be empty")
+            Some("Administrator username cannot be empty")
         );
-        assert_eq!(state.administrator_field, AdministratorField::RootPassword);
+        assert_eq!(state.administrator_field, AdministratorField::Username);
         assert_eq!(state.wizard.user_configuration(), None);
     }
 
@@ -2586,8 +3127,6 @@ mod tests {
         let mut state = TuiState::new();
         state.screen = WizardScreen::Administrator;
         state.administrator_field = AdministratorField::AdministratorPasswordConfirmation;
-        state.credentials.root_password = "root-secret".to_owned();
-        state.credentials.root_password_confirmation = "root-secret".to_owned();
         state.administrator_username = "daia-admin".to_owned();
         state.administrator_display_name = "DAIA Administrator".to_owned();
         state.credentials.administrator_password = "first".to_owned();
@@ -2611,9 +3150,28 @@ mod tests {
     fn escape_navigation_moves_back_one_screen() {
         let mut state = TuiState::new();
 
-        state.screen = WizardScreen::Profile;
+        state.screen = WizardScreen::HardwareCheck;
+        state.previous_screen();
+        assert_eq!(state.screen, WizardScreen::Localization);
+
         state.previous_screen();
         assert_eq!(state.screen, WizardScreen::Welcome);
+
+        state.screen = WizardScreen::ApplianceIdentity;
+        state.previous_screen();
+        assert_eq!(state.screen, WizardScreen::HardwareCheck);
+
+        state.screen = WizardScreen::RootCredentials;
+        state.previous_screen();
+        assert_eq!(state.screen, WizardScreen::ApplianceIdentity);
+
+        state.screen = WizardScreen::Administrator;
+        state.previous_screen();
+        assert_eq!(state.screen, WizardScreen::RootCredentials);
+
+        state.screen = WizardScreen::Profile;
+        state.previous_screen();
+        assert_eq!(state.screen, WizardScreen::Administrator);
 
         state.screen = WizardScreen::ContentRepository;
         state.previous_screen();
@@ -2623,21 +3181,13 @@ mod tests {
         state.previous_screen();
         assert_eq!(state.screen, WizardScreen::ContentRepository);
 
-        state.screen = WizardScreen::ApplianceIdentity;
+        state.screen = WizardScreen::Storage;
         state.previous_screen();
         assert_eq!(state.screen, WizardScreen::ExternalContent);
 
-        state.screen = WizardScreen::Storage;
-        state.previous_screen();
-        assert_eq!(state.screen, WizardScreen::ApplianceIdentity);
-
-        state.screen = WizardScreen::Administrator;
-        state.previous_screen();
-        assert_eq!(state.screen, WizardScreen::Storage);
-
         state.screen = WizardScreen::Review;
         state.previous_screen();
-        assert_eq!(state.screen, WizardScreen::Administrator);
+        assert_eq!(state.screen, WizardScreen::Storage);
 
         state.screen = WizardScreen::Welcome;
         state.previous_screen();
@@ -2680,7 +3230,7 @@ mod tests {
     }
 
     #[test]
-    fn appliance_identity_is_committed_before_entering_storage() {
+    fn appliance_identity_is_committed_before_entering_root_credentials() {
         let mut state = TuiState::new();
 
         state.screen = WizardScreen::ApplianceIdentity;
@@ -2697,7 +3247,7 @@ mod tests {
         assert_eq!(identity.hostname(), "daia");
         assert_eq!(identity.domain_name(), "home.arpa");
         assert_eq!(identity.fqdn(), "daia.home.arpa");
-        assert_eq!(state.screen, WizardScreen::Storage);
+        assert_eq!(state.screen, WizardScreen::RootCredentials);
         assert_eq!(state.appliance_identity_error, None);
     }
 
@@ -2706,12 +3256,15 @@ mod tests {
         let mut state = TuiState::new();
 
         let screens = [
+            WizardScreen::Localization,
+            WizardScreen::HardwareCheck,
+            WizardScreen::ApplianceIdentity,
+            WizardScreen::RootCredentials,
+            WizardScreen::Administrator,
             WizardScreen::Profile,
             WizardScreen::ContentRepository,
             WizardScreen::ExternalContent,
-            WizardScreen::ApplianceIdentity,
             WizardScreen::Storage,
-            WizardScreen::Administrator,
             WizardScreen::Review,
         ];
 
@@ -2723,7 +3276,7 @@ mod tests {
         state.next_screen();
         assert_eq!(state.screen, WizardScreen::Review);
 
-        for screen in screens[..6].iter().rev() {
+        for screen in screens[..9].iter().rev() {
             state.previous_screen();
             assert_eq!(state.screen, *screen);
         }

@@ -1,5 +1,8 @@
 //! Core domain types shared across the DAIA engine.
 
+mod localization;
+pub use localization::LocalizationConfiguration;
+
 use std::{
     fmt,
     path::{Path, PathBuf},
@@ -2151,6 +2154,7 @@ pub struct Plan {
 /// Describes the confirmed configuration of a DAIA appliance.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ApplianceConfiguration {
+    localization: Option<LocalizationConfiguration>,
     profile_name: String,
     content_repository_id: ContentRepositoryId,
     content_import: ContentImportIntent,
@@ -2170,6 +2174,7 @@ impl ApplianceConfiguration {
         installation: InstallationIntent,
     ) -> Self {
         Self {
+            localization: None,
             profile_name: profile_name.into(),
             content_repository_id,
             content_import,
@@ -2198,6 +2203,19 @@ impl ApplianceConfiguration {
             appliance_identity,
             InstallationIntent::new(profile_name, storage_id, user),
         )
+    }
+
+    /// Attaches localization selections.
+    #[must_use]
+    pub fn with_localization(mut self, localization: Option<LocalizationConfiguration>) -> Self {
+        self.localization = localization;
+        self
+    }
+
+    /// Returns the confirmed localization selections.
+    #[must_use]
+    pub fn localization(&self) -> Option<&LocalizationConfiguration> {
+        self.localization.as_ref()
     }
 
     /// Returns the selected appliance profile name.

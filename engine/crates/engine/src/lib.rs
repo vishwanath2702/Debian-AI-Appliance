@@ -910,11 +910,13 @@ impl Engine {
         let installation =
             self.prepare_installation(configuration.installation().clone(), profile, storage)?;
 
-        Ok(self.prepare_appliance_installation(
-            installation,
-            content,
-            configuration.model_realization_intents().to_vec(),
-        ))
+        Ok(self
+            .prepare_appliance_installation(
+                installation,
+                content,
+                configuration.model_realization_intents().to_vec(),
+            )
+            .with_localization(configuration.localization().cloned()))
     }
 
     /// Combines prepared installation and content into a prepared appliance installation.
@@ -2043,7 +2045,13 @@ mod tests {
             model::ApplianceIdentity::new("daia", "example.test"),
             DiscoveredStorageId::new("serial:usb-disk"),
             model::UserConfiguration::new("admin", "DAIA Administrator"),
-        );
+        )
+        .with_localization(Some(model::LocalizationConfiguration::new(
+            "hi",
+            "IN",
+            "hi_IN.UTF-8",
+            "in",
+        )));
 
         let storage = vec![DiscoveredStorage::new(
             "serial:usb-disk",
@@ -2069,6 +2077,7 @@ mod tests {
             configuration.installation()
         );
         assert_eq!(prepared.content().intent(), configuration.content_import());
+        assert_eq!(prepared.localization(), configuration.localization());
         assert_eq!(
             prepared.installation().storage().id(),
             configuration.installation().storage_id()

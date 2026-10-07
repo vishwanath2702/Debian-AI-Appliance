@@ -1,8 +1,8 @@
 //! Wizard state for interactive DAIA appliance configuration.
 use model::{
     ApplianceConfiguration, ContentRepository, ContentRepositoryId, DiscoveredStorage,
-    DiscoveredStorageId, ExternalContentItem, ExternalContentItemId, ModelRealizationIntent,
-    StorageKind, UserConfiguration,
+    DiscoveredStorageId, ExternalContentItem, ExternalContentItemId, LocalizationConfiguration,
+    ModelRealizationIntent, StorageKind, UserConfiguration,
 };
 use registry::{
     ApplianceProfileRepository, ContentRepositoryRepository, PackageRepository, RegistryError,
@@ -94,9 +94,50 @@ pub fn load_content_repositories() -> Result<Vec<model::ContentRepository>, Regi
     Ok(repository.repositories().to_vec())
 }
 
+/// A keyboard layout offered by DAIA's localization wizard.
+///
+/// The identifier is an XKB layout name, not a locale or country code.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct KeyboardLayoutOption {
+    pub id: &'static str,
+    pub label: &'static str,
+}
+
+/// Initial keyboard layouts offered by DAIA.
+///
+/// This is a starter catalog, not the complete set of installed XKB layouts.
+/// Runtime availability and variants must be checked before applying them.
+pub const KEYBOARD_LAYOUTS: &[KeyboardLayoutOption] = &[
+    KeyboardLayoutOption {
+        id: "us",
+        label: "English (US)",
+    },
+    KeyboardLayoutOption {
+        id: "gb",
+        label: "English (UK)",
+    },
+    KeyboardLayoutOption {
+        id: "in",
+        label: "India (Indian keyboard layouts)",
+    },
+    KeyboardLayoutOption {
+        id: "fr",
+        label: "French",
+    },
+    KeyboardLayoutOption {
+        id: "de",
+        label: "German",
+    },
+    KeyboardLayoutOption {
+        id: "jp",
+        label: "Japanese",
+    },
+];
+
 /// State accumulated while configuring an appliance through the wizard.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct WizardState {
+    localization: Option<LocalizationConfiguration>,
     profile_name: Option<String>,
     content_repositories: Vec<ContentRepository>,
     selected_content_repository: Option<ContentRepositoryId>,
@@ -113,6 +154,7 @@ impl WizardState {
     #[must_use]
     pub const fn new() -> Self {
         Self {
+            localization: None,
             profile_name: None,
             content_repositories: Vec::new(),
             selected_content_repository: None,
@@ -124,6 +166,17 @@ impl WizardState {
             appliance_identity: None,
             user: None,
         }
+    }
+
+    /// Stores the selected localization settings.
+    pub fn set_localization(&mut self, localization: LocalizationConfiguration) {
+        self.localization = Some(localization);
+    }
+
+    /// Returns the selected localization settings, if configured.
+    #[must_use]
+    pub fn localization(&self) -> Option<&LocalizationConfiguration> {
+        self.localization.as_ref()
     }
 
     /// Sets the network identity of the appliance.
@@ -329,6 +382,7 @@ impl WizardState {
 
     pub fn into_config(self) -> Option<WizardConfig> {
         Some(WizardConfig {
+            localization: self.localization,
             profile_name: self.profile_name?,
             content_repository_id: self.selected_content_repository?,
             external_content: self.selected_external_content,
@@ -344,6 +398,7 @@ impl WizardState {
 #[derive(Clone, Debug, Eq, PartialEq)]
 
 pub struct WizardConfig {
+    localization: Option<LocalizationConfiguration>,
     profile_name: String,
     content_repository_id: ContentRepositoryId,
     external_content: Vec<ExternalContentItemId>,
@@ -353,6 +408,12 @@ pub struct WizardConfig {
     user: UserConfiguration,
 }
 impl WizardConfig {
+    /// Returns the confirmed localization selection, if configured.
+    #[must_use]
+    pub fn localization(&self) -> Option<&LocalizationConfiguration> {
+        self.localization.as_ref()
+    }
+
     /// Returns the selected appliance profile name.
     #[must_use]
     #[cfg(test)]
@@ -421,12 +482,14 @@ impl WizardConfig {
             self.user_configuration().clone(),
         )
         .with_model_realization_intents(self.model_realization_intents.clone())
+        .with_localization(self.localization.clone())
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::WizardState;
+    use model::LocalizationConfiguration;
     use model::{
         ApplianceProfile, Capability, ContentRepository, ContentRepositoryId, ContentSourceId,
         DiscoveredStorage, DiscoveredStorageId, ExternalContentItem, ExternalContentItemId,
@@ -434,6 +497,51 @@ mod tests {
         UserConfiguration,
     };
     use registry::{ApplianceProfileRepository, ContentRepositoryRepository};
+
+    #[test]
+    fn new_wizard_state_has_no_localization_selection() {
+        let state = WizardState::new();
+        assert!(state.localization().is_none());
+    }
+
+    #[test]
+    fn wizard_state_preserves_and_replaces_localization_selection() {
+        let mut state = WizardState::new();
+        let first = LocalizationConfiguration::new("en", "GB", "en_GB.UTF-8", "gb");
+        state.set_localization(first.clone());
+        assert_eq!(state.localization(), Some(&first));
+
+        // Other wizard selections must not discard localization.
+        state.set_profile_name("desktop");
+        assert_eq!(state.localization(), Some(&first));
+
+        let replacement = LocalizationConfiguration::new("ja", "JP", "ja_JP.UTF-8", "jp");
+        state.set_localization(replacement.clone());
+        assert_eq!(state.localization(), Some(&replacement));
+    }
+
+    #[test]
+    fn keyboard_catalog_includes_india_and_us() {
+        let layouts = super::KEYBOARD_LAYOUTS;
+
+        assert!(layouts.iter().any(|layout| layout.id == "in"));
+        assert!(layouts.iter().any(|layout| layout.id == "us"));
+    }
+
+    #[test]
+    fn indian_locale_can_use_us_keyboard() {
+        let mut state = WizardState::new();
+        state.set_localization(LocalizationConfiguration::new(
+            "en",
+            "IN",
+            "en_IN.UTF-8",
+            "us",
+        ));
+
+        let localization = state.localization().expect("localization selected");
+        assert_eq!(localization.country(), "IN");
+        assert_eq!(localization.keyboard_layout(), "us");
+    }
 
     fn select_test_appliance_identity(state: &mut WizardState) {
         state.set_appliance_identity("daia", "home.arpa");
@@ -488,6 +596,12 @@ mod tests {
             ExternalContentItemId::new("local-models-directory:/media/daia/models/model.gguf");
 
         let mut state = WizardState::new();
+        state.set_localization(LocalizationConfiguration::new(
+            "hi",
+            "IN",
+            "hi_IN.UTF-8",
+            "in",
+        ));
         state.set_profile_name("desktop");
         select_test_content_repository(&mut state);
         state.set_external_content_items(vec![ExternalContentItem::new(
@@ -507,6 +621,13 @@ mod tests {
         let appliance = config.appliance_configuration();
 
         assert_eq!(appliance.profile_name(), "desktop");
+        let localization = appliance
+            .localization()
+            .expect("localization should reach appliance configuration");
+        assert_eq!(localization.language(), "hi");
+        assert_eq!(localization.country(), "IN");
+        assert_eq!(localization.locale(), "hi_IN.UTF-8");
+        assert_eq!(localization.keyboard_layout(), "in");
         assert_eq!(
             appliance.content_repository_id(),
             &ContentRepositoryId::new("local-models")
@@ -959,6 +1080,44 @@ mod tests {
         select_test_user(&mut state);
 
         assert!(state.into_config().is_none());
+    }
+
+    #[test]
+    fn wizard_configuration_preserves_localization() {
+        let mut state = WizardState::new();
+
+        let localization = LocalizationConfiguration::new("hi", "IN", "hi_IN.UTF-8", "in");
+
+        state.set_localization(localization.clone());
+        state.set_profile_name("desktop");
+        select_test_content_repository(&mut state);
+        select_test_storage(&mut state);
+        select_test_appliance_identity(&mut state);
+        select_test_user(&mut state);
+
+        let config = state
+            .into_config()
+            .expect("completed wizard state should build configuration");
+
+        assert_eq!(config.localization(), Some(&localization));
+        assert_eq!(config.localization().unwrap().keyboard_layout(), "in");
+    }
+
+    #[test]
+    fn wizard_configuration_allows_missing_localization_for_compatibility() {
+        let mut state = WizardState::new();
+
+        state.set_profile_name("desktop");
+        select_test_content_repository(&mut state);
+        select_test_storage(&mut state);
+        select_test_appliance_identity(&mut state);
+        select_test_user(&mut state);
+
+        let config = state
+            .into_config()
+            .expect("existing callers should remain compatible");
+
+        assert!(config.localization().is_none());
     }
 
     #[test]

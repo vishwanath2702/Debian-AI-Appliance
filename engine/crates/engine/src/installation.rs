@@ -325,6 +325,12 @@ pub enum InstallationOperation {
         mounts: Vec<InstallationMount>,
     },
 
+    /// Configure localization in the installed target filesystem.
+    ConfigureLocalization {
+        root: PathBuf,
+        localization: model::LocalizationConfiguration,
+    },
+
     /// Import selected external content into the installed appliance.
     ImportContent {
         content: crate::PreparedContentImport,
@@ -407,6 +413,18 @@ pub trait InstallationCommandRunner {
 /// Writes files into the installed system.
 pub trait InstallationFileWriter {
     fn write(&mut self, path: &std::path::Path, contents: &[u8]) -> io::Result<()>;
+
+    fn write_localization(
+        &mut self,
+        _root: &std::path::Path,
+        _relative_path: &std::path::Path,
+        _contents: &[u8],
+    ) -> io::Result<()> {
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "secure localization writes are not implemented",
+        ))
+    }
 }
 
 /// Writes installed-system files through the host filesystem.
@@ -416,6 +434,136 @@ pub struct SystemInstallationFileWriter;
 impl InstallationFileWriter for SystemInstallationFileWriter {
     fn write(&mut self, path: &std::path::Path, contents: &[u8]) -> io::Result<()> {
         std::fs::write(path, contents)
+    }
+
+    fn write_localization(
+        &mut self,
+        root: &std::path::Path,
+        relative_path: &std::path::Path,
+        contents: &[u8],
+    ) -> io::Result<()> {
+        use rustix::fs::{AtFlags, FileType, Mode, OFlags, ResolveFlags};
+        use std::io::Write;
+
+        if !root.is_absolute()
+            || root == std::path::Path::new("/")
+            || root
+                .components()
+                .any(|component| matches!(component, std::path::Component::ParentDir))
+            || !matches!(
+                relative_path.to_str(),
+                Some("etc/default/locale" | "etc/default/keyboard")
+            )
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "invalid secure localization destination",
+            ));
+        }
+
+        let root_fd = rustix::fs::open(
+            root,
+            OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+            Mode::empty(),
+        )?;
+
+        let parent_fd = rustix::fs::openat2(
+            &root_fd,
+            "etc/default",
+            OFlags::RDONLY | OFlags::DIRECTORY | OFlags::CLOEXEC,
+            Mode::empty(),
+            ResolveFlags::BENEATH | ResolveFlags::NO_SYMLINKS,
+        )?;
+
+        let filename = relative_path.file_name().ok_or_else(|| {
+            io::Error::new(io::ErrorKind::InvalidInput, "missing localization filename")
+        })?;
+
+        let check_existing = || -> io::Result<()> {
+            match rustix::fs::statat(&parent_fd, filename, AtFlags::SYMLINK_NOFOLLOW) {
+                Ok(metadata) => {
+                    if !FileType::from_raw_mode(metadata.st_mode).is_file() {
+                        return Err(io::Error::new(
+                            io::ErrorKind::InvalidInput,
+                            "localization destination is not a regular file",
+                        ));
+                    }
+                }
+                Err(rustix::io::Errno::NOENT) => {}
+                Err(error) => return Err(error.into()),
+            }
+            Ok(())
+        };
+
+        check_existing()?;
+
+        let (temporary_name, temporary_fd) = {
+            let mut created = None;
+
+            for _ in 0..16 {
+                let mut random = [0_u8; 16];
+                let filled = rustix::rand::getrandom(
+                    &mut random[..],
+                    rustix::rand::GetRandomFlags::empty(),
+                )?;
+
+                if filled != random.len() {
+                    return Err(io::Error::other("incomplete temporary-name randomness"));
+                }
+
+                let suffix: String = random.iter().map(|byte| format!("{byte:02x}")).collect();
+
+                let name = format!(".daia-localization-{suffix}");
+
+                match rustix::fs::openat(
+                    &parent_fd,
+                    name.as_str(),
+                    OFlags::WRONLY
+                        | OFlags::CREATE
+                        | OFlags::EXCL
+                        | OFlags::NOFOLLOW
+                        | OFlags::CLOEXEC,
+                    Mode::from_raw_mode(0o644),
+                ) {
+                    Ok(fd) => {
+                        created = Some((name, fd));
+                        break;
+                    }
+                    Err(rustix::io::Errno::EXIST) => continue,
+                    Err(error) => return Err(error.into()),
+                }
+            }
+
+            created.ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::AlreadyExists,
+                    "unable to allocate unique localization temporary file",
+                )
+            })?
+        };
+
+        let result = (|| -> io::Result<()> {
+            let mut file = std::fs::File::from(temporary_fd);
+            file.write_all(contents)?;
+            file.sync_all()?;
+
+            // The installer must exclusively control the target directory.
+            // The final type check rejects existing symlinks and special files,
+            // but a concurrent privileged writer could replace the destination
+            // between this check and renameat. renameat does not follow a
+            // destination symlink; it replaces the directory entry instead.
+            check_existing()?;
+
+            rustix::fs::renameat(&parent_fd, temporary_name.as_str(), &parent_fd, filename)?;
+
+            Ok(())
+        })();
+
+        if result.is_err() {
+            let _ = rustix::fs::unlinkat(&parent_fd, temporary_name.as_str(), AtFlags::empty());
+        }
+
+        result
     }
 }
 /// Runs installation commands as operating-system processes.
@@ -849,6 +997,75 @@ where
                 self.file_writer
                     .write(std::path::Path::new("/target/etc/fstab"), fstab.as_bytes())
             }
+            InstallationOperation::ConfigureLocalization { root, localization } => {
+                let valid_identifier = |value: &str| {
+                    !value.is_empty()
+                        && value.bytes().all(|byte| {
+                            byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-' | b'.')
+                        })
+                };
+
+                if !valid_identifier(localization.language())
+                    || !valid_identifier(localization.country())
+                    || !valid_identifier(localization.locale())
+                    || !valid_identifier(localization.keyboard_layout())
+                {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidInput,
+                        "invalid localization identifier",
+                    ));
+                }
+
+                if root != &self.target_root
+                    || !root.is_absolute()
+                    || root == std::path::Path::new("/")
+                    || root
+                        .components()
+                        .any(|component| matches!(component, std::path::Component::ParentDir))
+                {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidInput,
+                        "invalid localization target root",
+                    ));
+                }
+
+                for candidate in [
+                    root.clone(),
+                    root.join("etc"),
+                    root.join("etc/default"),
+                    root.join("etc/default/locale"),
+                    root.join("etc/default/keyboard"),
+                ] {
+                    match std::fs::symlink_metadata(&candidate) {
+                        Ok(metadata) if metadata.file_type().is_symlink() => {
+                            return Err(io::Error::new(
+                                io::ErrorKind::InvalidInput,
+                                format!(
+                                    "localization path contains a symlink: {}",
+                                    candidate.display()
+                                ),
+                            ));
+                        }
+                        Ok(_) => {}
+                        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+                        Err(error) => return Err(error),
+                    }
+                }
+
+                let locale = format!("LANG={}\n", localization.locale());
+                let keyboard = format!("XKBLAYOUT=\"{}\"\n", localization.keyboard_layout());
+
+                self.file_writer.write_localization(
+                    root,
+                    std::path::Path::new("etc/default/locale"),
+                    locale.as_bytes(),
+                )?;
+                self.file_writer.write_localization(
+                    root,
+                    std::path::Path::new("etc/default/keyboard"),
+                    keyboard.as_bytes(),
+                )
+            }
             InstallationOperation::ImportContent { content } => {
                 let mut executor = SystemContentImportOperationExecutor::new(
                     SystemContentImportFileSystem::with_root(&self.target_root),
@@ -1224,6 +1441,7 @@ pub struct PreparedApplianceInstallation {
     installation: PreparedInstallation,
     content: crate::PreparedContentImport,
     model_realization_intents: Vec<model::ModelRealizationIntent>,
+    localization: Option<model::LocalizationConfiguration>,
 }
 
 impl PreparedApplianceInstallation {
@@ -1236,7 +1454,24 @@ impl PreparedApplianceInstallation {
             installation,
             content,
             model_realization_intents,
+            localization: None,
         }
+    }
+
+    /// Attaches confirmed localization selections.
+    #[must_use]
+    pub fn with_localization(
+        mut self,
+        localization: Option<model::LocalizationConfiguration>,
+    ) -> Self {
+        self.localization = localization;
+        self
+    }
+
+    /// Returns confirmed localization selections, if any.
+    #[must_use]
+    pub const fn localization(&self) -> Option<&model::LocalizationConfiguration> {
+        self.localization.as_ref()
     }
 
     pub const fn installation(&self) -> &PreparedInstallation {
@@ -1256,11 +1491,9 @@ impl PreparedApplianceInstallation {
     #[must_use]
     pub fn installation_plan(&self) -> InstallationPlan {
         let installation_plan = self.installation.installation_plan();
-        let additional_operations = if self.content.intent().items().is_empty() {
-            1
-        } else {
-            2
-        };
+        let additional_operations = 1
+            + usize::from(!self.content.intent().items().is_empty())
+            + usize::from(self.localization.is_some());
         let mut operations =
             Vec::with_capacity(installation_plan.operations().len() + additional_operations);
 
@@ -1268,6 +1501,13 @@ impl PreparedApplianceInstallation {
             operations.push(operation.clone());
 
             if matches!(operation, InstallationOperation::ConfigureFstab { .. }) {
+                if let Some(localization) = &self.localization {
+                    operations.push(InstallationOperation::ConfigureLocalization {
+                        root: PathBuf::from("/target"),
+                        localization: localization.clone(),
+                    });
+                }
+
                 if !self.content.intent().items().is_empty() {
                     operations.push(InstallationOperation::ImportContent {
                         content: self.content.clone(),
@@ -1377,6 +1617,15 @@ mod tests {
         fn write(&mut self, path: &std::path::Path, contents: &[u8]) -> io::Result<()> {
             self.writes.push((path.to_path_buf(), contents.to_vec()));
             Ok(())
+        }
+
+        fn write_localization(
+            &mut self,
+            root: &std::path::Path,
+            relative_path: &std::path::Path,
+            contents: &[u8],
+        ) -> io::Result<()> {
+            self.write(&root.join(relative_path), contents)
         }
     }
     #[derive(Default)]
@@ -2801,6 +3050,328 @@ mod tests {
             )]
         );
     }
+    #[test]
+    fn system_executor_writes_localization_beneath_target_root() {
+        let mut executor = SystemInstallationOperationExecutor::with_all_dependencies(
+            RecordingCommandRunner::default(),
+            RecordingInstallationFileWriter::default(),
+        );
+
+        executor
+            .execute_operation(&InstallationOperation::ConfigureLocalization {
+                root: PathBuf::from("/target"),
+                localization: model::LocalizationConfiguration::new(
+                    "hi",
+                    "IN",
+                    "hi_IN.UTF-8",
+                    "us",
+                ),
+            })
+            .expect("localization configuration should succeed");
+
+        assert_eq!(
+            executor.file_writer.writes,
+            vec![
+                (
+                    PathBuf::from("/target/etc/default/locale"),
+                    b"LANG=hi_IN.UTF-8\n".to_vec(),
+                ),
+                (
+                    PathBuf::from("/target/etc/default/keyboard"),
+                    b"XKBLAYOUT=\"us\"\n".to_vec(),
+                ),
+            ]
+        );
+        assert!(executor.runner.commands.is_empty());
+    }
+
+    #[test]
+    fn system_executor_rejects_invalid_localization_without_writes() {
+        let mut executor = SystemInstallationOperationExecutor::with_all_dependencies(
+            RecordingCommandRunner::default(),
+            RecordingInstallationFileWriter::default(),
+        );
+
+        let error = executor
+            .execute_operation(&InstallationOperation::ConfigureLocalization {
+                root: PathBuf::from("/target"),
+                localization: model::LocalizationConfiguration::new(
+                    "en",
+                    "US",
+                    "en_US.UTF-8",
+                    "us\\nBAD=1",
+                ),
+            })
+            .expect_err("unsafe keyboard identifier should be rejected");
+
+        assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
+        assert!(executor.file_writer.writes.is_empty());
+    }
+
+    #[test]
+    fn system_executor_rejects_unsafe_localization_root() {
+        let mut executor = SystemInstallationOperationExecutor::with_all_dependencies(
+            RecordingCommandRunner::default(),
+            RecordingInstallationFileWriter::default(),
+        );
+
+        let error = executor
+            .execute_operation(&InstallationOperation::ConfigureLocalization {
+                root: PathBuf::from("/"),
+                localization: model::LocalizationConfiguration::new(
+                    "en",
+                    "US",
+                    "en_US.UTF-8",
+                    "us",
+                ),
+            })
+            .expect_err("host root must not be accepted");
+
+        assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
+        assert!(executor.file_writer.writes.is_empty());
+    }
+
+    #[test]
+    fn system_executor_rejects_symlinked_localization_destination() {
+        use std::os::unix::fs::symlink;
+
+        let temporary_directory =
+            tempfile::tempdir().expect("temporary directory should be created");
+        let root = temporary_directory.path().join("target");
+        let default_directory = root.join("etc/default");
+
+        std::fs::create_dir_all(&default_directory)
+            .expect("localization directory should be created");
+
+        let outside_file = temporary_directory.path().join("outside-locale");
+        std::fs::write(&outside_file, b"original").expect("outside file should be created");
+
+        symlink(&outside_file, default_directory.join("locale"))
+            .expect("localization symlink should be created");
+
+        let mut executor = SystemInstallationOperationExecutor::with_all_dependencies(
+            RecordingCommandRunner::default(),
+            RecordingInstallationFileWriter::default(),
+        );
+        executor.target_root = root.clone();
+
+        let error = executor
+            .execute_operation(&InstallationOperation::ConfigureLocalization {
+                root,
+                localization: model::LocalizationConfiguration::new(
+                    "en",
+                    "US",
+                    "en_US.UTF-8",
+                    "us",
+                ),
+            })
+            .expect_err("symlinked locale destination must be rejected");
+
+        assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
+        assert!(executor.file_writer.writes.is_empty());
+        assert_eq!(
+            std::fs::read(&outside_file).expect("outside file should remain readable"),
+            b"original"
+        );
+    }
+
+    #[test]
+    fn production_localization_writer_writes_inside_target() {
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let root = temporary.path().join("target");
+        std::fs::create_dir_all(root.join("etc/default")).expect("create target directories");
+
+        let mut writer = super::SystemInstallationFileWriter;
+        writer
+            .write_localization(
+                &root,
+                std::path::Path::new("etc/default/locale"),
+                b"LANG=en_US.UTF-8\n",
+            )
+            .expect("secure locale write");
+
+        assert_eq!(
+            std::fs::read(root.join("etc/default/locale")).expect("read installed locale"),
+            b"LANG=en_US.UTF-8\n"
+        );
+    }
+
+    #[test]
+    fn production_localization_writer_rejects_destination_symlink() {
+        use std::os::unix::fs::symlink;
+
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let root = temporary.path().join("target");
+        std::fs::create_dir_all(root.join("etc/default")).expect("create target directories");
+
+        let outside = temporary.path().join("outside");
+        std::fs::write(&outside, b"original").expect("create outside file");
+        symlink(&outside, root.join("etc/default/locale")).expect("create destination symlink");
+
+        let mut writer = super::SystemInstallationFileWriter;
+        assert!(
+            writer
+                .write_localization(
+                    &root,
+                    std::path::Path::new("etc/default/locale"),
+                    b"changed",
+                )
+                .is_err(),
+            "symlinked destination must be rejected"
+        );
+
+        assert_eq!(
+            std::fs::read(&outside).expect("read outside file"),
+            b"original"
+        );
+    }
+
+    #[test]
+    fn production_localization_writer_rejects_parent_symlink() {
+        use std::os::unix::fs::symlink;
+
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let root = temporary.path().join("target");
+        let outside_directory = temporary.path().join("outside");
+        std::fs::create_dir_all(root.join("etc")).expect("create target etc");
+        std::fs::create_dir_all(&outside_directory).expect("create outside directory");
+
+        symlink(&outside_directory, root.join("etc/default")).expect("create parent symlink");
+
+        let mut writer = super::SystemInstallationFileWriter;
+        assert!(
+            writer
+                .write_localization(
+                    &root,
+                    std::path::Path::new("etc/default/locale"),
+                    b"changed",
+                )
+                .is_err(),
+            "symlinked parent must be rejected"
+        );
+
+        assert!(!outside_directory.join("locale").exists());
+    }
+
+    #[test]
+    fn production_localization_writer_rejects_directory_destination() {
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let root = temporary.path().join("target");
+
+        std::fs::create_dir_all(root.join("etc/default/locale"))
+            .expect("create directory at locale destination");
+
+        let mut writer = super::SystemInstallationFileWriter;
+        let result = writer.write_localization(
+            &root,
+            std::path::Path::new("etc/default/locale"),
+            b"LANG=en_US.UTF-8\n",
+        );
+
+        assert!(result.is_err(), "directory destination must be rejected");
+        assert!(root.join("etc/default/locale").is_dir());
+    }
+
+    #[test]
+    fn production_localization_writer_replaces_existing_file() {
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let root = temporary.path().join("target");
+        let destination = root.join("etc/default/locale");
+
+        std::fs::create_dir_all(destination.parent().expect("parent directory"))
+            .expect("create target directories");
+        std::fs::write(&destination, b"LANG=old\n").expect("create existing locale file");
+
+        let mut writer = super::SystemInstallationFileWriter;
+        writer
+            .write_localization(
+                &root,
+                std::path::Path::new("etc/default/locale"),
+                b"LANG=en_US.UTF-8\n",
+            )
+            .expect("replace existing locale");
+
+        assert_eq!(
+            std::fs::read(&destination).expect("read replaced locale"),
+            b"LANG=en_US.UTF-8\n"
+        );
+    }
+
+    #[test]
+    fn production_localization_writer_atomically_replaces_existing_file() {
+        use std::io::{Read, Seek, SeekFrom};
+
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let root = temporary.path().join("target");
+        let destination = root.join("etc/default/locale");
+
+        std::fs::create_dir_all(destination.parent().expect("parent directory"))
+            .expect("create target directories");
+        std::fs::write(&destination, b"LANG=old\n").expect("create existing locale file");
+
+        let mut original_file = std::fs::File::open(&destination).expect("open original file");
+
+        let mut writer = super::SystemInstallationFileWriter;
+        writer
+            .write_localization(
+                &root,
+                std::path::Path::new("etc/default/locale"),
+                b"LANG=en_US.UTF-8\n",
+            )
+            .expect("replace locale");
+
+        assert_eq!(
+            std::fs::read(&destination).expect("read replacement"),
+            b"LANG=en_US.UTF-8\n"
+        );
+
+        original_file
+            .seek(SeekFrom::Start(0))
+            .expect("rewind original file");
+
+        let mut original_contents = Vec::new();
+        original_file
+            .read_to_end(&mut original_contents)
+            .expect("read original file descriptor");
+
+        assert_eq!(
+            original_contents, b"LANG=old\n",
+            "replacement must not modify the original inode"
+        );
+    }
+
+    #[test]
+    fn production_localization_writer_preserves_external_hardlink() {
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let root = temporary.path().join("target");
+        let destination = root.join("etc/default/locale");
+        let external = temporary.path().join("external-locale");
+
+        std::fs::create_dir_all(destination.parent().expect("parent"))
+            .expect("create target directories");
+        std::fs::write(&external, b"LANG=external\n").expect("create external file");
+        std::fs::hard_link(&external, &destination).expect("create hard link");
+
+        let mut writer = super::SystemInstallationFileWriter;
+        writer
+            .write_localization(
+                &root,
+                std::path::Path::new("etc/default/locale"),
+                b"LANG=en_US.UTF-8\n",
+            )
+            .expect("replace localization file");
+
+        assert_eq!(
+            std::fs::read(&destination).expect("read replacement"),
+            b"LANG=en_US.UTF-8\n"
+        );
+        assert_eq!(
+            std::fs::read(&external).expect("read external file"),
+            b"LANG=external\n",
+            "atomic replacement must not modify external hard links"
+        );
+    }
+
     #[test]
     fn system_executor_accepts_recording_file_writer_dependency() {
         let executor = SystemInstallationOperationExecutor::with_all_dependencies(
