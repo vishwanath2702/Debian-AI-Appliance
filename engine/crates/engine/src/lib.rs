@@ -2301,6 +2301,7 @@ mod tests {
                     device_path: "/dev/sdb".into(),
                 },
                 InstallationOperation::PartitionDisk {
+                    storage_id: DiscoveredStorageId::new("serial:usb-disk"),
                     device_path: "/dev/sdb".into(),
                     partitions: default_installation_partitions(),
                 },

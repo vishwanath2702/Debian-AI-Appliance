@@ -1,6 +1,7 @@
 //! Linux storage discovery backed by `lsblk`.
 
 use std::{
+    collections::{HashMap, HashSet},
     path::{Path, PathBuf},
     process::Command,
 };
@@ -21,9 +22,17 @@ pub struct LinuxStorageInspector {
 
 impl StorageInspector for LinuxStorageInspector {
     fn inspect(&self) -> Result<Vec<DiscoveredStorage>, StorageInspectError> {
-        let system_disk_path = self.system_disk_path()?;
+        let root_source = self.root_source()?;
+        let live_medium_source = self.live_medium_source()?;
+
+        if root_source == Path::new("overlay") && live_medium_source.is_none() {
+            return Err(StorageInspectError::InvalidOutput(
+                "overlay root has no identifiable live installation medium".to_owned(),
+            ));
+        }
 
         let output = Command::new(&self.command)
+            .arg("--tree")
             .arg("--json")
             .arg("--paths")
             .arg("--bytes")
@@ -42,15 +51,63 @@ impl StorageInspector for LinuxStorageInspector {
         let parsed: LsblkOutput = serde_json::from_slice(&output.stdout)
             .map_err(|error| StorageInspectError::InvalidOutput(error.to_string()))?;
 
+        let mut parents = HashMap::new();
+
+        for device in &parsed.blockdevices {
+            collect_device_parents(device, &mut parents);
+        }
+
+        let mut protected = HashSet::new();
+
+        for source in [Some(root_source), live_medium_source]
+            .into_iter()
+            .flatten()
+        {
+            if !source.starts_with("/dev/") {
+                continue;
+            }
+
+            let mut visited = HashSet::new();
+            let mut pending = vec![source.to_string_lossy().into_owned()];
+            let mut matched = false;
+
+            while let Some(path) = pending.pop() {
+                if !visited.insert(path.clone()) {
+                    continue;
+                }
+
+                for device in &parsed.blockdevices {
+                    if device.device_type == "disk" && device.path == path {
+                        protected.insert(path.clone());
+                        matched = true;
+                    }
+                }
+
+                if let Some(backing) = parents.get(&path) {
+                    pending.extend(backing.iter().cloned());
+                }
+            }
+
+            if !matched {
+                let optical_source = parsed.blockdevices.iter().any(|device| {
+                    device.path == source.to_string_lossy() && device.device_type == "rom"
+                });
+
+                if !optical_source {
+                    return Err(StorageInspectError::InvalidOutput(format!(
+                        "no physical disk backs protected source {}",
+                        source.display()
+                    )));
+                }
+            }
+        }
+
         Ok(parsed
             .blockdevices
             .into_iter()
             .filter(|device| device.device_type == "disk")
             .map(|device| {
-                let kind = if system_disk_path
-                    .as_deref()
-                    .is_some_and(|system_disk| Path::new(&device.path) == system_disk)
-                {
+                let kind = if protected.contains(&device.path) {
                     model::StorageKind::System
                 } else if device.rm {
                     model::StorageKind::Removable
@@ -135,39 +192,47 @@ impl LinuxStorageInspector {
         Ok(PathBuf::from(source))
     }
 
-    fn system_disk_path(&self) -> Result<Option<PathBuf>, StorageInspectError> {
-        let root_source = self.root_source()?;
-
-        if !root_source.starts_with("/dev") {
-            return Ok(None);
-        }
-
-        let output = Command::new(&self.command)
-            .arg("--paths")
+    fn live_medium_source(&self) -> Result<Option<PathBuf>, StorageInspectError> {
+        let output = Command::new(&self.findmnt_command)
             .arg("--noheadings")
             .arg("--output")
-            .arg("PKNAME")
-            .arg(&root_source)
+            .arg("SOURCE")
+            .arg("/run/live/medium")
             .output()?;
 
         if !output.status.success() {
+            if output.status.code() == Some(1) && output.stderr.is_empty() {
+                return Ok(None);
+            }
+
             return Err(StorageInspectError::ProcessFailed {
-                command: self.command.display().to_string(),
+                command: self.findmnt_command.display().to_string(),
                 status: output.status,
                 stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
             });
         }
 
-        let parent = String::from_utf8_lossy(&output.stdout);
-        let parent = parent.trim();
+        let source = String::from_utf8_lossy(&output.stdout);
+        let source = source.trim();
 
-        if parent.is_empty() {
+        if !source.starts_with("/dev/") {
             return Err(StorageInspectError::InvalidOutput(
-                "lsblk returned an empty root parent disk".to_owned(),
+                "live medium source is not a block device".to_owned(),
             ));
         }
 
-        Ok(Some(PathBuf::from(parent)))
+        Ok(Some(PathBuf::from(source)))
+    }
+}
+
+fn collect_device_parents(device: &LsblkDevice, parents: &mut HashMap<String, HashSet<String>>) {
+    for child in &device.children {
+        parents
+            .entry(child.path.clone())
+            .or_default()
+            .insert(device.path.clone());
+
+        collect_device_parents(child, parents);
     }
 }
 
@@ -251,35 +316,6 @@ exit 1
             "unexpected findmnt error: {error:?}"
         );
         assert!(error.to_string().contains("findmnt failed"));
-    }
-
-    #[test]
-    fn reports_empty_root_parent_disk() {
-        let (_findmnt_directory, findmnt_command) = command_script(
-            r"#!/bin/sh
-echo '/dev/sda2'
-",
-        );
-
-        let (_lsblk_directory, lsblk_command) = command_script(
-            r"#!/bin/sh
-exit 0
-",
-        );
-
-        let inspector = LinuxStorageInspector::new()
-            .with_command(lsblk_command)
-            .with_findmnt_command(findmnt_command);
-
-        let error = inspector
-            .system_disk_path()
-            .expect_err("empty root parent should fail");
-
-        assert!(
-            matches!(error, StorageInspectError::InvalidOutput(_)),
-            "unexpected root-parent error: {error:?}"
-        );
-        assert!(error.to_string().contains("empty root parent disk"));
     }
 
     #[test]
@@ -367,9 +403,12 @@ echo '/dev/nvme0n1p2'
     #[test]
     fn discovers_disks_from_lsblk_json() {
         let (_findmnt_directory, findmnt_command) = command_script(
-            r"#!/bin/sh
-echo '/dev/sda2'
-",
+            r#"#!/bin/sh
+case "$*" in
+  *"/run/live/medium"*) exit 1 ;;
+  *) echo '/dev/sda2' ;;
+esac
+"#,
         );
 
         let (_lsblk_directory, lsblk_command) = command_script(
@@ -389,7 +428,17 @@ case "$*" in
       "rm": false,
       "wwn": "0x5001b448bd521e4b",
       "serial": "223020803525",
-      "size": 500107862016
+      "size": 500107862016,
+      "children": [
+        {
+          "path": "/dev/sda2",
+          "type": "part",
+          "rm": false,
+          "wwn": null,
+          "serial": null,
+          "size": 400000000000
+        }
+      ]
     },
     {
       "path": "/dev/sdb",
@@ -437,9 +486,12 @@ esac
     #[test]
     fn discovers_installable_disk_when_root_is_live_overlay() {
         let (_findmnt_directory, findmnt_command) = command_script(
-            r"#!/bin/sh
-echo 'overlay'
-",
+            r#"#!/bin/sh
+case "$*" in
+  *"/run/live/medium"*) echo '/dev/sr0' ;;
+  *) echo 'overlay' ;;
+esac
+"#,
         );
 
         let (_lsblk_directory, lsblk_command) = command_script(
@@ -454,6 +506,14 @@ case "$*" in
     cat <<'EOF'
 {
   "blockdevices": [
+    {
+      "path": "/dev/sr0",
+      "type": "rom",
+      "rm": true,
+      "wwn": null,
+      "serial": null,
+      "size": 4000000000
+    },
     {
       "path": "/dev/vda",
       "type": "disk",
@@ -482,6 +542,399 @@ esac
         assert_eq!(storage[0].device_path(), std::path::Path::new("/dev/vda"));
         assert_eq!(storage[0].kind(), StorageKind::Secondary);
         assert_eq!(storage[0].size_bytes(), Some(42_949_672_960));
+    }
+
+    #[test]
+    fn rejects_protected_root_with_unresolved_device_chain() {
+        let (_findmnt_dir, findmnt) = command_script(
+            r#"#!/bin/sh
+case "$*" in
+  *"/run/live/medium"*) exit 1 ;;
+  *) echo '/dev/mapper/root' ;;
+esac
+"#,
+        );
+
+        let (_lsblk_dir, lsblk) = command_script(
+            r#"#!/bin/sh
+cat <<'EOF'
+{
+  "blockdevices": [
+    {
+      "path": "/dev/sda",
+      "type": "disk",
+      "rm": false,
+      "wwn": null,
+      "serial": "SYSTEM-DISK",
+      "size": 1000000000
+    },
+    {
+      "path": "/dev/sdb",
+      "type": "disk",
+      "rm": false,
+      "wwn": null,
+      "serial": "INSTALL-TARGET",
+      "size": 2000000000
+    }
+  ]
+}
+EOF
+"#,
+        );
+
+        let inspector = LinuxStorageInspector::new()
+            .with_command(lsblk)
+            .with_findmnt_command(findmnt);
+
+        let error = inspector
+            .inspect()
+            .expect_err("unresolved root device must fail closed");
+
+        assert!(
+            matches!(error, StorageInspectError::InvalidOutput(_)),
+            "unexpected error: {error:?}"
+        );
+
+        assert!(
+            error
+                .to_string()
+                .contains("no physical disk backs protected source"),
+            "unexpected error: {error:?}"
+        );
+    }
+
+    #[test]
+    fn protects_all_disks_backing_stacked_root() {
+        let (_findmnt_dir, findmnt) = command_script(
+            r#"#!/bin/sh
+case "$*" in
+  *"/run/live/medium"*) exit 1 ;;
+  *) echo '/dev/mapper/root' ;;
+esac
+"#,
+        );
+
+        let (_lsblk_dir, lsblk) = command_script(
+            r#"#!/bin/sh
+case "$*" in
+  *"PKNAME"*)
+    echo '/dev/md0'
+    ;;
+  *)
+    cat <<'EOF'
+{
+  "blockdevices": [
+    {
+      "path": "/dev/sda",
+      "type": "disk",
+      "rm": false,
+      "wwn": null,
+      "serial": "ROOT-A",
+      "size": 1000000000,
+      "children": [
+        {
+          "path": "/dev/sda1",
+          "type": "part",
+          "rm": false,
+          "wwn": null,
+          "serial": null,
+          "size": 900000000,
+          "children": [
+            {
+              "path": "/dev/md0",
+              "type": "raid1",
+              "rm": false,
+              "wwn": null,
+              "serial": null,
+              "size": 800000000,
+              "children": [
+                {
+                  "path": "/dev/mapper/root",
+                  "type": "crypt",
+                  "rm": false,
+                  "wwn": null,
+                  "serial": null,
+                  "size": 700000000
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "path": "/dev/sdb",
+      "type": "disk",
+      "rm": false,
+      "wwn": null,
+      "serial": "ROOT-B",
+      "size": 1000000000,
+      "children": [
+        {
+          "path": "/dev/sdb1",
+          "type": "part",
+          "rm": false,
+          "wwn": null,
+          "serial": null,
+          "size": 900000000,
+          "children": [
+            {
+              "path": "/dev/md0",
+              "type": "raid1",
+              "rm": false,
+              "wwn": null,
+              "serial": null,
+              "size": 800000000
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "path": "/dev/sdc",
+      "type": "disk",
+      "rm": false,
+      "wwn": null,
+      "serial": "INSTALL-TARGET",
+      "size": 2000000000
+    }
+  ]
+}
+EOF
+    ;;
+esac
+"#,
+        );
+
+        let inspector = LinuxStorageInspector::new()
+            .with_command(lsblk)
+            .with_findmnt_command(findmnt);
+
+        let disks = inspector
+            .inspect()
+            .expect("storage inspection should succeed");
+
+        assert_eq!(disks.len(), 3);
+        assert_eq!(disks[0].kind(), StorageKind::System);
+        assert_eq!(disks[1].kind(), StorageKind::System);
+        assert_eq!(disks[2].kind(), StorageKind::Secondary);
+    }
+
+    #[test]
+    fn allows_installation_target_when_live_medium_is_optical() {
+        let (_findmnt_dir, findmnt) = command_script(
+            r#"#!/bin/sh
+case "$*" in
+  *"/run/live/medium"*) echo '/dev/sr0' ;;
+  *) echo 'overlay' ;;
+esac
+"#,
+        );
+
+        let (_lsblk_dir, lsblk) = command_script(
+            r#"#!/bin/sh
+cat <<'EOF'
+{
+  "blockdevices": [
+    {
+      "path": "/dev/sr0",
+      "type": "rom",
+      "rm": true,
+      "wwn": null,
+      "serial": null,
+      "size": 4000000000
+    },
+    {
+      "path": "/dev/vda",
+      "type": "disk",
+      "rm": false,
+      "wwn": null,
+      "serial": "INSTALL-TARGET",
+      "size": 42949672960
+    }
+  ]
+}
+EOF
+"#,
+        );
+
+        let inspector = LinuxStorageInspector::new()
+            .with_command(lsblk)
+            .with_findmnt_command(findmnt);
+
+        let disks = inspector
+            .inspect()
+            .expect("optical live media should not block disk discovery");
+
+        assert_eq!(disks.len(), 1);
+        assert_eq!(disks[0].id().as_str(), "serial:INSTALL-TARGET");
+        assert_eq!(disks[0].kind(), StorageKind::Secondary);
+    }
+
+    #[test]
+    fn rejects_overlay_root_without_live_medium() {
+        let (_findmnt_dir, findmnt) = command_script(
+            r#"#!/bin/sh
+case "$*" in
+  *"/run/live/medium"*) exit 1 ;;
+  *) echo 'overlay' ;;
+esac
+"#,
+        );
+
+        let (_lsblk_dir, lsblk) = command_script(
+            r#"#!/bin/sh
+cat <<'EOF'
+{
+  "blockdevices": [
+    {
+      "path": "/dev/sda",
+      "type": "disk",
+      "rm": false,
+      "wwn": null,
+      "serial": "POTENTIAL-LIVE-DISK",
+      "size": 1000000000
+    }
+  ]
+}
+EOF
+"#,
+        );
+
+        let inspector = LinuxStorageInspector::new()
+            .with_command(lsblk)
+            .with_findmnt_command(findmnt);
+
+        let error = inspector
+            .inspect()
+            .expect_err("overlay root without identifiable boot media must fail closed");
+
+        assert!(
+            matches!(error, StorageInspectError::InvalidOutput(_)),
+            "unexpected error: {error:?}"
+        );
+    }
+
+    #[test]
+    fn protects_live_usb_while_preserving_installation_target() {
+        let (_findmnt_dir, findmnt) = command_script(
+            r#"#!/bin/sh
+case "$*" in
+  *"/run/live/medium"*) echo '/dev/sdc1' ;;
+  *) echo 'overlay' ;;
+esac
+"#,
+        );
+
+        let (_lsblk_dir, lsblk) = command_script(
+            r#"#!/bin/sh
+case "$*" in
+  *"PKNAME"*)
+    echo '/dev/sdc'
+    ;;
+  *)
+    cat <<'EOF'
+{
+  "blockdevices": [
+    {
+      "path": "/dev/sdc",
+      "type": "disk",
+      "rm": true,
+      "wwn": null,
+      "serial": "DAIA-LIVE",
+      "size": 16000000000,
+      "children": [
+        {
+          "path": "/dev/sdc1",
+          "type": "part",
+          "rm": true,
+          "wwn": null,
+          "serial": null,
+          "size": 15000000000
+        }
+      ]
+    },
+    {
+      "path": "/dev/vda",
+      "type": "disk",
+      "rm": false,
+      "wwn": null,
+      "serial": "INSTALL-TARGET",
+      "size": 42949672960
+    }
+  ]
+}
+EOF
+    ;;
+esac
+"#,
+        );
+
+        let inspector = LinuxStorageInspector::new()
+            .with_command(lsblk)
+            .with_findmnt_command(findmnt);
+
+        let disks = inspector
+            .inspect()
+            .expect("live disks should be discovered");
+
+        assert_eq!(disks.len(), 2);
+        assert_eq!(disks[0].kind(), StorageKind::System);
+        assert_eq!(disks[1].kind(), StorageKind::Secondary);
+    }
+
+    #[test]
+    fn rejects_live_medium_findmnt_diagnostic_failure() {
+        let (_findmnt_dir, findmnt) = command_script(
+            r#"#!/bin/sh
+case "$*" in
+  *"/run/live/medium"*)
+    echo 'live medium inspection failed' >&2
+    exit 1
+    ;;
+  *)
+    echo 'overlay'
+    ;;
+esac
+"#,
+        );
+
+        let inspector = LinuxStorageInspector::new().with_findmnt_command(findmnt);
+
+        let error = inspector
+            .inspect()
+            .expect_err("live-medium inspection failure must be rejected");
+
+        assert!(matches!(error, StorageInspectError::ProcessFailed { .. }));
+        assert!(error.to_string().contains("live medium inspection failed"));
+    }
+
+    #[test]
+    fn rejects_live_medium_with_missing_parent_disk() {
+        let (_findmnt_dir, findmnt) = command_script(
+            r#"#!/bin/sh
+case "$*" in
+  *"/run/live/medium"*) echo '/dev/sdc1' ;;
+  *) echo 'overlay' ;;
+esac
+"#,
+        );
+
+        let (_lsblk_dir, lsblk) = command_script(
+            r"#!/bin/sh
+exit 0
+",
+        );
+
+        let inspector = LinuxStorageInspector::new()
+            .with_command(lsblk)
+            .with_findmnt_command(findmnt);
+
+        let error = inspector
+            .inspect()
+            .expect_err("missing live-medium parent must fail inspection");
+
+        assert!(matches!(error, StorageInspectError::InvalidOutput(_)));
     }
 
     #[test]

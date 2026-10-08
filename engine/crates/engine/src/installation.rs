@@ -1,3 +1,4 @@
+use inspector::{LinuxStorageInspector, StorageInspector};
 use model::{DiscoveredStorage, DiscoveredStorageId, InstallationIntent, Plan, UserConfiguration};
 
 use std::{
@@ -274,6 +275,9 @@ pub enum InstallationOperation {
     },
     /// Create the partition layout on the selected disk.
     PartitionDisk {
+        /// Stable identifier of the selected physical storage.
+        storage_id: DiscoveredStorageId,
+
         /// Validated Linux device path for the selected storage.
         device_path: PathBuf,
 
@@ -619,7 +623,147 @@ impl InstallationCommandRunner for ProcessInstallationCommandRunner {
     }
 }
 
-pub struct SystemInstallationOperationExecutor<R, W = SystemInstallationFileWriter> {
+/// Confirms that a destructive operation still targets the selected disk.
+///
+/// This validation must be repeated immediately before each destructive
+/// operation. It does not eliminate device changes between inspection and
+/// command execution.
+fn validate_destructive_storage(
+    storage_id: &DiscoveredStorageId,
+    device_path: &std::path::Path,
+    discovered: &[model::DiscoveredStorage],
+) -> io::Result<()> {
+    let identity = storage_id.as_str();
+
+    let stable_identity = ["wwn:", "serial:"].iter().any(|prefix| {
+        identity
+            .strip_prefix(prefix)
+            .is_some_and(|value| !value.trim().is_empty())
+    });
+
+    if !stable_identity {
+        return Err(io::Error::other(
+            "destructive installation requires a stable disk identity",
+        ));
+    }
+
+    let mut matching = discovered
+        .iter()
+        .filter(|storage| storage.id() == storage_id);
+
+    let selected = matching
+        .next()
+        .ok_or_else(|| io::Error::other("selected disk is no longer discoverable"))?;
+
+    if matching.next().is_some() {
+        return Err(io::Error::other(
+            "selected disk identity matches multiple devices",
+        ));
+    }
+
+    if selected.device_path() != device_path {
+        return Err(io::Error::other("selected disk device path changed"));
+    }
+
+    if selected.kind() == model::StorageKind::System {
+        return Err(io::Error::other(
+            "refusing destructive installation on the system disk",
+        ));
+    }
+
+    Ok(())
+}
+
+#[cfg(test)]
+struct TestInstallationStorageInspector;
+
+#[cfg(test)]
+impl StorageInspector for TestInstallationStorageInspector {
+    fn inspect(&self) -> Result<Vec<DiscoveredStorage>, inspector::StorageInspectError> {
+        Ok(vec![
+            DiscoveredStorage::new("serial:usb-disk", model::StorageKind::Removable, "/dev/sdb"),
+            DiscoveredStorage::new(
+                "serial:test-disk",
+                model::StorageKind::Secondary,
+                "/dev/sdb",
+            ),
+        ])
+    }
+}
+
+#[cfg(test)]
+#[test]
+fn destructive_storage_validation_rejects_unsafe_targets() {
+    use model::StorageKind;
+
+    let id = DiscoveredStorageId::new("serial:test-disk");
+    let path = std::path::Path::new("/dev/sdb");
+
+    let safe = DiscoveredStorage::new("serial:test-disk", StorageKind::Secondary, "/dev/sdb");
+
+    assert!(validate_destructive_storage(&id, path, &[safe.clone()]).is_ok());
+
+    let cases = [
+        (
+            "missing disk",
+            id.clone(),
+            Vec::new(),
+            "no longer discoverable",
+        ),
+        (
+            "duplicate identity",
+            id.clone(),
+            vec![safe.clone(), safe.clone()],
+            "multiple devices",
+        ),
+        (
+            "changed path",
+            id.clone(),
+            vec![DiscoveredStorage::new(
+                "serial:test-disk",
+                StorageKind::Secondary,
+                "/dev/sdc",
+            )],
+            "device path changed",
+        ),
+        (
+            "system disk",
+            id.clone(),
+            vec![DiscoveredStorage::new(
+                "serial:test-disk",
+                StorageKind::System,
+                "/dev/sdb",
+            )],
+            "system disk",
+        ),
+        (
+            "path-only identity",
+            DiscoveredStorageId::new("path:/dev/sdb"),
+            vec![DiscoveredStorage::new(
+                "path:/dev/sdb",
+                StorageKind::Secondary,
+                "/dev/sdb",
+            )],
+            "stable disk identity",
+        ),
+    ];
+
+    for (name, selected_id, discovered, expected_message) in cases {
+        let error = validate_destructive_storage(&selected_id, path, &discovered).expect_err(name);
+
+        assert!(
+            error.to_string().contains(expected_message),
+            "{name}: unexpected error: {error}"
+        );
+    }
+}
+
+pub struct SystemInstallationOperationExecutor<
+    R,
+    W = SystemInstallationFileWriter,
+    S = LinuxStorageInspector,
+> {
+    storage_inspector: S,
     runner: R,
     file_writer: W,
     target_root: PathBuf,
@@ -630,13 +774,19 @@ pub struct SystemInstallationOperationExecutor<R, W = SystemInstallationFileWrit
 }
 
 #[cfg(test)]
-impl<R> SystemInstallationOperationExecutor<R, SystemInstallationFileWriter>
+impl<R>
+    SystemInstallationOperationExecutor<
+        R,
+        SystemInstallationFileWriter,
+        TestInstallationStorageInspector,
+    >
 where
     R: InstallationCommandRunner,
 {
     fn with_dependencies(runner: R) -> Self {
         Self {
             runner,
+            storage_inspector: TestInstallationStorageInspector,
             file_writer: SystemInstallationFileWriter,
             target_root: PathBuf::from("/target"),
             runtime_payload_directory: PathBuf::from(RUNTIME_PAYLOAD_DIRECTORY),
@@ -666,7 +816,7 @@ where
     }
 }
 
-impl<R, W> SystemInstallationOperationExecutor<R, W> {
+impl<R, W, S> SystemInstallationOperationExecutor<R, W, S> {
     /// Returns content realized during successful installation operations.
     #[must_use]
     pub fn imported_content(&self) -> &[model::ImportedContentItem] {
@@ -675,7 +825,7 @@ impl<R, W> SystemInstallationOperationExecutor<R, W> {
 }
 
 #[cfg(test)]
-impl<R, W> SystemInstallationOperationExecutor<R, W>
+impl<R, W> SystemInstallationOperationExecutor<R, W, TestInstallationStorageInspector>
 where
     R: InstallationCommandRunner,
     W: InstallationFileWriter,
@@ -683,6 +833,7 @@ where
     fn with_all_dependencies(runner: R, file_writer: W) -> Self {
         Self {
             runner,
+            storage_inspector: TestInstallationStorageInspector,
             file_writer,
             target_root: PathBuf::from("/target"),
             runtime_payload_directory: PathBuf::from(RUNTIME_PAYLOAD_DIRECTORY),
@@ -704,6 +855,7 @@ impl
     pub fn new(root_password: String, administrator_password: String) -> Self {
         Self {
             runner: ProcessInstallationCommandRunner,
+            storage_inspector: LinuxStorageInspector::new(),
             file_writer: SystemInstallationFileWriter,
             target_root: PathBuf::from("/target"),
             runtime_payload_directory: PathBuf::from(RUNTIME_PAYLOAD_DIRECTORY),
@@ -714,16 +866,39 @@ impl
     }
 }
 
-impl<R, W> InstallationOperationExecutor for SystemInstallationOperationExecutor<R, W>
+impl<R, W, S> SystemInstallationOperationExecutor<R, W, S>
+where
+    S: StorageInspector,
+{
+    fn validate_disk(
+        &self,
+        storage_id: &DiscoveredStorageId,
+        device_path: &std::path::Path,
+    ) -> io::Result<()> {
+        let discovered = self
+            .storage_inspector
+            .inspect()
+            .map_err(|error| io::Error::other(error.to_string()))?;
+
+        validate_destructive_storage(storage_id, device_path, &discovered)
+    }
+}
+
+impl<R, W, S> InstallationOperationExecutor for SystemInstallationOperationExecutor<R, W, S>
 where
     R: InstallationCommandRunner,
     W: InstallationFileWriter,
+    S: StorageInspector,
 {
     type Error = io::Error;
 
     fn execute_operation(&mut self, operation: &InstallationOperation) -> Result<(), Self::Error> {
         match operation {
-            InstallationOperation::PrepareDisk { device_path, .. } => {
+            InstallationOperation::PrepareDisk {
+                storage_id,
+                device_path,
+            } => {
+                self.validate_disk(storage_id, device_path)?;
                 let mut command = Command::new("wipefs");
 
                 command.arg("--all").arg(device_path);
@@ -731,9 +906,11 @@ where
                 self.runner.status(&mut command)
             }
             InstallationOperation::PartitionDisk {
+                storage_id,
                 device_path,
                 partitions,
             } => {
+                self.validate_disk(storage_id, device_path)?;
                 let efi_partition = partitions
                     .iter()
                     .find(|partition| partition.role() == InstallationPartitionRole::EfiSystem)
@@ -1241,10 +1418,11 @@ where
     }
 }
 
-impl<R, W> InstallationExecutor for SystemInstallationOperationExecutor<R, W>
+impl<R, W, S> InstallationExecutor for SystemInstallationOperationExecutor<R, W, S>
 where
     R: InstallationCommandRunner,
     W: InstallationFileWriter,
+    S: StorageInspector,
 {
     type Error = io::Error;
 
@@ -1351,6 +1529,7 @@ impl PreparedInstallation {
                 device_path: self.storage.device_path().to_path_buf(),
             },
             InstallationOperation::PartitionDisk {
+                storage_id: self.intent.storage_id().clone(),
                 device_path: self.storage.device_path().to_path_buf(),
                 partitions: default_installation_partitions(),
             },
@@ -3739,6 +3918,7 @@ mod tests {
             RecordingCommandRunner::default(),
         );
         let operation = InstallationOperation::PartitionDisk {
+            storage_id: DiscoveredStorageId::new("serial:test-disk"),
             device_path: "/dev/sdb".into(),
             partitions: vec![
                 InstallationPartition::new(InstallationPartitionRole::EfiSystem, "fat32", Some(0)),
@@ -3763,6 +3943,7 @@ mod tests {
             RecordingCommandRunner::default(),
         );
         let operation = InstallationOperation::PartitionDisk {
+            storage_id: DiscoveredStorageId::new("serial:test-disk"),
             device_path: "/dev/sdb".into(),
             partitions: vec![
                 InstallationPartition::new(InstallationPartitionRole::EfiSystem, "fat32", None),
@@ -3783,6 +3964,7 @@ mod tests {
             RecordingCommandRunner::default(),
         );
         let operation = InstallationOperation::PartitionDisk {
+            storage_id: DiscoveredStorageId::new("serial:test-disk"),
             device_path: "/dev/sdb".into(),
             partitions: vec![InstallationPartition::new(
                 InstallationPartitionRole::Root,
@@ -3804,6 +3986,7 @@ mod tests {
             RecordingCommandRunner::default(),
         );
         let operation = InstallationOperation::PartitionDisk {
+            storage_id: DiscoveredStorageId::new("serial:test-disk"),
             device_path: "/dev/sdb".into(),
             partitions: vec![InstallationPartition::new(
                 InstallationPartitionRole::EfiSystem,
@@ -4065,6 +4248,120 @@ mod tests {
         );
         assert!(executor.runner.commands.is_empty());
     }
+    struct ControlledStorageInspector {
+        discovered: Vec<DiscoveredStorage>,
+        fail: bool,
+    }
+
+    impl inspector::StorageInspector for ControlledStorageInspector {
+        fn inspect(&self) -> Result<Vec<DiscoveredStorage>, inspector::StorageInspectError> {
+            if self.fail {
+                return Err(inspector::StorageInspectError::Io(io::Error::other(
+                    "simulated inspection failure",
+                )));
+            }
+
+            Ok(self.discovered.clone())
+        }
+    }
+
+    #[test]
+    fn destructive_operations_issue_no_commands_for_unsafe_storage() {
+        use model::StorageKind;
+
+        let safe = DiscoveredStorage::new("serial:test-disk", StorageKind::Secondary, "/dev/sdb");
+
+        let cases = [
+            ("missing disk", vec![], false, "serial:test-disk"),
+            (
+                "duplicate identity",
+                vec![safe.clone(), safe.clone()],
+                false,
+                "serial:test-disk",
+            ),
+            (
+                "changed path",
+                vec![DiscoveredStorage::new(
+                    "serial:test-disk",
+                    StorageKind::Secondary,
+                    "/dev/sdc",
+                )],
+                false,
+                "serial:test-disk",
+            ),
+            (
+                "system disk",
+                vec![DiscoveredStorage::new(
+                    "serial:test-disk",
+                    StorageKind::System,
+                    "/dev/sdb",
+                )],
+                false,
+                "serial:test-disk",
+            ),
+            (
+                "path-only identity",
+                vec![DiscoveredStorage::new(
+                    "path:/dev/sdb",
+                    StorageKind::Secondary,
+                    "/dev/sdb",
+                )],
+                false,
+                "path:/dev/sdb",
+            ),
+            ("inspection failure", vec![safe], true, "serial:test-disk"),
+        ];
+
+        for (name, discovered, fail, identity) in cases {
+            for partition_disk in [false, true] {
+                let executor = SystemInstallationOperationExecutor::with_dependencies(
+                    RecordingCommandRunner::default(),
+                );
+
+                // Replace the test inspector with a controlled inspector.
+                let mut executor = SystemInstallationOperationExecutor {
+                    runner: executor.runner,
+                    storage_inspector: ControlledStorageInspector {
+                        discovered: discovered.clone(),
+                        fail,
+                    },
+                    file_writer: executor.file_writer,
+                    target_root: executor.target_root,
+                    runtime_payload_directory: executor.runtime_payload_directory,
+                    imported_content: executor.imported_content,
+                    root_password: executor.root_password,
+                    administrator_password: executor.administrator_password,
+                };
+
+                let operation = if partition_disk {
+                    InstallationOperation::PartitionDisk {
+                        storage_id: DiscoveredStorageId::new(identity),
+                        device_path: "/dev/sdb".into(),
+                        partitions: default_installation_partitions(),
+                    }
+                } else {
+                    InstallationOperation::PrepareDisk {
+                        storage_id: DiscoveredStorageId::new(identity),
+                        device_path: "/dev/sdb".into(),
+                    }
+                };
+
+                let result = executor.execute_operation(&operation);
+
+                assert!(
+                    result.is_err(),
+                    "{name}: unsafe operation unexpectedly succeeded"
+                );
+
+                assert!(
+                    executor.runner.commands.is_empty(),
+                    "{name}: destructive command was issued: {:?}",
+                    executor.runner.commands
+                );
+            }
+        }
+    }
+
     #[test]
     fn system_executor_sends_wipefs_command_for_prepare_disk() {
         let mut executor = SystemInstallationOperationExecutor::with_dependencies(
@@ -4109,6 +4406,7 @@ mod tests {
             SystemInstallationOperationExecutor::with_dependencies(FailingCommandRunner);
 
         let operation = InstallationOperation::PartitionDisk {
+            storage_id: DiscoveredStorageId::new("serial:test-disk"),
             device_path: "/dev/sdb".into(),
             partitions: default_installation_partitions(),
         };
@@ -4126,6 +4424,7 @@ mod tests {
             RecordingCommandRunner::default(),
         );
         let operation = InstallationOperation::PartitionDisk {
+            storage_id: DiscoveredStorageId::new("serial:test-disk"),
             device_path: "/dev/sdb".into(),
             partitions: default_installation_partitions(),
         };
@@ -4165,6 +4464,7 @@ mod tests {
             RecordingCommandRunner::default(),
         );
         let operation = InstallationOperation::PartitionDisk {
+            storage_id: DiscoveredStorageId::new("serial:test-disk"),
             device_path: "/dev/sdb".into(),
             partitions: vec![
                 InstallationPartition::new(
