@@ -1292,8 +1292,8 @@ fn render(frame: &mut ratatui::Frame<'_>, state: &TuiState) {
             let back_marker = if state.localization_field == 5 { ">" } else { " " };
 
             format!(
-                "Localization\\n\\n{}\\n\\n{continue_marker} Continue\\n{back_marker} Back",
-                rows.join("\\n")
+                "Localization\n\n{}\n\n{continue_marker} Continue\n{back_marker} Back",
+                rows.join("\n")
             )
         }
         WizardScreen::HardwareCheck => {
@@ -2397,6 +2397,74 @@ mod tests {
         assert!(rendered.contains("review-admin"));
         assert!(rendered.contains("Review Administrator"));
         assert!(rendered.contains("Root and administrator passwords are configured"));
+    }
+
+    #[test]
+    fn localization_screen_renders_separate_lines() {
+        let mut state = TuiState::new();
+        state.screen = WizardScreen::Localization;
+
+        let backend = TestBackend::new(120, 40);
+        let mut terminal = Terminal::new(backend).expect("test terminal should be created");
+
+        terminal
+            .draw(|frame| render(frame, &state))
+            .expect("localization screen should render");
+
+        let buffer = terminal.backend().buffer();
+
+        let lines: Vec<String> = (0..buffer.area.height)
+            .map(|y| {
+                (0..buffer.area.width)
+                    .map(|x| buffer[(x, y)].symbol())
+                    .collect::<String>()
+            })
+            .collect();
+
+        let rendered = lines.join("\n");
+
+        for label in [
+            "Language:",
+            "Country / Region:",
+            "Locale:",
+            "Keyboard:",
+            "Continue",
+            "Back",
+        ] {
+            assert!(
+                lines.iter().any(|line| line.contains(label)),
+                "missing localization line: {label}"
+            );
+        }
+
+        assert!(
+            !rendered.contains(r"\n"),
+            "localization screen contains literal newline escapes"
+        );
+
+        let language_line = lines
+            .iter()
+            .position(|line| line.contains("Language:"))
+            .expect("language line");
+
+        let country_line = lines
+            .iter()
+            .position(|line| line.contains("Country / Region:"))
+            .expect("country line");
+
+        let locale_line = lines
+            .iter()
+            .position(|line| line.contains("Locale:"))
+            .expect("locale line");
+
+        let keyboard_line = lines
+            .iter()
+            .position(|line| line.contains("Keyboard:"))
+            .expect("keyboard line");
+
+        assert!(language_line < country_line);
+        assert!(country_line < locale_line);
+        assert!(locale_line < keyboard_line);
     }
 
     #[test]
