@@ -576,6 +576,7 @@ pub struct ProcessInstallationCommandRunner;
 
 impl InstallationCommandRunner for ProcessInstallationCommandRunner {
     fn status(&mut self, command: &mut Command) -> io::Result<()> {
+        command.stdin(Stdio::null());
         let status = command.status()?;
 
         if status.success() {
@@ -4219,6 +4220,24 @@ mod tests {
         assert_eq!(partitions[1].role(), InstallationPartitionRole::Root);
         assert_eq!(partitions[1].filesystem(), "ext4");
         assert_eq!(partitions[1].size_mib(), None);
+    }
+
+    #[test]
+    fn process_command_runner_does_not_inherit_standard_input() {
+        let input = tempfile::NamedTempFile::new().expect("create input fixture");
+        std::fs::write(input.path(), b"unexpected-input\n").expect("write input fixture");
+
+        let mut runner = ProcessInstallationCommandRunner;
+        let mut command = Command::new("/bin/sh");
+
+        command
+            .arg("-c")
+            .arg("if IFS= read -r line; then exit 1; else exit 0; fi")
+            .stdin(std::fs::File::open(input.path()).expect("open input fixture"));
+
+        runner
+            .status(&mut command)
+            .expect("installation runner must override inherited standard input");
     }
 
     #[test]
