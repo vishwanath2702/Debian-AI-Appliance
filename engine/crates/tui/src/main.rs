@@ -1805,8 +1805,18 @@ fn render(frame: &mut ratatui::Frame<'_>, state: &TuiState) {
                 .to_owned()
         }
         WizardScreen::InstallationComplete => {
-            "Installation Complete\n\n             DAIA was installed successfully.\n\n             Press Enter to exit the installer."
-                .to_owned()
+            let error = state
+                .review_error
+                .as_deref()
+                .map(|error| format!("\n\nReboot error: {error}"))
+                .unwrap_or_default();
+
+            format!(
+                "Installation Complete\n\n\
+                 DAIA was installed successfully.\n\n\
+                 Remove installation media before rebooting.\n\n\
+                 Press R to reboot or Enter to exit.{error}"
+            )
         }
         WizardScreen::InstallationFailed => {
             let error = state
@@ -1843,7 +1853,8 @@ fn render(frame: &mut ratatui::Frame<'_>, state: &TuiState) {
         }
         WizardScreen::ConfirmInstallation => "↑ / ↓: Navigate    Enter: Select    Esc: Back",
         WizardScreen::Installing => "Installation in progress",
-        WizardScreen::InstallationComplete | WizardScreen::InstallationFailed => "Enter: Exit",
+        WizardScreen::InstallationComplete => "R: Reboot    Enter: Exit",
+        WizardScreen::InstallationFailed => "Enter: Exit",
         _ => "↑ / ↓: Navigate    Enter: Select    Esc: Back",
     };
 
@@ -1887,6 +1898,24 @@ impl Drop for TerminalSession {
         let _ = execute!(self.terminal.backend_mut(), LeaveAlternateScreen);
         let _ = self.terminal.show_cursor();
     }
+}
+
+fn request_reboot_with(
+    mut run_command: impl FnMut(&mut std::process::Command) -> io::Result<std::process::ExitStatus>,
+) -> io::Result<()> {
+    let status = run_command(std::process::Command::new("systemctl").arg("reboot"))?;
+
+    if status.success() {
+        Ok(())
+    } else {
+        Err(io::Error::other(format!(
+            "systemctl reboot exited with {status}"
+        )))
+    }
+}
+
+fn request_reboot() -> io::Result<()> {
+    request_reboot_with(|command| command.status())
 }
 
 fn run() -> io::Result<()> {
@@ -1957,6 +1986,7 @@ fn run() -> io::Result<()> {
                 continue;
             }
 
+            state.review_error = None;
             state.screen = WizardScreen::InstallationComplete;
             continue;
         }
@@ -2009,6 +2039,14 @@ fn run() -> io::Result<()> {
             }
             KeyCode::Up if state.screen == WizardScreen::Welcome => {
                 state.previous_welcome_action();
+            }
+            KeyCode::Char('r' | 'R') if state.screen == WizardScreen::InstallationComplete => {
+                state.review_error = None;
+
+                match request_reboot() {
+                    Ok(()) => break Ok(()),
+                    Err(error) => state.review_error = Some(error.to_string()),
+                }
             }
             KeyCode::Enter
                 if matches!(
@@ -2163,6 +2201,8 @@ fn main() -> io::Result<()> {
 
 #[cfg(test)]
 mod tests {
+    use super::request_reboot_with;
+
     use super::{
         AdministratorField, ApplianceIdentityField, ExternalContentFocus, HardwareSummary,
         InstallationAction, RootCredentialsField, ScreenAction, TuiState, WelcomeAction,
@@ -2535,6 +2575,27 @@ mod tests {
         assert_ne!(state.localization_indices[3], original);
         state.cycle_localization_option(false);
         assert_eq!(state.localization_indices[3], original);
+    }
+
+    #[test]
+    fn reboot_request_accepts_successful_command() {
+        let result = request_reboot_with(|command| {
+            assert_eq!(command.get_program(), "systemctl");
+            assert_eq!(
+                command.get_args().collect::<Vec<_>>(),
+                vec![std::ffi::OsStr::new("reboot")]
+            );
+            std::process::Command::new("true").status()
+        });
+
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn reboot_request_reports_failed_command() {
+        let result = request_reboot_with(|_| std::process::Command::new("false").status());
+
+        assert!(result.is_err());
     }
 
     #[test]
