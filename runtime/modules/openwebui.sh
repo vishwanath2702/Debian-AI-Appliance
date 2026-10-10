@@ -32,7 +32,7 @@ openwebui_install() {
     local image_file="${payload_root}/images/open-webui.tar"
     local container_name="${DAIA_OPEN_WEBUI_CONTAINER:-open-webui}"
     local volume_name="${DAIA_OPEN_WEBUI_VOLUME:-open-webui}"
-    local ollama_url="${DAIA_OPEN_WEBUI_OLLAMA_URL:-http://host.docker.internal:11434}"
+    local ollama_url="${DAIA_OPEN_WEBUI_OLLAMA_URL:-http://127.0.0.1:11434}"
 
     openwebui_validate || return 1
 
@@ -71,8 +71,8 @@ openwebui_install() {
 
     if ! docker run \
         --detach \
-        --publish 3000:8080 \
-        --add-host=host.docker.internal:host-gateway \
+        --network host \
+        --env "PORT=3000" \
         --volume "${volume_name}:/app/backend/data" \
         --env "OLLAMA_BASE_URL=${ollama_url}" \
         --name "$container_name" \
@@ -108,7 +108,7 @@ openwebui_verify() {
     if ! docker inspect \
         -f '{{range .Config.Env}}{{println .}}{{end}}' \
         "$container_name" |
-        grep -Fxq "OLLAMA_BASE_URL=${DAIA_OPEN_WEBUI_OLLAMA_URL:-http://host.docker.internal:11434}"
+        grep -Fxq "OLLAMA_BASE_URL=${DAIA_OPEN_WEBUI_OLLAMA_URL:-http://127.0.0.1:11434}"
     then
         echo "Open WebUI Ollama connection is not configured correctly" >&2
         return 1

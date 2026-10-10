@@ -15,6 +15,7 @@ use model::{
 use registry::{ContentRepositoryRepository, PackageRepository};
 use std::env;
 use std::io::{self, Write};
+use std::path::Path;
 use std::path::PathBuf;
 use std::process::ExitCode;
 mod appliance_profile_repository;
@@ -310,6 +311,41 @@ fn run_model_add() -> ExitCode {
 
 fn run(arguments: &[String]) -> ExitCode {
     match arguments {
+        [command, operation, rootfs, payload, workspace, output_iso]
+            if command == "iso-refresh" && operation == "stage" =>
+        {
+            run_iso_refresh_stage(rootfs, payload, workspace, output_iso)
+        }
+        [
+            command,
+            operation,
+            rootfs,
+            payload,
+            workspace,
+            output_iso,
+            cli_binary,
+            tui_binary,
+            firstboot_service,
+        ] if command == "iso-refresh" && operation == "deploy" => run_iso_refresh_deploy(
+            rootfs,
+            payload,
+            workspace,
+            output_iso,
+            cli_binary,
+            tui_binary,
+            firstboot_service,
+        ),
+        [
+            command,
+            operation,
+            rootfs,
+            payload,
+            workspace,
+            output_iso,
+            source_iso,
+        ] if command == "iso-refresh" && operation == "package" => {
+            run_iso_refresh_package(rootfs, payload, workspace, output_iso, source_iso)
+        }
         [command] if command == "wizard" => run_wizard(),
         [command] if command == "install" => run_install(),
         [command] if command == "realize-models" => run_realize_models(),
@@ -341,6 +377,89 @@ fn run(arguments: &[String]) -> ExitCode {
         }
     }
 }
+fn run_iso_refresh_stage(
+    rootfs: &str,
+    payload: &str,
+    workspace: &str,
+    output_iso: &str,
+) -> ExitCode {
+    let inputs = engine::IsoRefreshInputs {
+        rootfs: PathBuf::from(rootfs),
+        payload: PathBuf::from(payload),
+        workspace: PathBuf::from(workspace),
+        output_iso: PathBuf::from(output_iso),
+    };
+
+    if let Err(error) = inputs.stage() {
+        eprintln!("ISO refresh staging failed: {error}");
+        return ExitCode::FAILURE;
+    }
+
+    println!(
+        "ISO refresh candidate staged at {}",
+        inputs.workspace.display()
+    );
+    ExitCode::SUCCESS
+}
+
+fn run_iso_refresh_deploy(
+    rootfs: &str,
+    payload: &str,
+    workspace: &str,
+    output_iso: &str,
+    cli_binary: &str,
+    tui_binary: &str,
+    firstboot_service: &str,
+) -> ExitCode {
+    let inputs = engine::IsoRefreshInputs {
+        rootfs: PathBuf::from(rootfs),
+        payload: PathBuf::from(payload),
+        workspace: PathBuf::from(workspace),
+        output_iso: PathBuf::from(output_iso),
+    };
+
+    if let Err(error) = inputs.deploy_artifacts(
+        Path::new(cli_binary),
+        Path::new(tui_binary),
+        Path::new(firstboot_service),
+    ) {
+        eprintln!("ISO refresh deployment failed: {error}");
+        return ExitCode::FAILURE;
+    }
+
+    println!(
+        "ISO refresh artifacts deployed to {}",
+        inputs.workspace.display()
+    );
+    ExitCode::SUCCESS
+}
+
+fn run_iso_refresh_package(
+    rootfs: &str,
+    payload: &str,
+    workspace: &str,
+    output_iso: &str,
+    source_iso: &str,
+) -> ExitCode {
+    let inputs = engine::IsoRefreshInputs {
+        rootfs: PathBuf::from(rootfs),
+        payload: PathBuf::from(payload),
+        workspace: PathBuf::from(workspace),
+        output_iso: PathBuf::from(output_iso),
+    };
+
+    if let Err(error) = inputs.package_candidate(Path::new(source_iso)) {
+        eprintln!("ISO refresh packaging failed: {error}");
+        return ExitCode::FAILURE;
+    }
+
+    println!(
+        "ISO refresh candidate packaged at {}",
+        inputs.output_iso.display()
+    );
+    ExitCode::SUCCESS
+}
+
 fn run_profile_plan(profile_name: &str) -> ExitCode {
     let Some(engine) = load_engine() else {
         return ExitCode::FAILURE;
@@ -494,6 +613,15 @@ fn print_plan(plan: &Plan) {
 
 fn print_usage() {
     eprintln!("Usage:");
+    eprintln!(
+        "    daia iso-refresh stage <rootfs> <payload> <candidate-workspace> <candidate-iso>"
+    );
+    eprintln!(
+        "    daia iso-refresh deploy <rootfs> <payload> <candidate-workspace> <candidate-iso> <cli-binary> <tui-binary> <firstboot-service>"
+    );
+    eprintln!(
+        "    daia iso-refresh package <rootfs> <payload> <candidate-workspace> <candidate-iso> <source-iso>"
+    );
     eprintln!("    daia install");
     eprintln!("    daia realize-models");
     eprintln!("    daia <capability>");

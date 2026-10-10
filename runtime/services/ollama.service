@@ -9,6 +9,7 @@ Group=ollama
 StateDirectory=ollama
 Environment=HOME=/var/lib/ollama
 Environment=OLLAMA_MODELS=/var/lib/ollama/models
+Environment=OLLAMA_HOST=127.0.0.1:11434
 Restart=always
 RestartSec=3
 

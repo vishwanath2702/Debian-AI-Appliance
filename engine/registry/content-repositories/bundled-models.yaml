@@ -1,0 +1,5 @@
+- id: bundled-models
+  description: AI models bundled with the DAIA installation media
+  sources:
+    - id: bundled-models-directory
+      locator: /run/live/medium/daia/opt/daia/payload/models

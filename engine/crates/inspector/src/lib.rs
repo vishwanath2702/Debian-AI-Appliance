@@ -2,6 +2,7 @@
 
 mod content;
 mod content_error;
+mod daia_live;
 mod debian;
 mod error;
 mod gguf;
@@ -22,6 +23,7 @@ use model::DiscoveredStorage;
 
 pub use content::ContentInspector;
 pub use content_error::ContentInspectError;
+pub use daia_live::DaiaLiveIsoInspector;
 pub use debian::{DebianIsoInspector, parse_disk_info};
 pub use error::InspectError;
 pub use gguf::{GgufMetadata, inspect_gguf};

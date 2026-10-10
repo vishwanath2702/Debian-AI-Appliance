@@ -145,6 +145,13 @@ kernel_command_line:
         self.squashfs = config;
         self
     }
+    /// Includes a prepared DAIA payload directory in the generated ISO.
+    #[must_use]
+    pub fn with_daia_payload_directory(mut self, directory: impl Into<PathBuf>) -> Self {
+        self.daia_payload_directory = Some(directory.into());
+        self
+    }
+
     /// Uses a custom ISO inspector.
     #[must_use]
     pub fn with_iso_inspector(mut self, inspector: impl IsoInspector + 'static) -> Self {

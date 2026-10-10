@@ -136,7 +136,6 @@ struct TuiState {
     selected_external_content_index: usize,
     pending_external_content: Vec<model::ExternalContentItemId>,
     pending_model_names: Vec<(model::ExternalContentItemId, String)>,
-    pending_model_name_index: Option<usize>,
     external_content_error: Option<String>,
     external_content_focus: ExternalContentFocus,
     appliance_hostname: String,
@@ -167,7 +166,13 @@ impl TuiState {
             .map(|repository| repository.profiles().to_vec())
             .unwrap_or_default();
 
-        let content_repositories = load_content_repositories().unwrap_or_default();
+        // Fresh installation offers bundled content only.
+        // Recovery-specific repositories remain available to a separate workflow.
+        let content_repositories = load_content_repositories()
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|repository| repository.id().as_str() == "bundled-models")
+            .collect();
 
         let mut wizard = WizardState::new();
         wizard.set_content_repositories(content_repositories);
@@ -184,7 +189,6 @@ impl TuiState {
             selected_external_content_index: 0,
             pending_external_content: Vec::new(),
             pending_model_names: Vec::new(),
-            pending_model_name_index: None,
             external_content_error: None,
             external_content_focus: ExternalContentFocus::ContinueWithoutLocalContent,
             appliance_hostname: String::new(),
@@ -322,6 +326,15 @@ impl TuiState {
         };
 
         let repository_id = repository.id().clone();
+
+        // Fresh installation must not discover models on external storage.
+        // External repositories belong to the explicit recovery workflow.
+        if repository_id.as_str() != "bundled-models" {
+            self.external_content_error =
+                Some("Fresh installation supports bundled models only.".to_owned());
+            return;
+        }
+
         let engine = Engine::from_registry(registry::Registry::default());
         let inspector = LocalFilesystemContentInspector::new();
 
@@ -989,7 +1002,6 @@ impl TuiState {
             ExternalContentFocus::SaveAndContinue => {
                 self.external_content_error = None;
                 self.pending_model_names.clear();
-                self.pending_model_name_index = None;
 
                 if self.pending_external_content.is_empty() {
                     self.wizard.select_external_content(Vec::new());
@@ -1014,8 +1026,45 @@ impl TuiState {
 
                     match engine.inspect_external_model(item) {
                         Ok(Some(_)) => {
-                            self.pending_model_names
-                                .push((item.id().clone(), String::new()));
+                            let Some(stem) =
+                                item.path().file_stem().and_then(|value| value.to_str())
+                            else {
+                                self.external_content_error =
+                                    Some("Selected model has no valid filename.".to_owned());
+                                self.pending_model_names.clear();
+                                return;
+                            };
+
+                            let name = stem
+                                .to_ascii_lowercase()
+                                .chars()
+                                .map(|character| {
+                                    if character.is_ascii_alphanumeric()
+                                        || matches!(character, '-' | '_' | '.')
+                                    {
+                                        character
+                                    } else {
+                                        '-'
+                                    }
+                                })
+                                .collect::<String>();
+
+                            if name.is_empty()
+                                || !name
+                                    .chars()
+                                    .any(|character| character.is_ascii_alphanumeric())
+                                || self
+                                    .pending_model_names
+                                    .iter()
+                                    .any(|(_, existing)| existing == &name)
+                            {
+                                self.external_content_error =
+                                    Some(format!("Invalid or duplicate model identifier: {name}"));
+                                self.pending_model_names.clear();
+                                return;
+                            }
+
+                            self.pending_model_names.push((item.id().clone(), name));
                         }
                         Ok(None) => {}
                         Err(error) => {
@@ -1029,95 +1078,38 @@ impl TuiState {
                     }
                 }
 
-                if self.pending_model_names.is_empty() {
-                    self.wizard
-                        .select_external_content(self.pending_external_content.clone());
-                    self.wizard.set_model_realization_intents(Vec::new());
-                    self.enter_storage();
-                } else {
-                    self.pending_model_name_index = Some(0);
-                }
+                let realization_intents = self
+                    .pending_model_names
+                    .iter()
+                    .map(|(item_id, name)| {
+                        model::ModelRealizationIntent::new(
+                            model::ModelRealizationId::new(name),
+                            model::InferenceEngineId::ollama(),
+                            item_id.clone(),
+                        )
+                    })
+                    .collect::<Vec<_>>();
+
+                self.wizard
+                    .select_external_content(self.pending_external_content.clone());
+                self.wizard
+                    .set_model_realization_intents(realization_intents);
+                self.enter_storage();
             }
             ExternalContentFocus::ContinueWithoutLocalContent => {
+                // Optional models may be installed later. Never carry a
+                // previously selected model into firstboot after skipping.
                 self.pending_external_content.clear();
+                self.pending_model_names.clear();
                 self.wizard.select_external_content(Vec::new());
+                self.wizard.set_model_realization_intents(Vec::new());
+                self.external_content_error = None;
                 self.enter_storage();
             }
             ExternalContentFocus::Back => {
                 self.previous_screen();
             }
         }
-    }
-
-    fn push_external_model_name_character(&mut self, character: char) {
-        let Some(index) = self.pending_model_name_index else {
-            return;
-        };
-
-        if let Some((_, name)) = self.pending_model_names.get_mut(index) {
-            name.push(character);
-            self.external_content_error = None;
-        }
-    }
-
-    fn pop_external_model_name_character(&mut self) {
-        let Some(index) = self.pending_model_name_index else {
-            return;
-        };
-
-        if let Some((_, name)) = self.pending_model_names.get_mut(index) {
-            name.pop();
-            self.external_content_error = None;
-        }
-    }
-
-    fn cancel_external_model_naming(&mut self) {
-        self.pending_model_names.clear();
-        self.pending_model_name_index = None;
-        self.external_content_error = None;
-        self.external_content_focus = ExternalContentFocus::SaveAndContinue;
-    }
-
-    fn confirm_external_model_name(&mut self) {
-        let Some(index) = self.pending_model_name_index else {
-            return;
-        };
-
-        let Some((_, name)) = self.pending_model_names.get(index) else {
-            return;
-        };
-
-        if name.trim().is_empty() {
-            self.external_content_error = Some("DAIA model name cannot be empty.".to_owned());
-            return;
-        }
-
-        if index + 1 < self.pending_model_names.len() {
-            self.pending_model_name_index = Some(index + 1);
-            self.external_content_error = None;
-            return;
-        }
-
-        let realization_intents = self
-            .pending_model_names
-            .iter()
-            .map(|(item_id, name)| {
-                model::ModelRealizationIntent::new(
-                    model::ModelRealizationId::new(name.trim()),
-                    model::InferenceEngineId::ollama(),
-                    item_id.clone(),
-                )
-            })
-            .collect::<Vec<_>>();
-
-        self.wizard
-            .select_external_content(self.pending_external_content.clone());
-        self.wizard
-            .set_model_realization_intents(realization_intents);
-
-        self.pending_model_name_index = None;
-        self.external_content_error = None;
-        self.enter_storage();
     }
 
     fn previous_screen(&mut self) {
@@ -1454,30 +1446,6 @@ fn render(frame: &mut ratatui::Frame<'_>, state: &TuiState) {
             }
         }
         WizardScreen::ExternalContent => {
-            if let Some(model_index) = state.pending_model_name_index {
-                let (item_id, model_name) = &state.pending_model_names[model_index];
-
-                let path = state
-                    .wizard
-                    .external_content_items()
-                    .iter()
-                    .find(|item| item.id() == item_id)
-                    .map(|item| item.path().display().to_string())
-                    .unwrap_or_else(|| item_id.to_string());
-
-                let error = state
-                    .external_content_error
-                    .as_deref()
-                    .map_or(String::new(), |error| {
-                        format!("\n\n                     Error: {error}")
-                    });
-
-                format!(
-                    "External Content\n\n                     Configure selected model {} of {}\n\n                     Model: {path}\n                     DAIA model name: {model_name}\n\n                     Enter: Save model name\n                     Esc: Return to content selection{error}",
-                    model_index + 1,
-                    state.pending_model_names.len(),
-                )
-            } else {
                 let continue_marker = if state.external_content_focus
                     == ExternalContentFocus::ContinueWithoutLocalContent
                 {
@@ -1500,7 +1468,7 @@ fn render(frame: &mut ratatui::Frame<'_>, state: &TuiState) {
 
                 if state.wizard.external_content_items().is_empty() {
                     format!(
-                        "External Content\n\n                     No local content was discovered.\n\n                     {continue_marker} Continue without local content\n                     {back_marker} Back\n\n                     Models and other content can be added after installation.{error}"
+                        "Bundled Models\n\n                     No bundled models were found on the installation media.\n\n                     {continue_marker} Skip — Install Later\n                     {back_marker} Back\n\n                     Models and other content can be added after installation.{error}"
                     )
                 } else {
                     let items = state
@@ -1540,10 +1508,9 @@ fn render(frame: &mut ratatui::Frame<'_>, state: &TuiState) {
                         };
 
                     format!(
-                        "External Content\n\n                     Content discovered in the selected repository:\n\n                     {items}\n\n                     {save_marker} Save and Continue\n                     {continue_marker} Continue without local content\n                     {back_marker} Back\n\n                     Space toggles the highlighted content. Models and other content can also be added after installation.{error}"
+                        "Bundled Models\n\n                     Models available on the installation media:\n\n                     {items}\n\n                     {save_marker} Install Now\n                     {continue_marker} Skip — Install Later\n                     {back_marker} Back\n\n                     Space toggles the highlighted content. Models and other content can also be added after installation.{error}"
                     )
                 }
-            }
         }
         WizardScreen::ApplianceIdentity => {
             let hostname = if state.appliance_hostname.is_empty() {
@@ -1871,9 +1838,6 @@ fn render(frame: &mut ratatui::Frame<'_>, state: &TuiState) {
         WizardScreen::Localization => {
             "↑ / ↓: Fields    ← / →: Change selection    Enter: Select    Esc: Back"
         }
-        WizardScreen::ExternalContent if state.pending_model_name_index.is_some() => {
-            "Type: Model name    Enter: Save    Backspace: Edit    Esc: Cancel"
-        }
         WizardScreen::ExternalContent if !state.wizard.external_content_items().is_empty() => {
             "↑ / ↓: Navigate    Space: Toggle    Enter: Select    Esc: Back"
         }
@@ -2027,12 +1991,6 @@ fn run() -> io::Result<()> {
 
         match key.code {
             KeyCode::Esc
-                if state.screen == WizardScreen::ExternalContent
-                    && state.pending_model_name_index.is_some() =>
-            {
-                state.cancel_external_model_naming();
-            }
-            KeyCode::Esc
                 if state.screen != WizardScreen::Welcome
                     && state.screen != WizardScreen::Installing
                     && state.screen != WizardScreen::InstallationComplete
@@ -2108,22 +2066,13 @@ fn run() -> io::Result<()> {
             KeyCode::Enter if state.screen == WizardScreen::ContentRepository => {
                 state.confirm_content_repository();
             }
-            KeyCode::Down
-                if state.screen == WizardScreen::ExternalContent
-                    && state.pending_model_name_index.is_none() =>
-            {
+            KeyCode::Down if state.screen == WizardScreen::ExternalContent => {
                 state.next_external_content();
             }
-            KeyCode::Up
-                if state.screen == WizardScreen::ExternalContent
-                    && state.pending_model_name_index.is_none() =>
-            {
+            KeyCode::Up if state.screen == WizardScreen::ExternalContent => {
                 state.previous_external_content();
             }
-            KeyCode::Char(' ')
-                if state.screen == WizardScreen::ExternalContent
-                    && state.pending_model_name_index.is_none() =>
-            {
+            KeyCode::Char(' ') if state.screen == WizardScreen::ExternalContent => {
                 state.toggle_external_content();
             }
             KeyCode::Down if state.screen == WizardScreen::ApplianceIdentity => {
@@ -2158,24 +2107,6 @@ fn run() -> io::Result<()> {
             }
             KeyCode::Up if state.screen == WizardScreen::ConfirmInstallation => {
                 state.previous_installation_action();
-            }
-            KeyCode::Backspace
-                if state.screen == WizardScreen::ExternalContent
-                    && state.pending_model_name_index.is_some() =>
-            {
-                state.pop_external_model_name_character();
-            }
-            KeyCode::Char(character)
-                if state.screen == WizardScreen::ExternalContent
-                    && state.pending_model_name_index.is_some() =>
-            {
-                state.push_external_model_name_character(character);
-            }
-            KeyCode::Enter
-                if state.screen == WizardScreen::ExternalContent
-                    && state.pending_model_name_index.is_some() =>
-            {
-                state.confirm_external_model_name();
             }
             KeyCode::Enter if state.screen == WizardScreen::ExternalContent => {
                 state.confirm_external_content();
@@ -2681,14 +2612,26 @@ mod tests {
 
         state.wizard.set_external_content_items(vec![item]);
         state.wizard.select_external_content(vec![item_id.clone()]);
-        state.pending_external_content = vec![item_id];
+        state.pending_external_content = vec![item_id.clone()];
+        state.pending_model_names = vec![(item_id.clone(), "test-model".to_owned())];
+        state
+            .wizard
+            .set_model_realization_intents(vec![model::ModelRealizationIntent::new(
+                model::ModelRealizationId::new("test-model"),
+                model::InferenceEngineId::ollama(),
+                item_id,
+            )]);
+        state.external_content_error = Some("stale error".to_owned());
         state.screen = WizardScreen::ExternalContent;
         state.external_content_focus = ExternalContentFocus::ContinueWithoutLocalContent;
 
         state.confirm_external_content();
 
         assert!(state.pending_external_content.is_empty());
+        assert!(state.pending_model_names.is_empty());
         assert!(state.wizard.selected_external_content().is_empty());
+        assert!(state.wizard.model_realization_intents().is_empty());
+        assert_eq!(state.external_content_error, None);
         assert_eq!(state.screen, WizardScreen::Storage);
     }
 
@@ -2705,84 +2648,86 @@ mod tests {
     }
 
     #[test]
-    fn rejects_empty_external_model_name() {
+    fn automatically_names_selected_models_without_prompt() {
         let mut state = TuiState::new();
 
-        let item_id = model::ExternalContentItemId::new("test-model");
-        state.pending_model_names = vec![(item_id, String::new())];
-        state.pending_model_name_index = Some(0);
-        state.screen = WizardScreen::ExternalContent;
+        // Use real, structurally valid GGUF fixtures so production model
+        // inspection remains enabled during this regression test.
+        let directory = std::env::temp_dir().join(format!(
+            "daia-tui-model-naming-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id(),
+        ));
+        std::fs::create_dir(&directory).expect("fixture directory should exist");
 
-        state.confirm_external_model_name();
+        struct FixtureDirectory(std::path::PathBuf);
 
-        assert_eq!(state.pending_model_name_index, Some(0));
-        assert_eq!(
-            state.external_content_error.as_deref(),
-            Some("DAIA model name cannot be empty.")
-        );
-        assert_eq!(state.screen, WizardScreen::ExternalContent);
-    }
+        impl Drop for FixtureDirectory {
+            fn drop(&mut self) {
+                let _ = std::fs::remove_dir_all(&self.0);
+            }
+        }
 
-    #[test]
-    fn advances_through_external_model_names_and_commits_final_selection() {
-        let mut state = TuiState::new();
+        let _fixture_directory = FixtureDirectory(directory.clone());
+
+        let mut gguf = Vec::new();
+        gguf.extend_from_slice(b"GGUF");
+        gguf.extend_from_slice(&3_u32.to_le_bytes());
+        gguf.extend_from_slice(&0_u64.to_le_bytes());
+        gguf.extend_from_slice(&1_u64.to_le_bytes());
+
+        let key = b"general.architecture";
+        gguf.extend_from_slice(&(key.len() as u64).to_le_bytes());
+        gguf.extend_from_slice(key);
+        gguf.extend_from_slice(&8_u32.to_le_bytes());
+
+        let architecture = b"llama";
+        gguf.extend_from_slice(&(architecture.len() as u64).to_le_bytes());
+        gguf.extend_from_slice(architecture);
+
+        let first_path = directory.join("first.gguf");
+        let second_path = directory.join("second.gguf");
+
+        std::fs::write(&first_path, &gguf).expect("first GGUF fixture should exist");
+        std::fs::write(&second_path, &gguf).expect("second GGUF fixture should exist");
 
         let source_id = model::ContentSourceId::new("test-source");
-        let first = model::ExternalContentItem::new(source_id.clone(), "/media/models/first.gguf");
-        let second = model::ExternalContentItem::new(source_id, "/media/models/second.gguf");
+        let first = model::ExternalContentItem::new(source_id.clone(), &first_path);
+        let second = model::ExternalContentItem::new(source_id, &second_path);
 
         let first_id = first.id().clone();
         let second_id = second.id().clone();
 
         state.wizard.set_external_content_items(vec![first, second]);
         state.pending_external_content = vec![first_id.clone(), second_id.clone()];
-        state.pending_model_names = vec![
-            (first_id.clone(), "first-model".to_owned()),
-            (second_id.clone(), "second-model".to_owned()),
-        ];
-        state.pending_model_name_index = Some(0);
-        state.screen = WizardScreen::ExternalContent;
-
-        state.confirm_external_model_name();
-
-        assert_eq!(state.pending_model_name_index, Some(1));
-        assert!(state.wizard.selected_external_content().is_empty());
-        assert_eq!(state.screen, WizardScreen::ExternalContent);
-
-        state.confirm_external_model_name();
-
-        assert_eq!(state.pending_model_name_index, None);
-        assert_eq!(
-            state.wizard.selected_external_content(),
-            &[first_id, second_id]
-        );
-        assert_eq!(state.wizard.model_realization_intents().len(), 2);
-        assert_eq!(state.screen, WizardScreen::Storage);
-    }
-
-    #[test]
-    fn cancels_external_model_naming_without_committing() {
-        let mut state = TuiState::new();
-
-        let item_id = model::ExternalContentItemId::new("test-model");
-        state.pending_external_content = vec![item_id.clone()];
-        state.pending_model_names = vec![(item_id, "pending-name".to_owned())];
-        state.pending_model_name_index = Some(0);
-        state.external_content_error = Some("test error".to_owned());
         state.external_content_focus = ExternalContentFocus::SaveAndContinue;
         state.screen = WizardScreen::ExternalContent;
 
-        state.cancel_external_model_naming();
+        state.confirm_external_content();
 
-        assert!(state.pending_model_names.is_empty());
-        assert_eq!(state.pending_model_name_index, None);
-        assert_eq!(state.external_content_error, None);
-        assert!(state.wizard.selected_external_content().is_empty());
-        assert_eq!(
-            state.external_content_focus,
-            ExternalContentFocus::SaveAndContinue
+        assert!(
+            state.external_content_error.is_none(),
+            "model inspection failed: {:?}",
+            state.external_content_error
         );
-        assert_eq!(state.screen, WizardScreen::ExternalContent);
+        assert_eq!(state.screen, WizardScreen::Storage);
+        assert_eq!(
+            state.wizard.selected_external_content(),
+            &[first_id.clone(), second_id.clone()]
+        );
+        let intents = state.wizard.model_realization_intents();
+        assert_eq!(intents.len(), 2);
+        assert_eq!(
+            intents
+                .iter()
+                .map(|intent| intent.id().as_str())
+                .collect::<Vec<_>>(),
+            vec!["first", "second"]
+        );
+        assert_eq!(intents[0].source_item_id(), &first_id);
+        assert_eq!(intents[1].source_item_id(), &second_id);
+        assert_eq!(intents[0].engine(), &model::InferenceEngineId::ollama());
+        assert_eq!(intents[1].engine(), &model::InferenceEngineId::ollama());
     }
 
     #[test]

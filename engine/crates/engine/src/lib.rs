@@ -4,6 +4,7 @@ mod bootstrap;
 mod bootstrapper;
 mod context;
 mod installation;
+mod iso_refresh;
 mod mmdebstrap;
 mod model_realization;
 mod reconciliation;
@@ -32,6 +33,7 @@ use inspector::{
     ContentInspectError, ContentInspector, GgufMetadata, ModelInspectError, StorageInspectError,
     StorageInspector, inspect_model_artifact,
 };
+pub use iso_refresh::IsoRefreshInputs;
 pub use mmdebstrap::{MmdebstrapBootstrapper, MmdebstrapError};
 use model::{
     ApplianceProfile, Capability, ContentImportDestination, ContentImportIntent, ContentRepository,
