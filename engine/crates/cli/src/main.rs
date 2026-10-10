@@ -1273,6 +1273,10 @@ fn installation_operation_name(operation: &InstallationOperation) -> String {
 
         InstallationOperation::ConfigureFstab { .. } => "Configure filesystem table".to_owned(),
 
+        InstallationOperation::ConfigureApplianceIdentity { identity, .. } => {
+            format!("Configure appliance identity: {}", identity.fqdn())
+        }
+
         InstallationOperation::ConfigureLocalization { localization, .. } => {
             format!(
                 "Configure localization: {} ({})",

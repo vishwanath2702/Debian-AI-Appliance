@@ -177,9 +177,10 @@ _ai_wait_for_ollama_ready() {
     local attempts="${DAIA_OLLAMA_READY_ATTEMPTS:-30}"
     local delay="${DAIA_OLLAMA_READY_DELAY:-1}"
     local attempt
+    local last_error=""
 
     for ((attempt = 1; attempt <= attempts; attempt++)); do
-        if "$ollama_binary" list >/dev/null 2>&1; then
+        if last_error="$("$ollama_binary" list 2>&1)"; then
             return 0
         fi
 
@@ -189,6 +190,9 @@ _ai_wait_for_ollama_ready() {
     done
 
     echo "Ollama service did not become ready after ${attempts} attempts" >&2
+    if [[ -n "$last_error" ]]; then
+        printf 'Last Ollama readiness error: %s\n' "$last_error" >&2
+    fi
     return 1
 }
 

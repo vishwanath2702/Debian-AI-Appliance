@@ -916,7 +916,8 @@ impl Engine {
                 content,
                 configuration.model_realization_intents().to_vec(),
             )
-            .with_localization(configuration.localization().cloned()))
+            .with_localization(configuration.localization().cloned())
+            .with_appliance_identity(Some(configuration.appliance_identity().clone())))
     }
 
     /// Combines prepared installation and content into a prepared appliance installation.

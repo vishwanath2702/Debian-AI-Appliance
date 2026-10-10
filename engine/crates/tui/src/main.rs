@@ -655,6 +655,36 @@ impl TuiState {
                     return;
                 }
 
+                let valid_label = |label: &str| {
+                    !label.is_empty()
+                        && label.len() <= 63
+                        && label
+                            .as_bytes()
+                            .first()
+                            .is_some_and(u8::is_ascii_alphanumeric)
+                        && label
+                            .as_bytes()
+                            .last()
+                            .is_some_and(u8::is_ascii_alphanumeric)
+                        && label
+                            .bytes()
+                            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+                };
+
+                if !valid_label(hostname) {
+                    self.appliance_identity_error =
+                        Some("Hostname must be a valid DNS label (1-63 characters).".to_owned());
+                    self.appliance_identity_field = ApplianceIdentityField::Hostname;
+                    return;
+                }
+
+                if domain_name.len() > 253 || !domain_name.split('.').all(valid_label) {
+                    self.appliance_identity_error =
+                        Some("Domain name must contain valid DNS labels.".to_owned());
+                    self.appliance_identity_field = ApplianceIdentityField::DomainName;
+                    return;
+                }
+
                 self.wizard
                     .set_appliance_identity(hostname.to_owned(), domain_name.to_owned());
                 self.appliance_identity_error = None;
@@ -3356,6 +3386,64 @@ mod tests {
             ApplianceIdentityField::DomainName
         );
         assert_eq!(state.wizard.appliance_identity(), None);
+    }
+
+    #[test]
+    fn appliance_identity_rejects_invalid_dns_labels_before_installation() {
+        for (hostname, domain, expected_field) in [
+            ("bad host", "home.arpa", ApplianceIdentityField::Hostname),
+            ("-daia", "home.arpa", ApplianceIdentityField::Hostname),
+            ("daia-", "home.arpa", ApplianceIdentityField::Hostname),
+            ("daia_name", "home.arpa", ApplianceIdentityField::Hostname),
+            ("daia", "home..arpa", ApplianceIdentityField::DomainName),
+            ("daia", "-home.arpa", ApplianceIdentityField::DomainName),
+            ("daia", "home_.arpa", ApplianceIdentityField::DomainName),
+            ("daia", "home.arpa.", ApplianceIdentityField::DomainName),
+        ] {
+            let mut state = TuiState::new();
+            state.screen = WizardScreen::ApplianceIdentity;
+            state.appliance_hostname = hostname.to_owned();
+            state.appliance_domain_name = domain.to_owned();
+            state.appliance_identity_field = ApplianceIdentityField::Continue;
+
+            state.confirm_appliance_identity();
+
+            assert_eq!(state.screen, WizardScreen::ApplianceIdentity);
+            assert_eq!(state.appliance_identity_field, expected_field);
+            assert!(state.appliance_identity_error.is_some());
+            assert_eq!(state.wizard.appliance_identity(), None);
+        }
+
+        for (hostname, domain, expected_field) in [
+            (
+                "a".repeat(64),
+                "home.arpa".to_owned(),
+                ApplianceIdentityField::Hostname,
+            ),
+            (
+                "daia".to_owned(),
+                format!("{}.arpa", "a".repeat(64)),
+                ApplianceIdentityField::DomainName,
+            ),
+            (
+                "daia".to_owned(),
+                "a".repeat(254),
+                ApplianceIdentityField::DomainName,
+            ),
+        ] {
+            let mut state = TuiState::new();
+            state.screen = WizardScreen::ApplianceIdentity;
+            state.appliance_hostname = hostname;
+            state.appliance_domain_name = domain;
+            state.appliance_identity_field = ApplianceIdentityField::Continue;
+
+            state.confirm_appliance_identity();
+
+            assert_eq!(state.screen, WizardScreen::ApplianceIdentity);
+            assert_eq!(state.appliance_identity_field, expected_field);
+            assert!(state.appliance_identity_error.is_some());
+            assert_eq!(state.wizard.appliance_identity(), None);
+        }
     }
 
     #[test]

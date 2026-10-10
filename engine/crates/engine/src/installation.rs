@@ -334,6 +334,11 @@ pub enum InstallationOperation {
         root: PathBuf,
         localization: model::LocalizationConfiguration,
     },
+    /// Configure the installed appliance hostname and local host resolution.
+    ConfigureApplianceIdentity {
+        root: PathBuf,
+        identity: model::ApplianceIdentity,
+    },
 
     /// Import selected external content into the installed appliance.
     ImportContent {
@@ -418,6 +423,14 @@ pub trait InstallationCommandRunner {
 pub trait InstallationFileWriter {
     fn write(&mut self, path: &std::path::Path, contents: &[u8]) -> io::Result<()>;
 
+    /// Reads the installed system's hosts file without following symlinks.
+    fn read_hosts(&mut self, _root: &std::path::Path) -> io::Result<Option<String>> {
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "secure hosts reading is not implemented",
+        ))
+    }
+
     fn write_localization(
         &mut self,
         _root: &std::path::Path,
@@ -440,6 +453,63 @@ impl InstallationFileWriter for SystemInstallationFileWriter {
         std::fs::write(path, contents)
     }
 
+    fn read_hosts(&mut self, root: &std::path::Path) -> io::Result<Option<String>> {
+        use rustix::fs::{Mode, OFlags, ResolveFlags};
+        use std::io::Read;
+
+        if !root.is_absolute()
+            || root == std::path::Path::new("/")
+            || root
+                .components()
+                .any(|component| matches!(component, std::path::Component::ParentDir))
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "invalid hosts target root",
+            ));
+        }
+
+        let root_fd = rustix::fs::open(
+            root,
+            OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+            Mode::empty(),
+        )?;
+
+        let hosts_fd = match rustix::fs::openat2(
+            &root_fd,
+            "etc/hosts",
+            OFlags::RDONLY | OFlags::NONBLOCK | OFlags::CLOEXEC,
+            Mode::empty(),
+            ResolveFlags::BENEATH | ResolveFlags::NO_SYMLINKS,
+        ) {
+            Ok(fd) => fd,
+            Err(rustix::io::Errno::NOENT) => return Ok(None),
+            Err(error) => return Err(error.into()),
+        };
+
+        let metadata = rustix::fs::fstat(&hosts_fd)?;
+        if !rustix::fs::FileType::from_raw_mode(metadata.st_mode).is_file() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "hosts destination is not a regular file",
+            ));
+        }
+
+        let mut contents = String::new();
+        std::fs::File::from(hosts_fd)
+            .take(1024 * 1024 + 1)
+            .read_to_string(&mut contents)?;
+
+        if contents.len() > 1024 * 1024 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "hosts file exceeds the supported size",
+            ));
+        }
+
+        Ok(Some(contents))
+    }
+
     fn write_localization(
         &mut self,
         root: &std::path::Path,
@@ -456,7 +526,7 @@ impl InstallationFileWriter for SystemInstallationFileWriter {
                 .any(|component| matches!(component, std::path::Component::ParentDir))
             || !matches!(
                 relative_path.to_str(),
-                Some("etc/default/locale" | "etc/default/keyboard")
+                Some("etc/default/locale" | "etc/default/keyboard" | "etc/hostname" | "etc/hosts")
             )
         {
             return Err(io::Error::new(
@@ -471,9 +541,14 @@ impl InstallationFileWriter for SystemInstallationFileWriter {
             Mode::empty(),
         )?;
 
+        let parent_directory = match relative_path.to_str() {
+            Some("etc/hostname" | "etc/hosts") => "etc",
+            _ => "etc/default",
+        };
+
         let parent_fd = rustix::fs::openat2(
             &root_fd,
-            "etc/default",
+            parent_directory,
             OFlags::RDONLY | OFlags::DIRECTORY | OFlags::CLOEXEC,
             Mode::empty(),
             ResolveFlags::BENEATH | ResolveFlags::NO_SYMLINKS,
@@ -1175,6 +1250,79 @@ where
                 self.file_writer
                     .write(std::path::Path::new("/target/etc/fstab"), fstab.as_bytes())
             }
+            InstallationOperation::ConfigureApplianceIdentity { root, identity } => {
+                let valid_label = |label: &str| {
+                    !label.is_empty()
+                        && label.len() <= 63
+                        && label
+                            .as_bytes()
+                            .first()
+                            .is_some_and(u8::is_ascii_alphanumeric)
+                        && label
+                            .as_bytes()
+                            .last()
+                            .is_some_and(u8::is_ascii_alphanumeric)
+                        && label
+                            .bytes()
+                            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+                };
+
+                let hostname = identity.hostname();
+                let domain = identity.domain_name();
+
+                if !valid_label(hostname)
+                    || domain.is_empty()
+                    || domain.len() > 253
+                    || !domain.split('.').all(valid_label)
+                {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidInput,
+                        "invalid appliance hostname or domain",
+                    ));
+                }
+
+                if root != &self.target_root
+                    || !root.is_absolute()
+                    || root == std::path::Path::new("/")
+                    || root
+                        .components()
+                        .any(|component| matches!(component, std::path::Component::ParentDir))
+                {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidInput,
+                        "invalid appliance identity target root",
+                    ));
+                }
+
+                let existing = self.file_writer.read_hosts(root)?.unwrap_or_else(|| {
+                    "127.0.0.1 localhost\n::1 localhost ip6-localhost ip6-loopback\n".to_owned()
+                });
+
+                let fqdn = identity.fqdn();
+                let mut hosts = String::new();
+
+                for line in existing.lines() {
+                    if line.split_whitespace().next() == Some("127.0.1.1") {
+                        continue;
+                    }
+                    hosts.push_str(line);
+                    hosts.push('\n');
+                }
+
+                hosts.push_str(&format!("127.0.1.1 {fqdn} {hostname}\n"));
+
+                self.file_writer.write_localization(
+                    root,
+                    std::path::Path::new("etc/hostname"),
+                    format!("{hostname}\n").as_bytes(),
+                )?;
+
+                self.file_writer.write_localization(
+                    root,
+                    std::path::Path::new("etc/hosts"),
+                    hosts.as_bytes(),
+                )
+            }
             InstallationOperation::ConfigureLocalization { root, localization } => {
                 let valid_identifier = |value: &str| {
                     !value.is_empty()
@@ -1622,6 +1770,7 @@ pub struct PreparedApplianceInstallation {
     content: crate::PreparedContentImport,
     model_realization_intents: Vec<model::ModelRealizationIntent>,
     localization: Option<model::LocalizationConfiguration>,
+    appliance_identity: Option<model::ApplianceIdentity>,
 }
 
 impl PreparedApplianceInstallation {
@@ -1635,6 +1784,7 @@ impl PreparedApplianceInstallation {
             content,
             model_realization_intents,
             localization: None,
+            appliance_identity: None,
         }
     }
 
@@ -1652,6 +1802,19 @@ impl PreparedApplianceInstallation {
     #[must_use]
     pub const fn localization(&self) -> Option<&model::LocalizationConfiguration> {
         self.localization.as_ref()
+    }
+
+    /// Attaches the confirmed appliance identity.
+    #[must_use]
+    pub fn with_appliance_identity(mut self, identity: Option<model::ApplianceIdentity>) -> Self {
+        self.appliance_identity = identity;
+        self
+    }
+
+    /// Returns the confirmed appliance identity.
+    #[must_use]
+    pub const fn appliance_identity(&self) -> Option<&model::ApplianceIdentity> {
+        self.appliance_identity.as_ref()
     }
 
     pub const fn installation(&self) -> &PreparedInstallation {
@@ -1673,7 +1836,8 @@ impl PreparedApplianceInstallation {
         let installation_plan = self.installation.installation_plan();
         let additional_operations = 1
             + usize::from(!self.content.intent().items().is_empty())
-            + usize::from(self.localization.is_some());
+            + usize::from(self.localization.is_some())
+            + usize::from(self.appliance_identity.is_some());
         let mut operations =
             Vec::with_capacity(installation_plan.operations().len() + additional_operations);
 
@@ -1681,6 +1845,13 @@ impl PreparedApplianceInstallation {
             operations.push(operation.clone());
 
             if matches!(operation, InstallationOperation::ConfigureFstab { .. }) {
+                if let Some(identity) = &self.appliance_identity {
+                    operations.push(InstallationOperation::ConfigureApplianceIdentity {
+                        root: PathBuf::from("/target"),
+                        identity: identity.clone(),
+                    });
+                }
+
                 if let Some(localization) = &self.localization {
                     operations.push(InstallationOperation::ConfigureLocalization {
                         root: PathBuf::from("/target"),
@@ -1964,6 +2135,153 @@ mod tests {
                 vec!["umount".to_owned(), "/target".to_owned()],
             ]
         );
+    }
+
+    #[test]
+    fn system_executor_configures_appliance_identity_and_preserves_hosts() {
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let root = temporary.path().join("target");
+        std::fs::create_dir_all(root.join("etc")).expect("create etc");
+
+        let original_hosts = concat!(
+            "127.0.0.1 localhost\n",
+            "::1 localhost ip6-localhost ip6-loopback\n",
+            "192.0.2.10 internal.example.test\n",
+            "# Preserve this comment\n",
+            "127.0.1.1 old.example.test old\n",
+        );
+
+        std::fs::write(root.join("etc/hosts"), original_hosts).expect("seed hosts");
+
+        let mut executor = SystemInstallationOperationExecutor::with_dependencies(
+            RecordingCommandRunner::default(),
+        )
+        .with_target_root(root.clone());
+
+        let operation = InstallationOperation::ConfigureApplianceIdentity {
+            root: root.clone(),
+            identity: model::ApplianceIdentity::new("daia", "home.arpa"),
+        };
+
+        executor
+            .execute_operation(&operation)
+            .expect("configure identity");
+
+        assert_eq!(
+            std::fs::read_to_string(root.join("etc/hostname")).expect("read hostname"),
+            "daia\n"
+        );
+
+        let hosts = std::fs::read_to_string(root.join("etc/hosts")).expect("read hosts");
+        assert!(hosts.contains("127.0.0.1 localhost\n"));
+        assert!(hosts.contains("::1 localhost ip6-localhost ip6-loopback\n"));
+        assert!(hosts.contains("192.0.2.10 internal.example.test\n"));
+        assert!(hosts.contains("# Preserve this comment\n"));
+        assert!(hosts.contains("127.0.1.1 daia.home.arpa daia\n"));
+        assert!(!hosts.contains("old.example.test"));
+
+        executor
+            .execute_operation(&operation)
+            .expect("repeat configuration");
+        assert_eq!(
+            std::fs::read_to_string(root.join("etc/hosts")).expect("read repeated hosts"),
+            hosts,
+            "repeated configuration must be idempotent"
+        );
+    }
+
+    #[test]
+    fn system_executor_rejects_invalid_appliance_identity_without_writes() {
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let root = temporary.path().join("target");
+        std::fs::create_dir_all(root.join("etc")).expect("create etc");
+
+        let mut executor = SystemInstallationOperationExecutor::with_dependencies(
+            RecordingCommandRunner::default(),
+        )
+        .with_target_root(root.clone());
+
+        for (hostname, domain) in [
+            ("", "home.arpa"),
+            ("bad host", "home.arpa"),
+            ("-invalid", "home.arpa"),
+            ("daia", ""),
+            ("daia", "bad..domain"),
+            ("daia", "bad domain"),
+        ] {
+            let error = executor
+                .execute_operation(&InstallationOperation::ConfigureApplianceIdentity {
+                    root: root.clone(),
+                    identity: model::ApplianceIdentity::new(hostname, domain),
+                })
+                .expect_err("invalid identity must fail");
+
+            assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
+        }
+
+        assert!(!root.join("etc/hostname").exists());
+        assert!(!root.join("etc/hosts").exists());
+    }
+
+    #[test]
+    fn system_executor_rejects_appliance_identity_target_root_mismatch() {
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let root = temporary.path().join("target");
+        let other = temporary.path().join("other");
+
+        std::fs::create_dir_all(root.join("etc")).expect("create target");
+        std::fs::create_dir_all(other.join("etc")).expect("create other");
+
+        let mut executor = SystemInstallationOperationExecutor::with_dependencies(
+            RecordingCommandRunner::default(),
+        )
+        .with_target_root(root.clone());
+
+        let error = executor
+            .execute_operation(&InstallationOperation::ConfigureApplianceIdentity {
+                root: other.clone(),
+                identity: model::ApplianceIdentity::new("daia", "home.arpa"),
+            })
+            .expect_err("mismatched target root must fail");
+
+        assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
+        assert!(!other.join("etc/hostname").exists());
+        assert!(!other.join("etc/hosts").exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn system_executor_rejects_symlinked_appliance_hosts() {
+        use std::os::unix::fs::symlink;
+
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let root = temporary.path().join("target");
+        std::fs::create_dir_all(root.join("etc")).expect("create etc");
+
+        let outside = temporary.path().join("outside-hosts");
+        std::fs::write(&outside, "external content\n").expect("seed external file");
+        symlink(&outside, root.join("etc/hosts")).expect("create hosts symlink");
+
+        let mut executor = SystemInstallationOperationExecutor::with_dependencies(
+            RecordingCommandRunner::default(),
+        )
+        .with_target_root(root.clone());
+
+        assert!(
+            executor
+                .execute_operation(&InstallationOperation::ConfigureApplianceIdentity {
+                    root: root.clone(),
+                    identity: model::ApplianceIdentity::new("daia", "home.arpa"),
+                })
+                .is_err(),
+            "symlinked hosts must be rejected"
+        );
+
+        assert_eq!(
+            std::fs::read_to_string(&outside).expect("read external file"),
+            "external content\n"
+        );
+        assert!(!root.join("etc/hostname").exists());
     }
 
     #[test]
@@ -3680,6 +3998,83 @@ mod tests {
                 "value".to_owned(),
                 "/dev/sdb2".to_owned(),
             ]]
+        );
+    }
+
+    #[test]
+    fn installation_plan_configures_identity_after_fstab_before_unmount() {
+        let intent = InstallationIntent::new(
+            "desktop",
+            DiscoveredStorageId::new("serial:usb-disk"),
+            model::UserConfiguration::new("admin", "DAIA Administrator"),
+        );
+
+        let storage = DiscoveredStorage::new("serial:usb-disk", StorageKind::Removable, "/dev/sdb");
+
+        let installation = PreparedInstallation::new(
+            intent,
+            storage,
+            Vec::new(),
+            PathBuf::from("/run/live/medium/live/filesystem.squashfs"),
+        );
+
+        let identity = model::ApplianceIdentity::new("daia", "home.arpa");
+
+        let prepared = super::PreparedApplianceInstallation::new(
+            installation,
+            crate::PreparedContentImport::new(
+                model::ContentImportIntent::new(Vec::new()),
+                Vec::new(),
+                model::ContentImportDestination::new("/var/lib/daia/content"),
+            ),
+            Vec::new(),
+        )
+        .with_appliance_identity(Some(identity.clone()));
+
+        let plan = prepared.installation_plan();
+        let operations = plan.operations();
+
+        let position = |predicate: fn(&InstallationOperation) -> bool| {
+            operations
+                .iter()
+                .position(predicate)
+                .expect("required installation operation")
+        };
+
+        let image = position(|op| matches!(op, InstallationOperation::InstallSystemImage { .. }));
+
+        let fstab = position(|op| matches!(op, InstallationOperation::ConfigureFstab { .. }));
+
+        let identity_position =
+            position(|op| matches!(op, InstallationOperation::ConfigureApplianceIdentity { .. }));
+
+        let persist =
+            position(|op| matches!(op, InstallationOperation::PersistApplianceState { .. }));
+
+        let unmount = position(|op| matches!(op, InstallationOperation::UnmountFilesystems { .. }));
+
+        assert!(image < fstab);
+        assert!(fstab < identity_position);
+        assert!(identity_position < persist);
+        assert!(persist < unmount);
+
+        match &operations[identity_position] {
+            InstallationOperation::ConfigureApplianceIdentity {
+                root,
+                identity: planned_identity,
+            } => {
+                assert_eq!(root.as_path(), std::path::Path::new("/target"));
+                assert_eq!(planned_identity, &identity);
+            }
+            _ => panic!("expected appliance identity operation"),
+        }
+
+        assert_eq!(
+            operations
+                .iter()
+                .filter(|op| matches!(op, InstallationOperation::ConfigureApplianceIdentity { .. }))
+                .count(),
+            1
         );
     }
 
