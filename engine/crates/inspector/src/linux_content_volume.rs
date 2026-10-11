@@ -27,6 +27,7 @@ pub trait ContentVolumeInspector {
 pub struct LinuxContentVolumeInspector {
     command: PathBuf,
     findmnt_command: PathBuf,
+    post_install_discovery: bool,
 }
 
 impl ContentVolumeInspector for LinuxContentVolumeInspector {
@@ -57,6 +58,7 @@ impl ContentVolumeInspector for LinuxContentVolumeInspector {
             &parsed.blockdevices,
             system_disk_path.as_deref(),
             live_medium_disk_path.as_deref(),
+            self.post_install_discovery,
         ))
     }
 }
@@ -74,6 +76,7 @@ impl LinuxContentVolumeInspector {
         Self {
             command: PathBuf::from("lsblk"),
             findmnt_command: PathBuf::from("findmnt"),
+            post_install_discovery: false,
         }
     }
 
@@ -88,6 +91,15 @@ impl LinuxContentVolumeInspector {
     #[must_use]
     pub fn with_findmnt_command(mut self, command: impl Into<PathBuf>) -> Self {
         self.findmnt_command = command.into();
+        self
+    }
+
+    /// Enables discovery of additional filesystems on the installed system disk.
+    ///
+    /// This mode is intended for post-installation content browsing.
+    #[must_use]
+    pub fn with_post_install_discovery(mut self) -> Self {
+        self.post_install_discovery = true;
         self
     }
 
@@ -212,20 +224,22 @@ fn content_volumes(
     devices: &[LsblkDevice],
     system_disk_path: Option<&Path>,
     live_medium_disk_path: Option<&Path>,
+    post_install_discovery: bool,
 ) -> Vec<DiscoveredContentVolume> {
     let mut volumes = Vec::new();
 
     for disk in devices.iter().filter(|device| device.device_type == "disk") {
         let disk_path = Path::new(&disk.path);
 
-        if system_disk_path.is_some_and(|system_disk| disk_path == system_disk)
+        if (!post_install_discovery
+            && system_disk_path.is_some_and(|system_disk| disk_path == system_disk))
             || live_medium_disk_path.is_some_and(|live_medium_disk| disk_path == live_medium_disk)
         {
             continue;
         }
 
         for child in &disk.children {
-            collect_content_volumes(child, disk_path, &mut volumes);
+            collect_content_volumes(child, disk_path, &mut volumes, post_install_discovery);
         }
     }
 
@@ -236,7 +250,24 @@ fn collect_content_volumes(
     device: &LsblkDevice,
     parent_disk: &Path,
     volumes: &mut Vec<DiscoveredContentVolume>,
+    post_install_discovery: bool,
 ) {
+    if post_install_discovery
+        && device.mountpoint.as_deref().is_some_and(|mountpoint| {
+            let path = Path::new(mountpoint);
+
+            path == Path::new("/")
+                || [
+                    "/boot", "/efi", "/var", "/usr", "/etc", "/home", "/opt", "/srv", "/run",
+                    "/proc", "/sys", "/dev", "/tmp",
+                ]
+                .iter()
+                .any(|system_path| path == Path::new(system_path) || path.starts_with(system_path))
+        })
+    {
+        return;
+    }
+
     if let Some(filesystem_type) = device
         .filesystem_type
         .as_deref()
@@ -260,7 +291,7 @@ fn collect_content_volumes(
     }
 
     for child in &device.children {
-        collect_content_volumes(child, parent_disk, volumes);
+        collect_content_volumes(child, parent_disk, volumes, post_install_discovery);
     }
 }
 
@@ -458,6 +489,154 @@ JSON
             std::path::Path::new("/dev/sdb")
         );
         assert_eq!(volumes[0].label(), Some("DAIA-MODELS"));
+    }
+
+    #[test]
+    fn post_install_excludes_system_mountpoints_but_keeps_data_volumes() {
+        use crate::lsblk::LsblkDevice;
+
+        fn partition(name: &str, mountpoint: Option<&str>) -> LsblkDevice {
+            LsblkDevice {
+                path: format!("/dev/{name}"),
+                device_type: "part".to_owned(),
+                rm: false,
+                wwn: None,
+                serial: None,
+                size: 1_000_000,
+                filesystem_type: Some("ext4".to_owned()),
+                label: None,
+                mountpoint: mountpoint.map(str::to_owned),
+                children: Vec::new(),
+            }
+        }
+
+        let disk = LsblkDevice {
+            path: "/dev/sda".to_owned(),
+            device_type: "disk".to_owned(),
+            rm: false,
+            wwn: None,
+            serial: None,
+            size: 100_000_000,
+            filesystem_type: None,
+            label: None,
+            mountpoint: None,
+            children: vec![
+                partition("sda1", Some("/")),
+                partition("sda2", Some("/boot")),
+                partition("sda3", Some("/boot/efi")),
+                partition("sda4", Some("/var")),
+                partition("sda5", Some("/media/models")),
+                partition("sda6", None),
+            ],
+        };
+
+        let volumes =
+            super::content_volumes(&[disk], Some(std::path::Path::new("/dev/sda")), None, true);
+
+        let paths = volumes
+            .iter()
+            .map(|volume| volume.device_path().to_path_buf())
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            paths,
+            vec![
+                std::path::PathBuf::from("/dev/sda5"),
+                std::path::PathBuf::from("/dev/sda6"),
+            ],
+            "post-install discovery must exclude mounted system filesystems"
+        );
+    }
+
+    #[test]
+    fn post_install_discovery_includes_secondary_system_disk_partition() {
+        let (_findmnt_directory, findmnt_command) = command_script(
+            r#"#!/bin/sh
+case "$*" in
+    *"/run/live/medium"*)
+        exit 1
+        ;;
+    *" /")
+        echo '/dev/sda2'
+        ;;
+    *)
+        exit 1
+        ;;
+esac
+"#,
+        );
+
+        let (_directory, command) = command_script(
+            r#"#!/bin/sh
+if [ "$4" = "PKNAME" ]; then
+    echo '/dev/sda'
+    exit 0
+fi
+
+cat <<'JSON'
+{
+  "blockdevices": [
+    {
+      "path": "/dev/sda",
+      "type": "disk",
+      "rm": false,
+      "wwn": null,
+      "serial": "SYSTEM001",
+      "size": 100000000000,
+      "children": [
+        {
+          "path": "/dev/sda2",
+          "type": "part",
+          "rm": false,
+          "wwn": null,
+          "serial": null,
+          "size": 50000000000,
+          "fstype": "ext4",
+          "label": "DAIA-SYSTEM",
+          "mountpoint": "/"
+        },
+        {
+          "path": "/dev/sda3",
+          "type": "part",
+          "rm": false,
+          "wwn": null,
+          "serial": null,
+          "size": 50000000000,
+          "fstype": "ext4",
+          "label": "LOCAL-MODELS",
+          "mountpoint": "/media/models"
+        }
+      ]
+    }
+  ]
+}
+JSON
+"#,
+        );
+
+        let inspector = LinuxContentVolumeInspector::new()
+            .with_command(command)
+            .with_findmnt_command(findmnt_command)
+            .with_post_install_discovery();
+
+        let volumes = inspector
+            .inspect()
+            .expect("post-installation volumes should be discovered");
+
+        assert!(
+            volumes
+                .iter()
+                .all(|volume| { volume.device_path() != std::path::Path::new("/dev/sda2") }),
+            "active root filesystem must not be offered as external content"
+        );
+
+        assert!(
+            volumes.iter().any(
+                |volume| volume.device_path() == std::path::Path::new("/dev/sda3")
+                    && volume.mountpoint() == Some(std::path::Path::new("/media/models"))
+            ),
+            "secondary system-disk filesystem should be discoverable"
+        );
     }
 
     #[test]

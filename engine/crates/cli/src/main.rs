@@ -6,8 +6,9 @@ use engine::{
     DryRunInstallationExecutor, Engine, InstallationOperation, SystemInstallationOperationExecutor,
 };
 use inspector::{
-    ContentInspector, DebianIsoInspector, IsoInspector, LinuxStorageInspector,
-    LocalFilesystemContentInspector, StorageInspector,
+    ContentInspector, ContentVolumeInspector, DebianIsoInspector, IsoInspector,
+    LinuxContentVolumeInspector, LinuxStorageInspector, LocalFilesystemContentInspector,
+    StorageInspector,
 };
 use model::{
     Capability, InferenceEngineArchitectureSupport, InferenceEngineId, Plan, UserConfiguration,
@@ -139,13 +140,65 @@ where
     ExitCode::SUCCESS
 }
 
-fn run_model_add() -> ExitCode {
-    let repositories = match load_content_repositories() {
-        Ok(repositories) => repositories,
+fn discover_post_install_content_volumes<I>(
+    inspector: &I,
+) -> Result<Vec<model::DiscoveredContentVolume>, inspector::StorageInspectError>
+where
+    I: ContentVolumeInspector,
+{
+    inspector.inspect()
+}
+
+fn run_model_volume_discovery() -> ExitCode {
+    let inspector = LinuxContentVolumeInspector::new().with_post_install_discovery();
+
+    let volumes = match discover_post_install_content_volumes(&inspector) {
+        Ok(volumes) => volumes,
         Err(error) => {
-            eprintln!("{error}");
+            eprintln!("Error discovering model source volumes: {error}");
             return ExitCode::FAILURE;
         }
+    };
+
+    println!("Discovered model source volumes:");
+
+    for volume in &volumes {
+        println!("  {}", volume.device_path().display());
+    }
+
+    ExitCode::SUCCESS
+}
+
+fn run_model_add(selected_directory: Option<&str>) -> ExitCode {
+    if let Some(directory) = selected_directory {
+        let path = Path::new(directory);
+
+        if !path.is_dir() {
+            eprintln!("Model source is not a directory: {}", path.display());
+            return ExitCode::FAILURE;
+        }
+    }
+
+    let repositories = match selected_directory {
+        Some(directory) => {
+            let repository_id = model::ContentRepositoryId::new("selected-model-folder");
+            vec![model::ContentRepository::with_sources(
+                "selected-model-folder",
+                "User-selected model directory",
+                vec![model::ContentSource::new(
+                    "selected-model-folder-source",
+                    repository_id,
+                    directory,
+                )],
+            )]
+        }
+        None => match load_content_repositories() {
+            Ok(repositories) => repositories,
+            Err(error) => {
+                eprintln!("{error}");
+                return ExitCode::FAILURE;
+            }
+        },
     };
 
     if repositories.is_empty() {
@@ -349,7 +402,13 @@ fn run(arguments: &[String]) -> ExitCode {
         [command] if command == "wizard" => run_wizard(),
         [command] if command == "install" => run_install(),
         [command] if command == "realize-models" => run_realize_models(),
-        [command, subcommand] if command == "model" && subcommand == "add" => run_model_add(),
+        [command, subcommand] if command == "model" && subcommand == "discover" => {
+            run_model_volume_discovery()
+        }
+        [command, subcommand] if command == "model" && subcommand == "add" => run_model_add(None),
+        [command, subcommand, directory] if command == "model" && subcommand == "add" => {
+            run_model_add(Some(directory))
+        }
         [capability_name] => run_plan(capability_name),
         [command, capability_name] if command == "plan" => run_plan(capability_name),
         [command, profile_name] if command == "plan-profile" => run_profile_plan(profile_name),
@@ -1832,6 +1891,73 @@ mod tests {
                 PathBuf::from("/var/lib/daia/content/model.gguf"),
             )]
         );
+    }
+
+    #[test]
+    fn model_add_discovers_content_from_selected_directory() {
+        let directory = tempfile::tempdir().expect("temporary directory should be created");
+        let model_path = directory.path().join("sample.gguf");
+
+        std::fs::write(&model_path, b"test content").expect("test content should be written");
+
+        let repository_id = model::ContentRepositoryId::new("selected-model-folder");
+
+        let repository = model::ContentRepository::with_sources(
+            "selected-model-folder",
+            "User-selected model directory",
+            vec![model::ContentSource::new(
+                "selected-model-folder-source",
+                repository_id,
+                directory.path().to_string_lossy(),
+            )],
+        );
+
+        let engine = engine::Engine::from_registry(registry::Registry::default());
+
+        let inspector = inspector::LocalFilesystemContentInspector::new();
+
+        let items = engine
+            .repository_content_items(&repository, &inspector)
+            .expect("selected directory should be inspected");
+
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].path(), model_path);
+    }
+
+    #[test]
+    fn post_install_volume_discovery_uses_supplied_inspector() {
+        struct MockContentVolumeInspector {
+            volumes: Vec<model::DiscoveredContentVolume>,
+        }
+
+        impl inspector::ContentVolumeInspector for MockContentVolumeInspector {
+            fn inspect(
+                &self,
+            ) -> Result<Vec<model::DiscoveredContentVolume>, inspector::StorageInspectError>
+            {
+                Ok(self.volumes.clone())
+            }
+        }
+
+        let inspector = MockContentVolumeInspector {
+            volumes: Vec::new(),
+        };
+
+        let volumes = super::discover_post_install_content_volumes(&inspector)
+            .expect("mock volume discovery should succeed");
+
+        assert!(volumes.is_empty());
+    }
+
+    #[test]
+    fn model_add_rejects_nonexistent_directory() {
+        let directory = tempfile::tempdir().expect("temporary directory should be created");
+        let missing = directory.path().join("missing-model-directory");
+
+        let result =
+            super::run_model_add(Some(missing.to_str().expect("test path should be UTF-8")));
+
+        assert_eq!(result, std::process::ExitCode::FAILURE);
     }
 
     #[test]
