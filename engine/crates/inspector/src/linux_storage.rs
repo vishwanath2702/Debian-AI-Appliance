@@ -358,6 +358,8 @@ echo '/dev/nvme0n1p2'
             filesystem_type: None,
             label: None,
             mountpoint: None,
+            partition_type: None,
+            filesystem_uuid: None,
             children: Vec::new(),
         };
 
@@ -376,6 +378,8 @@ echo '/dev/nvme0n1p2'
             filesystem_type: None,
             label: None,
             mountpoint: None,
+            partition_type: None,
+            filesystem_uuid: None,
             children: Vec::new(),
         };
 
@@ -394,6 +398,8 @@ echo '/dev/nvme0n1p2'
             filesystem_type: None,
             label: None,
             mountpoint: None,
+            partition_type: None,
+            filesystem_uuid: None,
             children: Vec::new(),
         };
 

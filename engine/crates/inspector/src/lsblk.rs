@@ -7,7 +7,7 @@ pub struct LsblkOutput {
     pub blockdevices: Vec<LsblkDevice>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize)]
 pub struct LsblkDevice {
     pub path: String,
 
@@ -28,6 +28,12 @@ pub struct LsblkDevice {
     #[serde(default)]
     pub mountpoint: Option<String>,
 
+    #[serde(rename = "parttype", default)]
+    pub partition_type: Option<String>,
+
+    #[serde(rename = "uuid", default)]
+    pub filesystem_uuid: Option<String>,
+
     #[serde(default)]
     pub children: Vec<LsblkDevice>,
 }
@@ -35,6 +41,45 @@ pub struct LsblkDevice {
 #[cfg(test)]
 mod tests {
     use super::LsblkOutput;
+
+    #[test]
+    fn parses_partition_type_and_filesystem_uuid() {
+        let output: LsblkOutput = serde_json::from_str(
+            r#"{
+                "blockdevices": [{
+                    "path": "/dev/sdb",
+                    "type": "disk",
+                    "rm": false,
+                    "size": 1000000,
+                    "children": [{
+                        "path": "/dev/sdb1",
+                        "type": "part",
+                        "rm": false,
+                        "size": 500000,
+                        "fstype": "ext4",
+                        "parttype": "0fc63daf-8483-4772-8e79-3d69d8477de4",
+                        "uuid": "model-volume-uuid"
+                    }]
+                }]
+            }"#,
+        )
+        .expect("lsblk metadata should parse");
+
+        let partition = &output.blockdevices[0].children[0];
+
+        assert_eq!(
+            partition.partition_type.as_deref(),
+            Some("0fc63daf-8483-4772-8e79-3d69d8477de4")
+        );
+        assert_eq!(
+            partition.filesystem_uuid.as_deref(),
+            Some("model-volume-uuid")
+        );
+
+        let disk = &output.blockdevices[0];
+        assert_eq!(disk.partition_type, None);
+        assert_eq!(disk.filesystem_uuid, None);
+    }
 
     #[test]
     fn parses_lsblk_storage_fields() {

@@ -40,7 +40,7 @@ impl ContentVolumeInspector for LinuxContentVolumeInspector {
             .arg("--paths")
             .arg("--bytes")
             .arg("--output")
-            .arg("PATH,TYPE,RM,WWN,SERIAL,SIZE,FSTYPE,LABEL,MOUNTPOINT")
+            .arg("PATH,TYPE,RM,WWN,SERIAL,SIZE,FSTYPE,LABEL,MOUNTPOINT,PARTTYPE,UUID")
             .output()?;
 
         if !output.status.success() {
@@ -506,6 +506,8 @@ JSON
                 filesystem_type: Some("ext4".to_owned()),
                 label: None,
                 mountpoint: mountpoint.map(str::to_owned),
+                partition_type: None,
+                filesystem_uuid: None,
                 children: Vec::new(),
             }
         }
@@ -520,6 +522,8 @@ JSON
             filesystem_type: None,
             label: None,
             mountpoint: None,
+            partition_type: None,
+            filesystem_uuid: None,
             children: vec![
                 partition("sda1", Some("/")),
                 partition("sda2", Some("/boot")),
