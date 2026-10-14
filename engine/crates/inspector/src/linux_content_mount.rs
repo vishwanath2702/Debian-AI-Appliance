@@ -540,7 +540,9 @@ impl LinuxContentVolumeMounter {
 
         let mountpoint = self.mountpoint_for(volume)?;
 
-        fs::create_dir_all(&mountpoint)?;
+        // Do not reuse an existing mountpoint, even if it looks empty.
+        fs::create_dir_all(&self.mount_root)?;
+        fs::create_dir(&mountpoint)?;
 
         let output = Command::new(&self.command)
             .arg("--read-only")
@@ -549,17 +551,51 @@ impl LinuxContentVolumeMounter {
             .arg("--")
             .arg(volume.device_path())
             .arg(&mountpoint)
-            .output()?;
+            .output();
 
-        if !output.status.success() {
-            return Err(StorageInspectError::ProcessFailed {
+        let mount_error = match output {
+            Ok(output) if output.status.success() => return Ok(mountpoint),
+            Ok(output) => StorageInspectError::ProcessFailed {
                 command: self.command.display().to_string(),
                 status: output.status,
                 stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
-            });
-        }
+            },
+            Err(error) => error.into(),
+        };
 
-        Ok(mountpoint)
+        // A failed command may nevertheless have mounted the filesystem.
+        // Fail closed if mount state cannot be established.
+        let mountinfo = fs::read_to_string("/proc/self/mountinfo");
+        let cleanup = match mountinfo {
+            Ok(mountinfo) => {
+                let escaped_mountpoint = mountpoint
+                    .to_string_lossy()
+                    .replace('\\', "\\\\")
+                    .replace(' ', "\\040")
+                    .replace('\t', "\\011")
+                    .replace('\n', "\\012");
+
+                let is_mounted = mountinfo.lines().any(|line| {
+                    line.split_whitespace().nth(4) == Some(escaped_mountpoint.as_str())
+                });
+
+                if is_mounted {
+                    Err("mountpoint remains mounted".to_owned())
+                } else {
+                    fs::remove_dir(&mountpoint)
+                        .map_err(|error| format!("mountpoint cleanup failed: {error}"))
+                }
+            }
+            Err(error) => Err(format!("cannot verify mount state: {error}")),
+        };
+
+        match cleanup {
+            Ok(()) => Err(mount_error),
+            Err(reason) => Err(StorageInspectError::InvalidOutput(format!(
+                "{mount_error}; preserving mountpoint {}: {reason}",
+                mountpoint.display()
+            ))),
+        }
     }
 }
 
@@ -1638,6 +1674,98 @@ exit 1
     }
 
     #[test]
+    fn refuses_to_reuse_existing_daia_mountpoint() {
+        let (directory, command) = command_script(
+            r#"#!/bin/sh
+echo invoked > "$DAIA_TEST_MOUNT_MARKER"
+exit 99
+"#,
+        );
+
+        let mount_root = TempDir::new().expect("temporary mount root should be created");
+        let mountpoint = mount_root.path().join("sdb1");
+        fs::create_dir(&mountpoint).expect("existing mountpoint should be created");
+
+        let volume = DiscoveredContentVolume::new("/dev/sdb1", "/dev/sdb", "ext4");
+        let devices = metadata_fixture(
+            Some(LINUX_DATA_PARTITION),
+            Some("model-volume-uuid"),
+            "ext4",
+        );
+
+        let marker = directory.path().join("mount-invoked");
+        let wrapper = directory.path().join("mount-wrapper");
+        fs::write(
+            &wrapper,
+            format!(
+                "#!/bin/sh\nDAIA_TEST_MOUNT_MARKER='{}' exec '{}' \"$@\"\n",
+                marker.display(),
+                command.display()
+            ),
+        )
+        .expect("mount wrapper should be written");
+
+        use std::os::unix::fs::PermissionsExt;
+        let mut permissions = fs::metadata(&wrapper)
+            .expect("wrapper metadata should be readable")
+            .permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&wrapper, permissions).expect("wrapper should be executable");
+
+        let mounter = LinuxContentVolumeMounter::new()
+            .with_command(wrapper)
+            .with_mount_root(mount_root.path());
+
+        mounter
+            .mount_authorized_volume(&volume, &devices)
+            .expect_err("existing DAIA mountpoint must be rejected");
+
+        assert!(mountpoint.is_dir(), "existing directory must be preserved");
+        assert!(!marker.exists(), "mount command must not execute");
+    }
+
+    #[test]
+    fn preserves_nonempty_mountpoint_after_failed_mount() {
+        let (_directory, command) = command_script(
+            r#"#!/bin/sh
+for argument do
+    mountpoint="$argument"
+done
+printf 'preserve me' > "$mountpoint/marker"
+echo 'mount failed after writing marker' >&2
+exit 1
+"#,
+        );
+
+        let mount_root = TempDir::new().expect("temporary mount root should be created");
+        let mountpoint = mount_root.path().join("sdb1");
+
+        let volume = DiscoveredContentVolume::new("/dev/sdb1", "/dev/sdb", "ext4");
+        let devices = metadata_fixture(
+            Some(LINUX_DATA_PARTITION),
+            Some("model-volume-uuid"),
+            "ext4",
+        );
+
+        let mounter = LinuxContentVolumeMounter::new()
+            .with_command(command)
+            .with_mount_root(mount_root.path());
+
+        let error = mounter
+            .mount_authorized_volume(&volume, &devices)
+            .expect_err("failed mount must be reported");
+
+        assert!(
+            error.to_string().contains("preserving mountpoint"),
+            "unexpected mount error: {error}"
+        );
+        assert_eq!(
+            fs::read_to_string(mountpoint.join("marker")).expect("marker must be preserved"),
+            "preserve me"
+        );
+    }
+
+    #[test]
     fn reports_failed_read_only_mount() {
         let (_directory, command) = command_script(
             r#"#!/bin/sh
@@ -1667,6 +1795,11 @@ exit 1
         assert!(
             error.to_string().contains("read-only mount failed"),
             "unexpected mount error: {error}"
+        );
+
+        assert!(
+            !mount_root.path().join("sdb1").exists(),
+            "failed mount must not leave a DAIA-owned mountpoint directory"
         );
     }
 }
