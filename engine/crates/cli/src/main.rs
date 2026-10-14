@@ -6,9 +6,9 @@ use engine::{
     DryRunInstallationExecutor, Engine, InstallationOperation, SystemInstallationOperationExecutor,
 };
 use inspector::{
-    ContentInspector, ContentVolumeInspector, DebianIsoInspector, IsoInspector,
-    LinuxContentVolumeInspector, LinuxStorageInspector, LocalFilesystemContentInspector,
-    StorageInspector,
+    ContentInspector, ContentVolumeInspector, ContentVolumeMounter, DebianIsoInspector,
+    IsoInspector, LinuxContentVolumeInspector, LinuxStorageInspector,
+    LocalFilesystemContentInspector, StorageInspector,
 };
 use model::{
     Capability, InferenceEngineArchitectureSupport, InferenceEngineId, Plan, UserConfiguration,
@@ -140,6 +140,34 @@ where
     ExitCode::SUCCESS
 }
 
+// Runs an operation while a DAIA-owned content volume is mounted.
+// Explicit cleanup is attempted after both successful and failed operations.
+fn with_mounted_content_volume<M, F, T>(
+    mounter: &M,
+    volume: &model::DiscoveredContentVolume,
+    operation: F,
+) -> Result<T, String>
+where
+    M: ContentVolumeMounter,
+    F: FnOnce(&Path) -> Result<T, String>,
+{
+    let mountpoint = mounter
+        .mount_read_only(volume)
+        .map_err(|error| format!("Error mounting content volume: {error}"))?;
+
+    let operation_result = operation(&mountpoint);
+    let cleanup_result = mounter.unmount(&mountpoint);
+
+    match (operation_result, cleanup_result) {
+        (Ok(value), Ok(())) => Ok(value),
+        (Err(error), Ok(())) => Err(error),
+        (Ok(_), Err(error)) => Err(format!("Error unmounting content volume: {error}")),
+        (Err(operation_error), Err(cleanup_error)) => Err(format!(
+            "{operation_error}; also failed to unmount content volume: {cleanup_error}"
+        )),
+    }
+}
+
 fn discover_post_install_content_volumes<I>(
     inspector: &I,
 ) -> Result<Vec<model::DiscoveredContentVolume>, inspector::StorageInspectError>
@@ -147,6 +175,31 @@ where
     I: ContentVolumeInspector,
 {
     inspector.inspect()
+}
+
+fn select_discovered_content_volume(
+    volumes: &[model::DiscoveredContentVolume],
+    requested_device: &Path,
+) -> Result<model::DiscoveredContentVolume, String> {
+    let mut matches = volumes
+        .iter()
+        .filter(|volume| volume.device_path() == requested_device);
+
+    let selected = matches.next().ok_or_else(|| {
+        format!(
+            "Content volume was not discovered: {}",
+            requested_device.display()
+        )
+    })?;
+
+    if matches.next().is_some() {
+        return Err(format!(
+            "Ambiguous content volume device: {}",
+            requested_device.display()
+        ));
+    }
+
+    Ok(selected.clone())
 }
 
 fn run_model_volume_discovery() -> ExitCode {
@@ -167,6 +220,46 @@ fn run_model_volume_discovery() -> ExitCode {
     }
 
     ExitCode::SUCCESS
+}
+
+fn run_model_add_volume(requested_device: &str) -> ExitCode {
+    let inspector = LinuxContentVolumeInspector::new().with_post_install_discovery();
+
+    let volumes = match discover_post_install_content_volumes(&inspector) {
+        Ok(volumes) => volumes,
+        Err(error) => {
+            eprintln!("Error discovering model source volumes: {error}");
+            return ExitCode::FAILURE;
+        }
+    };
+
+    let volume = match select_discovered_content_volume(&volumes, Path::new(requested_device)) {
+        Ok(volume) => volume,
+        Err(error) => {
+            eprintln!("{error}");
+            return ExitCode::FAILURE;
+        }
+    };
+
+    let mounter = inspector::LinuxContentVolumeMounter::new();
+
+    match with_mounted_content_volume(&mounter, &volume, |mountpoint| {
+        let directory = mountpoint
+            .to_str()
+            .ok_or_else(|| "Mounted content path is not valid UTF-8".to_owned())?;
+
+        if run_model_add(Some(directory)) == ExitCode::SUCCESS {
+            Ok(())
+        } else {
+            Err("Model import workflow failed".to_owned())
+        }
+    }) {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(error) => {
+            eprintln!("{error}");
+            ExitCode::FAILURE
+        }
+    }
 }
 
 fn run_model_add(selected_directory: Option<&str>) -> ExitCode {
@@ -404,6 +497,9 @@ fn run(arguments: &[String]) -> ExitCode {
         [command] if command == "realize-models" => run_realize_models(),
         [command, subcommand] if command == "model" && subcommand == "discover" => {
             run_model_volume_discovery()
+        }
+        [command, subcommand, device] if command == "model" && subcommand == "add-volume" => {
+            run_model_add_volume(device)
         }
         [command, subcommand] if command == "model" && subcommand == "add" => run_model_add(None),
         [command, subcommand, directory] if command == "model" && subcommand == "add" => {
@@ -683,6 +779,10 @@ fn print_usage() {
     );
     eprintln!("    daia install");
     eprintln!("    daia realize-models");
+    eprintln!("    daia model discover");
+    eprintln!("    daia model add");
+    eprintln!("    daia model add <directory>");
+    eprintln!("    daia model add-volume <device>");
     eprintln!("    daia <capability>");
     eprintln!("    daia plan <capability>");
     eprintln!(
@@ -1922,6 +2022,158 @@ mod tests {
 
         assert_eq!(items.len(), 1);
         assert_eq!(items[0].path(), model_path);
+    }
+
+    #[derive(Default)]
+    struct MockContentVolumeMounter {
+        events: std::cell::RefCell<Vec<&'static str>>,
+        fail_mount: bool,
+        fail_unmount: bool,
+    }
+
+    impl inspector::ContentVolumeMounter for MockContentVolumeMounter {
+        fn mount_read_only(
+            &self,
+            _volume: &model::DiscoveredContentVolume,
+        ) -> Result<PathBuf, inspector::StorageInspectError> {
+            self.events.borrow_mut().push("mount");
+
+            if self.fail_mount {
+                return Err(inspector::StorageInspectError::InvalidOutput(
+                    "mock mount failure".to_owned(),
+                ));
+            }
+
+            Ok(PathBuf::from("/run/daia/content/mock"))
+        }
+
+        fn unmount(
+            &self,
+            _mountpoint: &std::path::Path,
+        ) -> Result<(), inspector::StorageInspectError> {
+            self.events.borrow_mut().push("unmount");
+
+            if self.fail_unmount {
+                return Err(inspector::StorageInspectError::InvalidOutput(
+                    "mock unmount failure".to_owned(),
+                ));
+            }
+
+            Ok(())
+        }
+    }
+
+    fn mock_content_volume() -> model::DiscoveredContentVolume {
+        model::DiscoveredContentVolume::new("/dev/mock1", "/dev/mock", "ext4")
+    }
+
+    #[test]
+    fn mounted_content_operation_unmounts_after_success() {
+        let mounter = MockContentVolumeMounter::default();
+        let volume = mock_content_volume();
+
+        let result = super::with_mounted_content_volume(&mounter, &volume, |mountpoint| {
+            assert_eq!(mountpoint, std::path::Path::new("/run/daia/content/mock"));
+            mounter.events.borrow_mut().push("operation");
+            Ok::<_, String>(42)
+        });
+
+        assert_eq!(result, Ok(42));
+        assert_eq!(
+            *mounter.events.borrow(),
+            vec!["mount", "operation", "unmount"]
+        );
+    }
+
+    #[test]
+    fn mounted_content_operation_unmounts_after_failure() {
+        let mounter = MockContentVolumeMounter::default();
+        let volume = mock_content_volume();
+
+        let result = super::with_mounted_content_volume(&mounter, &volume, |_| {
+            mounter.events.borrow_mut().push("operation");
+            Err::<(), _>("mock operation failure".to_owned())
+        });
+
+        assert_eq!(result, Err("mock operation failure".to_owned()));
+        assert_eq!(
+            *mounter.events.borrow(),
+            vec!["mount", "operation", "unmount"]
+        );
+    }
+
+    #[test]
+    fn mounted_content_operation_does_not_run_after_mount_failure() {
+        let mounter = MockContentVolumeMounter {
+            fail_mount: true,
+            ..Default::default()
+        };
+        let volume = mock_content_volume();
+
+        let result = super::with_mounted_content_volume(&mounter, &volume, |_| {
+            panic!("operation must not run after mount failure");
+            #[allow(unreachable_code)]
+            Ok::<(), String>(())
+        });
+
+        assert!(result.unwrap_err().contains("mock mount failure"));
+        assert_eq!(*mounter.events.borrow(), vec!["mount"]);
+    }
+
+    #[test]
+    fn mounted_content_operation_reports_operation_and_cleanup_failures() {
+        let mounter = MockContentVolumeMounter {
+            fail_unmount: true,
+            ..Default::default()
+        };
+        let volume = mock_content_volume();
+
+        let result = super::with_mounted_content_volume(&mounter, &volume, |_| {
+            Err::<(), _>("mock operation failure".to_owned())
+        });
+
+        let error = result.unwrap_err();
+
+        assert!(error.contains("mock operation failure"));
+        assert!(error.contains("mock unmount failure"));
+        assert_eq!(*mounter.events.borrow(), vec!["mount", "unmount"]);
+    }
+
+    #[test]
+    fn selects_discovered_content_volume() {
+        let volume = mock_content_volume();
+
+        let selected = super::select_discovered_content_volume(
+            std::slice::from_ref(&volume),
+            std::path::Path::new("/dev/mock1"),
+        )
+        .expect("discovered device should be selected");
+
+        assert_eq!(selected, volume);
+    }
+
+    #[test]
+    fn rejects_undiscovered_content_volume() {
+        let volume = mock_content_volume();
+
+        let result = super::select_discovered_content_volume(
+            &[volume],
+            std::path::Path::new("/dev/unknown"),
+        );
+
+        assert!(result.unwrap_err().contains("was not discovered"));
+    }
+
+    #[test]
+    fn rejects_duplicate_discovered_content_volume() {
+        let volume = mock_content_volume();
+
+        let result = super::select_discovered_content_volume(
+            &[volume.clone(), volume],
+            std::path::Path::new("/dev/mock1"),
+        );
+
+        assert!(result.unwrap_err().contains("Ambiguous"));
     }
 
     #[test]
