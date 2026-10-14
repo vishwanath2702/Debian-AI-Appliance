@@ -509,6 +509,60 @@ fn authorize_content_volume_mount(
     validate_content_volume_protected_ancestry(volume.device_path(), devices)
 }
 
+// Applies metadata and protected-ancestry checks to a fresh topology.
+// This helper alone does not authorize executing the mount command.
+fn validate_mount_gate(
+    volume: &DiscoveredContentVolume,
+    devices: &[crate::lsblk::LsblkDevice],
+) -> Result<(), StorageInspectError> {
+    authorize_content_volume_mount(volume, devices)
+}
+
+// Validates both storage topology and active-swap identity.
+// Does not execute a mount command.
+fn validate_mount_gate_with_swaps(
+    volume: &DiscoveredContentVolume,
+    devices: &[crate::lsblk::LsblkDevice],
+    swaps: &str,
+) -> Result<(), StorageInspectError> {
+    validate_mount_gate(volume, devices)?;
+    validate_content_volume_swap_identity(volume.device_path(), swaps)
+}
+
+impl LinuxContentVolumeMounter {
+    fn mount_authorized_volume(
+        &self,
+        volume: &DiscoveredContentVolume,
+        devices: &[crate::lsblk::LsblkDevice],
+    ) -> Result<PathBuf, StorageInspectError> {
+        // Only execute after authorization against supplied topology.
+        validate_mount_gate(volume, devices)?;
+
+        let mountpoint = self.mountpoint_for(volume)?;
+
+        fs::create_dir_all(&mountpoint)?;
+
+        let output = Command::new(&self.command)
+            .arg("--read-only")
+            .arg("--types")
+            .arg(volume.filesystem_type())
+            .arg("--")
+            .arg(volume.device_path())
+            .arg(&mountpoint)
+            .output()?;
+
+        if !output.status.success() {
+            return Err(StorageInspectError::ProcessFailed {
+                command: self.command.display().to_string(),
+                status: output.status,
+                stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+            });
+        }
+
+        Ok(mountpoint)
+    }
+}
+
 impl ContentVolumeMounter for LinuxContentVolumeMounter {
     fn mount_read_only(
         &self,
@@ -533,32 +587,14 @@ impl ContentVolumeMounter for LinuxContentVolumeMounter {
             )));
         }
 
-        // Require fresh storage inspection before invoking mount.
-        // Full topology authorization will be connected separately.
-        let _fresh_topology = self.inspect_mount_topology()?;
+        let fresh_topology = self.inspect_mount_topology()?;
 
-        let mountpoint = self.mountpoint_for(volume)?;
+        // Reject active swap by actual block-device identity, including aliases.
+        // Failure to read or validate the kernel swap table blocks mounting.
+        let active_swaps = fs::read_to_string("/proc/swaps")?;
+        validate_mount_gate_with_swaps(volume, &fresh_topology, &active_swaps)?;
 
-        fs::create_dir_all(&mountpoint)?;
-
-        let output = Command::new(&self.command)
-            .arg("--read-only")
-            .arg("--types")
-            .arg(volume.filesystem_type())
-            .arg("--")
-            .arg(volume.device_path())
-            .arg(&mountpoint)
-            .output()?;
-
-        if !output.status.success() {
-            return Err(StorageInspectError::ProcessFailed {
-                command: self.command.display().to_string(),
-                status: output.status,
-                stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
-            });
-        }
-
-        Ok(mountpoint)
+        self.mount_authorized_volume(volume, &fresh_topology)
     }
 
     fn unmount(&self, mountpoint: &Path) -> Result<(), StorageInspectError> {
@@ -776,6 +812,39 @@ mod tests {
     }
 
     const LINUX_DATA_PARTITION: &str = "0fc63daf-8483-4772-8e79-3d69d8477de4";
+
+    #[test]
+    fn swap_parser_rejects_empty_table() {
+        let error = super::validate_content_volume_swap(std::path::Path::new("/dev/sdb1"), "")
+            .expect_err("empty swap table must be rejected");
+
+        assert!(
+            error.to_string().contains("active swap table is empty"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn mount_gate_rejects_active_descendant_before_mount_command() {
+        let mut devices = metadata_fixture(Some(LINUX_DATA_PARTITION), Some("data-uuid"), "ext4");
+
+        let mut descendant = devices[0].children[0].clone();
+        descendant.path = "/dev/mapper/active-root".to_owned();
+        descendant.device_type = "lvm".to_owned();
+        descendant.mountpoint = Some("/".to_owned());
+        descendant.children.clear();
+
+        devices[0].children[0].children.push(descendant);
+
+        let volume = DiscoveredContentVolume::new("/dev/sdb1", "/dev/sdb", "ext4");
+
+        let result = super::validate_mount_gate(&volume, &devices);
+
+        assert!(
+            result.is_err(),
+            "mount gate must reject active storage descendants"
+        );
+    }
 
     #[test]
     fn mount_authorization_rejects_active_descendant() {
@@ -1377,43 +1446,42 @@ mod tests {
 
     #[test]
     fn mounts_external_volume_read_only_under_daia_mount_root() {
-        let (_directory, command) = command_script(
-            r#"#!/bin/sh
-printf '%s\n' "$@" > "$DAIA_TEST_MOUNT_ARGS"
-"#,
-        );
-
         let mount_root = TempDir::new().expect("temporary mount root should be created");
         let arguments = mount_root.path().join("mount-arguments");
-
-        let wrapper = mount_root.path().join("mount-wrapper");
-        fs::copy(&command, &wrapper).expect("mount command should be copied");
+        let command = mount_root.path().join("mock-mount");
 
         let script = format!(
-            "#!/bin/sh\nDAIA_TEST_MOUNT_ARGS='{}' exec '{}' \"$@\"\n",
+            r#"#!/bin/sh
+printf '%s\n' "$@" > '{}'
+"#,
             arguments.display(),
-            command.display(),
         );
 
-        fs::write(&wrapper, script).expect("mount wrapper should be written");
+        fs::write(&command, script).expect("mock mount command should be written");
 
-        let mut permissions = fs::metadata(&wrapper)
-            .expect("mount wrapper metadata should be readable")
+        let mut permissions = fs::metadata(&command)
+            .expect("mock mount metadata should be readable")
             .permissions();
 
         permissions.set_mode(0o755);
-
-        fs::set_permissions(&wrapper, permissions).expect("mount wrapper should be executable");
+        fs::set_permissions(&command, permissions)
+            .expect("mock mount command should be executable");
 
         let volume =
             DiscoveredContentVolume::new("/dev/sdb1", "/dev/sdb", "ext4").with_label("DAIA-MODELS");
 
+        let devices = metadata_fixture(
+            Some(LINUX_DATA_PARTITION),
+            Some("model-volume-uuid"),
+            "ext4",
+        );
+
         let mounter = LinuxContentVolumeMounter::new()
-            .with_command(wrapper)
+            .with_command(command)
             .with_mount_root(mount_root.path());
 
         let mountpoint = mounter
-            .mount_read_only(&volume)
+            .mount_authorized_volume(&volume, &devices)
             .expect("content volume should mount");
 
         assert_eq!(mountpoint, mount_root.path().join("sdb1"));
@@ -1582,12 +1650,18 @@ exit 1
 
         let volume = DiscoveredContentVolume::new("/dev/sdb1", "/dev/sdb", "ext4");
 
+        let devices = metadata_fixture(
+            Some(LINUX_DATA_PARTITION),
+            Some("model-volume-uuid"),
+            "ext4",
+        );
+
         let mounter = LinuxContentVolumeMounter::new()
             .with_command(command)
             .with_mount_root(mount_root.path());
 
         let error = mounter
-            .mount_read_only(&volume)
+            .mount_authorized_volume(&volume, &devices)
             .expect_err("failed mount should be reported");
 
         assert!(
