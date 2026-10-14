@@ -140,8 +140,32 @@ where
     ExitCode::SUCCESS
 }
 
+// Owns a DAIA content mount until explicit cleanup or scope exit.
+struct MountedContentGuard<'a, M: ContentVolumeMounter> {
+    mounter: &'a M,
+    mountpoint: PathBuf,
+    cleanup_attempted: bool,
+}
+
+impl<M: ContentVolumeMounter> MountedContentGuard<'_, M> {
+    fn cleanup(&mut self) -> Result<(), inspector::StorageInspectError> {
+        self.cleanup_attempted = true;
+        self.mounter.unmount(&self.mountpoint)
+    }
+}
+
+impl<M: ContentVolumeMounter> Drop for MountedContentGuard<'_, M> {
+    fn drop(&mut self) {
+        if !self.cleanup_attempted {
+            if let Err(error) = self.cleanup() {
+                eprintln!("Error unmounting content volume during cleanup: {error}");
+            }
+        }
+    }
+}
+
 // Runs an operation while a DAIA-owned content volume is mounted.
-// Explicit cleanup is attempted after both successful and failed operations.
+// Explicit cleanup preserves errors; the guard also handles panic unwinding.
 fn with_mounted_content_volume<M, F, T>(
     mounter: &M,
     volume: &model::DiscoveredContentVolume,
@@ -155,8 +179,14 @@ where
         .mount_read_only(volume)
         .map_err(|error| format!("Error mounting content volume: {error}"))?;
 
-    let operation_result = operation(&mountpoint);
-    let cleanup_result = mounter.unmount(&mountpoint);
+    let mut guard = MountedContentGuard {
+        mounter,
+        mountpoint,
+        cleanup_attempted: false,
+    };
+
+    let operation_result = operation(&guard.mountpoint);
+    let cleanup_result = guard.cleanup();
 
     match (operation_result, cleanup_result) {
         (Ok(value), Ok(())) => Ok(value),
@@ -2082,6 +2112,28 @@ mod tests {
         assert_eq!(
             *mounter.events.borrow(),
             vec!["mount", "operation", "unmount"]
+        );
+    }
+
+    #[test]
+    fn mounted_content_operation_unmounts_during_panic_unwinding() {
+        let mounter = MockContentVolumeMounter::default();
+        let volume = mock_content_volume();
+
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _ = super::with_mounted_content_volume(&mounter, &volume, |_| {
+                mounter.events.borrow_mut().push("operation");
+                panic!("mock import panic");
+                #[allow(unreachable_code)]
+                Ok::<(), String>(())
+            });
+        }));
+
+        assert!(result.is_err(), "operation panic must propagate");
+        assert_eq!(
+            *mounter.events.borrow(),
+            vec!["mount", "operation", "unmount"],
+            "panic unwinding must trigger exactly one unmount"
         );
     }
 
