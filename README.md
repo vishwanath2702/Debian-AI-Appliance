@@ -1,45 +1,51 @@
-# DAIA (Debian AI Appliance)
+# DAIA — Debian AI Appliance
 
-DAIA is a declarative build system for creating reproducible, Debian-based AI appliances.
+DAIA is an open-source platform for creating ready-to-use, Debian-based appliances.
 
-Rather than manually installing packages, configuring services, resolving dependencies, and assembling AI software stacks, DAIA allows you to describe the capabilities you want. It transforms those high-level capability definitions into complete Debian-based AI systems, from a minimal installation to a ready-to-use AI workstation or inference server.
+Imagine having a computer that does exactly what you need—whether it's a personal AI assistant, an offline knowledge library, a mail server, or a home storage system—without having to install and configure everything yourself.
 
-## Vision
+That's what DAIA aims to make possible.
 
-DAIA is built around one guiding principle:
+Instead of building a different operating system for every purpose, DAIA lets you choose the capabilities you need and brings them together into a dedicated appliance.
 
-> **Build AI appliances, not generic Linux systems.**
+## What Can You Build with DAIA?
 
-Many excellent tools already exist for general-purpose server provisioning and configuration management. DAIA focuses exclusively on building reproducible AI platforms.
+DAIA is designed to support a growing family of appliances:
 
-Its purpose is to understand AI software stacks, hardware requirements, runtime dependencies, and system configuration so that users can build complete AI environments without manually researching compatibility between operating systems, GPU drivers, CUDA versions, machine learning frameworks, and AI services.
+- **AI:** Local AI assistants, Ollama, Open WebUI, speech recognition, and computer vision.
+- **Wanderer:** Offline maps, Wikipedia, navigation, software-defined radio (SDR), and AI—useful even without an internet connection.
+- **Mail:** Your own email server with Postfix, Dovecot, OpenLDAP, administration, and monitoring.
+- **Storage:** Personal or business storage with Samba, NFS, RAID, ZFS, and backups.
+- **Cloud:** Private cloud services with Nextcloud, file synchronization, and collaboration.
+- **Networking:** DNS, DHCP, VPN, and firewall appliances.
+- **Security:** System monitoring, intrusion detection, and auditing.
 
-## Design Goals
+These are examples of DAIA's intended capabilities. Not all are implemented yet.
 
-* Declarative capability-based builds
-* Reproducible Debian AI appliances
-* Modular architecture with clear separation of responsibilities
-* Extensible provider and capability model
-* Automated dependency resolution
-* Automated package and service provisioning
-* Hardware-aware AI runtime configuration
-* Clean, testable Rust implementation
+## One Platform. Many Possibilities.
 
-## Long-Term Goals
+The idea behind DAIA is simple: **you decide what your appliance should do, and DAIA takes care of putting the pieces together.**
 
-DAIA aims to support building a wide variety of AI systems, including:
+Want an AI workstation? A private family cloud? An offline travel companion? Or a combination of several capabilities?
 
-* AI workstations
-* AI inference servers
-* Local LLM appliances
-* GPU compute nodes
-* AI development environments
-* Virtual machine images
-* Cloud images
+DAIA is being built to make these possible without maintaining a separate project for each appliance.
 
-[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/vishwanath2702/Debian-AI-Appliance)
-* Bootable AI appliance images
+And as new technologies become available, new capabilities can be added and reused across different appliances.
 
-Future capabilities will include AI runtimes, model serving, GPU acceleration, notebooks, web interfaces, and complete AI software stacks while remaining focused on one mission:
+## Built on Debian. Powered by Rust.
 
-> **Creating reproducible Debian-based AI appliances.**
+DAIA combines Debian's stability with a modular, Rust-based engine and installer.
+
+Its goal is to make building and installing specialized systems simpler, more consistent, and easier to reproduce.
+
+## Project Status
+
+DAIA is under active development. Its Debian-based image builder, Rust engine, capability framework, and installer are being developed and tested. Additional appliance capabilities will be introduced progressively.
+
+## Our Vision
+
+**One engine. One installer. Many appliances.**
+
+DAIA isn't about creating yet another Linux distribution.
+
+It's about making it easier for anyone to turn an idea into a purpose-built appliance.
