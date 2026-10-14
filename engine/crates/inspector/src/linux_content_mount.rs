@@ -38,6 +38,7 @@ pub trait ContentVolumeMounter {
 pub struct LinuxContentVolumeMounter {
     command: PathBuf,
     umount_command: PathBuf,
+    lsblk_command: PathBuf,
     mount_root: PathBuf,
 }
 
@@ -54,6 +55,7 @@ impl LinuxContentVolumeMounter {
         Self {
             command: PathBuf::from("mount"),
             umount_command: PathBuf::from("umount"),
+            lsblk_command: PathBuf::from("lsblk"),
             mount_root: PathBuf::from("/run/daia/content"),
         }
     }
@@ -72,11 +74,45 @@ impl LinuxContentVolumeMounter {
         self
     }
 
+    /// Uses a custom `lsblk` executable for mount-time inspection.
+    #[must_use]
+    pub fn with_lsblk_command(mut self, command: impl Into<PathBuf>) -> Self {
+        self.lsblk_command = command.into();
+        self
+    }
+
     /// Uses a custom DAIA-owned mount root.
     #[must_use]
     pub fn with_mount_root(mut self, mount_root: impl Into<PathBuf>) -> Self {
         self.mount_root = mount_root.into();
         self
+    }
+
+    // Obtains a fresh storage snapshot for mount-time safety validation.
+    // The caller must validate the selected device against this snapshot.
+    fn inspect_mount_topology(
+        &self,
+    ) -> Result<Vec<crate::lsblk::LsblkDevice>, StorageInspectError> {
+        let output = Command::new(&self.lsblk_command)
+            .arg("--json")
+            .arg("--paths")
+            .arg("--bytes")
+            .arg("--output")
+            .arg("PATH,TYPE,RM,WWN,SERIAL,SIZE,FSTYPE,LABEL,MOUNTPOINT,PARTTYPE,UUID")
+            .output()?;
+
+        if !output.status.success() {
+            return Err(StorageInspectError::ProcessFailed {
+                command: self.lsblk_command.display().to_string(),
+                status: output.status,
+                stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+            });
+        }
+
+        let parsed: crate::lsblk::LsblkOutput = serde_json::from_slice(&output.stdout)
+            .map_err(|error| StorageInspectError::InvalidOutput(error.to_string()))?;
+
+        Ok(parsed.blockdevices)
     }
 
     /// Returns the configured mount executable.
@@ -463,6 +499,16 @@ fn validate_content_volume_metadata(
     Ok(())
 }
 
+// Validates current partition metadata and protected storage ancestry.
+// Active-swap identity checks and production wiring remain separate.
+fn authorize_content_volume_mount(
+    volume: &DiscoveredContentVolume,
+    devices: &[crate::lsblk::LsblkDevice],
+) -> Result<(), StorageInspectError> {
+    validate_content_volume_metadata(volume, devices)?;
+    validate_content_volume_protected_ancestry(volume.device_path(), devices)
+}
+
 impl ContentVolumeMounter for LinuxContentVolumeMounter {
     fn mount_read_only(
         &self,
@@ -475,6 +521,21 @@ impl ContentVolumeMounter for LinuxContentVolumeMounter {
                 mountpoint.display()
             )));
         }
+
+        use std::os::unix::fs::FileTypeExt;
+
+        let metadata = fs::metadata(volume.device_path())?;
+
+        if !metadata.file_type().is_block_device() {
+            return Err(StorageInspectError::InvalidOutput(format!(
+                "content volume {} is not a block device",
+                volume.device_path().display()
+            )));
+        }
+
+        // Require fresh storage inspection before invoking mount.
+        // Full topology authorization will be connected separately.
+        let _fresh_topology = self.inspect_mount_topology()?;
 
         let mountpoint = self.mountpoint_for(volume)?;
 
@@ -579,6 +640,103 @@ mod tests {
         (directory, command)
     }
 
+    #[test]
+    fn mount_rejects_missing_block_device_before_command() {
+        let directory = TempDir::new().expect("temporary directory should be created");
+
+        let marker = directory.path().join("mount-invoked");
+        let command = directory.path().join("mock-mount");
+
+        let script = format!("#!/bin/sh\ntouch '{}'\nexit 0\n", marker.display());
+
+        fs::write(&command, script).expect("mock mount command should be written");
+
+        let mut permissions = fs::metadata(&command)
+            .expect("mock mount metadata should be readable")
+            .permissions();
+
+        permissions.set_mode(0o755);
+
+        fs::set_permissions(&command, permissions).expect("mock mount should be executable");
+
+        let mounter = LinuxContentVolumeMounter::new()
+            .with_command(&command)
+            .with_mount_root(directory.path().join("content"));
+
+        let volume = DiscoveredContentVolume::new(
+            directory.path().join("missing-block-device"),
+            "/dev/sdb",
+            "ext4",
+        );
+
+        let result = mounter.mount_read_only(&volume);
+
+        assert!(result.is_err(), "missing block device must be rejected");
+
+        assert!(
+            !marker.exists(),
+            "mount command must not run for an invalid block device"
+        );
+    }
+
+    #[test]
+    fn mount_topology_reader_rejects_invalid_json() {
+        let (_directory, command) = command_script("#!/bin/sh\nprintf 'invalid-json\\n'\n");
+
+        let mounter = LinuxContentVolumeMounter::new().with_lsblk_command(command);
+
+        let error = mounter
+            .inspect_mount_topology()
+            .expect_err("invalid topology JSON must be rejected");
+
+        assert!(
+            matches!(error, crate::StorageInspectError::InvalidOutput(_)),
+            "unexpected topology error: {error}"
+        );
+    }
+
+    #[test]
+    fn mount_rejects_failed_fresh_topology_before_command() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let marker = directory.path().join("mount-invoked");
+
+        let mount_command = directory.path().join("mount-command");
+        std::fs::write(
+            &mount_command,
+            format!("#!/bin/sh\nprintf invoked > '{}'\n", marker.display()),
+        )
+        .expect("write mount command");
+
+        let mut permissions = std::fs::metadata(&mount_command)
+            .expect("mount command metadata")
+            .permissions();
+        permissions.set_mode(0o700);
+        std::fs::set_permissions(&mount_command, permissions)
+            .expect("make mount command executable");
+
+        let (_lsblk_directory, lsblk_command) = command_script("#!/bin/sh\nexit 1\n");
+
+        let volume = model::DiscoveredContentVolume::new("/dev/sdb1", "/dev/sdb", "ext4");
+
+        let mounter = LinuxContentVolumeMounter::new()
+            .with_command(mount_command)
+            .with_lsblk_command(lsblk_command)
+            .with_mount_root(directory.path().join("mounts"));
+
+        let result = mounter.mount_read_only(&volume);
+
+        assert!(
+            result.is_err(),
+            "failed fresh topology inspection must prevent mounting"
+        );
+        assert!(
+            !marker.exists(),
+            "mount command must not execute after topology failure"
+        );
+    }
+
     fn metadata_fixture(
         partition_type: Option<&str>,
         filesystem_uuid: Option<&str>,
@@ -618,6 +776,28 @@ mod tests {
     }
 
     const LINUX_DATA_PARTITION: &str = "0fc63daf-8483-4772-8e79-3d69d8477de4";
+
+    #[test]
+    fn mount_authorization_rejects_active_descendant() {
+        let mut devices = metadata_fixture(Some(LINUX_DATA_PARTITION), Some("data-uuid"), "ext4");
+
+        let mut descendant = devices[0].children[0].clone();
+        descendant.path = "/dev/mapper/active-root".to_owned();
+        descendant.device_type = "lvm".to_owned();
+        descendant.mountpoint = Some("/".to_owned());
+        descendant.children.clear();
+
+        devices[0].children[0].children.push(descendant);
+
+        let volume = model::DiscoveredContentVolume::new("/dev/sdb1", "/dev/sdb", "ext4");
+
+        let result = super::authorize_content_volume_mount(&volume, &devices);
+
+        assert!(
+            result.is_err(),
+            "active descendant must prevent mount authorization"
+        );
+    }
 
     #[test]
     fn topology_accepts_unmounted_data_partition() {
