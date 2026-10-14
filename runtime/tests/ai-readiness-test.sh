@@ -100,8 +100,34 @@ test_stops_after_attempt_limit()
         fail "Ollama readiness exceeded or missed attempt limit"
 }
 
+test_ready_without_home()
+{
+    local directory
+    directory="$(mktemp -d)"
+    trap 'rm -rf "$directory"' RETURN
+
+    cat > "${directory}/ollama" <<'SCRIPT'
+#!/usr/bin/env bash
+set -euo pipefail
+
+[[ "${1:-}" == "list" ]] || exit 1
+[[ "${HOME:-}" == "/var/lib/ollama" ]] || exit 1
+SCRIPT
+
+    chmod +x "${directory}/ollama"
+
+    (
+        unset HOME
+        export DAIA_OLLAMA_READY_ATTEMPTS=1
+        export DAIA_OLLAMA_READY_DELAY=0
+
+        _ai_wait_for_ollama_ready "${directory}/ollama"
+    ) || fail "Ollama readiness failed without inherited HOME"
+}
+
 test_ready_immediately
 test_retries_until_ready
 test_stops_after_attempt_limit
+test_ready_without_home
 
 printf 'PASS: Ollama readiness verification\n'

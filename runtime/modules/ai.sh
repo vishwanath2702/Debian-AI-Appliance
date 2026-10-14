@@ -180,7 +180,7 @@ _ai_wait_for_ollama_ready() {
     local last_error=""
 
     for ((attempt = 1; attempt <= attempts; attempt++)); do
-        if last_error="$("$ollama_binary" list 2>&1)"; then
+        if last_error="$(HOME=/var/lib/ollama "$ollama_binary" list 2>&1)"; then
             return 0
         fi
 
