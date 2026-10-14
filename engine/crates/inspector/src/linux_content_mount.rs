@@ -94,6 +94,7 @@ impl LinuxContentVolumeMounter {
         &self,
     ) -> Result<Vec<crate::lsblk::LsblkDevice>, StorageInspectError> {
         let output = Command::new(&self.lsblk_command)
+            .arg("--tree")
             .arg("--json")
             .arg("--paths")
             .arg("--bytes")
@@ -749,6 +750,28 @@ mod tests {
             !marker.exists(),
             "mount command must not run for an invalid block device"
         );
+    }
+
+    #[test]
+    fn mount_topology_requests_explicit_lsblk_tree() {
+        let (_directory, command) = command_script(
+            r#"#!/bin/sh
+[ "$1" = "--tree" ] || exit 21
+[ "$2" = "--json" ] || exit 22
+[ "$3" = "--paths" ] || exit 23
+[ "$4" = "--bytes" ] || exit 24
+[ "$5" = "--output" ] || exit 25
+printf '%s\n' '{"blockdevices":[]}'
+"#,
+        );
+
+        let mounter = LinuxContentVolumeMounter::new().with_lsblk_command(command);
+
+        let devices = mounter
+            .inspect_mount_topology()
+            .expect("lsblk must receive explicit tree arguments");
+
+        assert!(devices.is_empty());
     }
 
     #[test]

@@ -36,6 +36,7 @@ impl ContentVolumeInspector for LinuxContentVolumeInspector {
         let live_medium_disk_path = self.live_medium_disk_path()?;
 
         let output = Command::new(&self.command)
+            .arg("--tree")
             .arg("--json")
             .arg("--paths")
             .arg("--bytes")
@@ -348,6 +349,37 @@ mod tests {
 echo 'overlay'
 ",
         )
+    }
+
+    #[test]
+    fn content_discovery_requests_explicit_lsblk_tree() {
+        let (_directory, command) = command_script(
+            r#"#!/bin/sh
+if [ "$1" != "--tree" ] ||
+   [ "$2" != "--json" ] ||
+   [ "$3" != "--paths" ] ||
+   [ "$4" != "--bytes" ]; then
+    echo "missing required lsblk tree arguments: $*" >&2
+    exit 1
+fi
+
+cat <<'JSON'
+{"blockdevices":[{"path":"/dev/sdb","type":"disk","rm":true,"size":61920509952,"children":[{"path":"/dev/sdb1","type":"part","rm":true,"size":61918412800,"fstype":"ext4","label":"DAIA-MODELS"}]}]}
+JSON
+"#,
+        );
+
+        let (_findmnt_directory, findmnt_command) = overlay_findmnt_command();
+
+        let volumes = LinuxContentVolumeInspector::new()
+            .with_command(command)
+            .with_findmnt_command(findmnt_command)
+            .inspect()
+            .expect("content discovery must request explicit lsblk tree output");
+
+        assert_eq!(volumes.len(), 1);
+        assert_eq!(volumes[0].device_path(), std::path::Path::new("/dev/sdb1"));
+        assert_eq!(volumes[0].label(), Some("DAIA-MODELS"));
     }
 
     #[test]
