@@ -239,9 +239,7 @@ fn content_volumes(
             continue;
         }
 
-        for child in &disk.children {
-            collect_content_volumes(child, disk_path, &mut volumes, post_install_discovery);
-        }
+        collect_content_volumes(disk, disk_path, &mut volumes, post_install_discovery);
     }
 
     volumes
@@ -269,10 +267,13 @@ fn collect_content_volumes(
         return;
     }
 
-    if let Some(filesystem_type) = device
-        .filesystem_type
-        .as_deref()
-        .filter(|filesystem_type| !filesystem_type.is_empty())
+    // A whole-disk filesystem is eligible only when the disk has no
+    // partition, mapping, or other child block devices.
+    if (device.device_type != "disk" || device.children.is_empty())
+        && let Some(filesystem_type) = device
+            .filesystem_type
+            .as_deref()
+            .filter(|filesystem_type| !filesystem_type.is_empty())
     {
         let mut volume = DiscoveredContentVolume::new(&device.path, parent_disk, filesystem_type);
 
@@ -380,6 +381,103 @@ JSON
         assert_eq!(volumes.len(), 1);
         assert_eq!(volumes[0].device_path(), std::path::Path::new("/dev/sdb1"));
         assert_eq!(volumes[0].label(), Some("DAIA-MODELS"));
+    }
+
+    #[test]
+    fn discovers_whole_disk_content_filesystem() {
+        use crate::lsblk::LsblkDevice;
+
+        let disk = LsblkDevice {
+            path: "/dev/sdb".to_owned(),
+            device_type: "disk".to_owned(),
+            rm: true,
+            wwn: None,
+            serial: None,
+            size: 134_217_728,
+            filesystem_type: Some("ext4".to_owned()),
+            label: Some("DAIA_MODELS".to_owned()),
+            mountpoint: None,
+            partition_type: None,
+            filesystem_uuid: None,
+            children: Vec::new(),
+        };
+
+        let volumes = super::content_volumes(&[disk], None, None, false);
+
+        assert_eq!(volumes.len(), 1);
+        assert_eq!(volumes[0].device_path(), std::path::Path::new("/dev/sdb"));
+        assert_eq!(
+            volumes[0].parent_device_path(),
+            std::path::Path::new("/dev/sdb")
+        );
+        assert_eq!(volumes[0].filesystem_type(), "ext4");
+        assert_eq!(volumes[0].label(), Some("DAIA_MODELS"));
+    }
+
+    #[test]
+    fn excludes_whole_disk_filesystem_when_disk_has_children() {
+        use crate::lsblk::LsblkDevice;
+
+        let partition = LsblkDevice {
+            path: "/dev/sdb1".to_owned(),
+            device_type: "part".to_owned(),
+            rm: true,
+            wwn: None,
+            serial: None,
+            size: 67_108_864,
+            filesystem_type: Some("ext4".to_owned()),
+            label: Some("PARTITION_MODELS".to_owned()),
+            mountpoint: None,
+            partition_type: None,
+            filesystem_uuid: None,
+            children: Vec::new(),
+        };
+
+        let disk = LsblkDevice {
+            path: "/dev/sdb".to_owned(),
+            device_type: "disk".to_owned(),
+            rm: true,
+            wwn: None,
+            serial: None,
+            size: 134_217_728,
+            filesystem_type: Some("ext4".to_owned()),
+            label: Some("WHOLE_DISK".to_owned()),
+            mountpoint: None,
+            partition_type: None,
+            filesystem_uuid: None,
+            children: vec![partition],
+        };
+
+        let volumes = super::content_volumes(&[disk], None, None, false);
+
+        assert_eq!(volumes.len(), 1);
+        assert_eq!(volumes[0].device_path(), std::path::Path::new("/dev/sdb1"));
+        assert_eq!(volumes[0].label(), Some("PARTITION_MODELS"));
+    }
+
+    #[test]
+    fn excludes_whole_disk_system_filesystem_before_installation() {
+        use crate::lsblk::LsblkDevice;
+
+        let disk = LsblkDevice {
+            path: "/dev/sda".to_owned(),
+            device_type: "disk".to_owned(),
+            rm: false,
+            wwn: None,
+            serial: None,
+            size: 134_217_728,
+            filesystem_type: Some("ext4".to_owned()),
+            label: Some("DAIA_SYSTEM".to_owned()),
+            mountpoint: Some("/".to_owned()),
+            partition_type: None,
+            filesystem_uuid: None,
+            children: Vec::new(),
+        };
+
+        let volumes =
+            super::content_volumes(&[disk], Some(std::path::Path::new("/dev/sda")), None, false);
+
+        assert!(volumes.is_empty());
     }
 
     #[test]

@@ -220,11 +220,19 @@ impl IsoRefreshInputs {
             .ok_or_else(|| invalid("bundled repository destination has no parent"))?;
 
         let canonical_repository_directory = repository_directory.canonicalize()?;
-        if !canonical_repository_directory.starts_with(rootfs_destination.canonicalize()?)
-            || bundled_repository.exists()
-            || bundled_repository.is_symlink()
-        {
+        if !canonical_repository_directory.starts_with(rootfs_destination.canonicalize()?) {
             return Err(invalid("unsafe bundled repository staging destination"));
+        }
+
+        match std::fs::symlink_metadata(&bundled_repository) {
+            Ok(metadata) if metadata.file_type().is_file() => {
+                std::fs::remove_file(&bundled_repository)?;
+            }
+            Ok(_) => {
+                return Err(invalid("unsafe bundled repository staging destination"));
+            }
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error),
         }
 
         std::fs::write(&bundled_repository, b"pending candidate deployment\n")?;
@@ -1076,6 +1084,9 @@ mod tests {
         let repository_directory = inputs.rootfs.join("usr/share/daia/content-repositories");
         std::fs::create_dir_all(&repository_directory).unwrap();
 
+        let original_repository = repository_directory.join("bundled-models.yaml");
+        std::fs::write(&original_repository, b"original bundled repository\n").unwrap();
+
         let mock_rsync = temp.path().join("mock-rsync.sh");
         std::fs::write(
             &mock_rsync,
@@ -1095,7 +1106,10 @@ mod tests {
             std::fs::read(candidate_repository).unwrap(),
             b"pending candidate deployment\n"
         );
-        assert!(!repository_directory.join("bundled-models.yaml").exists());
+        assert_eq!(
+            std::fs::read(&original_repository).unwrap(),
+            b"original bundled repository\n"
+        );
 
         assert!(inputs.workspace.join("rootfs").is_dir());
         assert!(inputs.workspace.join("payload").is_dir());

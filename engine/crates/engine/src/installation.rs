@@ -711,16 +711,27 @@ fn validate_destructive_storage(
 ) -> io::Result<()> {
     let identity = storage_id.as_str();
 
-    let stable_identity = ["wwn:", "serial:"].iter().any(|prefix| {
+    // WWN and serial identities are persistent when supplied by hardware.
+    // Path identities are session-local fallbacks for disks without either.
+    // Every destructive operation must rediscover and revalidate its target.
+    let recognized_identity = ["wwn:", "serial:", "path:"].iter().any(|prefix| {
         identity
             .strip_prefix(prefix)
             .is_some_and(|value| !value.trim().is_empty())
     });
 
-    if !stable_identity {
+    if !recognized_identity {
         return Err(io::Error::other(
-            "destructive installation requires a stable disk identity",
+            "destructive installation requires a recognized disk identity",
         ));
+    }
+
+    if let Some(identity_path) = identity.strip_prefix("path:") {
+        if std::path::Path::new(identity_path) != device_path {
+            return Err(io::Error::other(
+                "selected disk identity does not match its device path",
+            ));
+        }
     }
 
     let mut matching = discovered
@@ -779,6 +790,29 @@ fn destructive_storage_validation_rejects_unsafe_targets() {
 
     assert!(validate_destructive_storage(&id, path, &[safe.clone()]).is_ok());
 
+    // Virtual disks may not expose WWN or serial numbers.
+    let virtual_disk = DiscoveredStorage::new("path:/dev/vda", StorageKind::Secondary, "/dev/vda");
+    assert!(
+        validate_destructive_storage(
+            virtual_disk.id(),
+            std::path::Path::new("/dev/vda"),
+            &[virtual_disk.clone()],
+        )
+        .is_ok()
+    );
+
+    // A session-local identity must still reject a protected system disk.
+    let protected_virtual_disk =
+        DiscoveredStorage::new("path:/dev/vda", StorageKind::System, "/dev/vda");
+    assert!(
+        validate_destructive_storage(
+            protected_virtual_disk.id(),
+            std::path::Path::new("/dev/vda"),
+            &[protected_virtual_disk.clone()],
+        )
+        .is_err()
+    );
+
     let cases = [
         (
             "missing disk",
@@ -813,14 +847,34 @@ fn destructive_storage_validation_rejects_unsafe_targets() {
             "system disk",
         ),
         (
-            "path-only identity",
-            DiscoveredStorageId::new("path:/dev/sdb"),
+            "unrecognized identity",
+            DiscoveredStorageId::new("unknown:disk"),
             vec![DiscoveredStorage::new(
-                "path:/dev/sdb",
+                "unknown:disk",
                 StorageKind::Secondary,
                 "/dev/sdb",
             )],
-            "stable disk identity",
+            "recognized disk identity",
+        ),
+        (
+            "empty identity",
+            DiscoveredStorageId::new("serial:"),
+            vec![DiscoveredStorage::new(
+                "serial:",
+                StorageKind::Secondary,
+                "/dev/sdb",
+            )],
+            "recognized disk identity",
+        ),
+        (
+            "path identity mismatch",
+            DiscoveredStorageId::new("path:/dev/sdc"),
+            vec![DiscoveredStorage::new(
+                "path:/dev/sdc",
+                StorageKind::Secondary,
+                "/dev/sdb",
+            )],
+            "identity does not match",
         ),
     ];
 
@@ -1472,6 +1526,22 @@ where
                 mount.arg("--bind").arg("/sys").arg(&target_sys);
 
                 self.runner.status(&mut mount)?;
+
+                // Mount EFI variables without recursively importing cgroup mounts.
+                let target_efivars = target_sys.join("firmware/efi/efivars");
+
+                let mut mkdir = Command::new("mkdir");
+                mkdir.arg("-p").arg(&target_efivars);
+
+                self.runner.status(&mut mkdir)?;
+
+                let mut mount = Command::new("mount");
+                mount
+                    .arg("--bind")
+                    .arg("/sys/firmware/efi/efivars")
+                    .arg(&target_efivars);
+
+                self.runner.status(&mut mount)?;
                 let target_run = root.join("run");
 
                 let mut mkdir = Command::new("mkdir");
@@ -1497,6 +1567,18 @@ where
                 );
 
                 self.runner.status(&mut grub_install)?;
+
+                let mut registered_grub_install = command_in_root(
+                    root,
+                    "grub-install",
+                    &[
+                        "--target=x86_64-efi",
+                        "--efi-directory=/boot/efi",
+                        "--bootloader-id=DAIA",
+                    ],
+                );
+
+                self.runner.status(&mut registered_grub_install)?;
 
                 let mut update_grub = command_in_root(root, "update-grub", &[]);
 
@@ -3106,6 +3188,17 @@ mod tests {
                 vec![
                     "mkdir".to_owned(),
                     "-p".to_owned(),
+                    "/target/sys/firmware/efi/efivars".to_owned(),
+                ],
+                vec![
+                    "mount".to_owned(),
+                    "--bind".to_owned(),
+                    "/sys/firmware/efi/efivars".to_owned(),
+                    "/target/sys/firmware/efi/efivars".to_owned(),
+                ],
+                vec![
+                    "mkdir".to_owned(),
+                    "-p".to_owned(),
                     "/target/run".to_owned(),
                 ],
                 vec![
@@ -3217,11 +3310,56 @@ mod tests {
     }
 
     #[test]
-    fn system_executor_returns_update_grub_failure() {
+    fn system_executor_stops_when_uefi_registration_fails() {
         let mut executor =
             SystemInstallationOperationExecutor::with_dependencies(FailingAtCommandRunner {
                 commands: Vec::new(),
                 fail_at: 2,
+            });
+
+        let operation = InstallationOperation::InstallBootloader {
+            root: "/target".into(),
+            device_path: "/dev/sdb".into(),
+        };
+
+        let error = executor
+            .execute_operation(&operation)
+            .expect_err("UEFI registration failure should fail bootloader installation");
+
+        assert_eq!(error.to_string(), "command failed");
+
+        assert_eq!(
+            executor.runner.commands,
+            vec![
+                vec![
+                    "sudo".to_owned(),
+                    "/usr/sbin/chroot".to_owned(),
+                    "/target".to_owned(),
+                    "grub-install".to_owned(),
+                    "--target=x86_64-efi".to_owned(),
+                    "--efi-directory=/boot/efi".to_owned(),
+                    "--bootloader-id=DAIA".to_owned(),
+                    "--removable".to_owned(),
+                ],
+                vec![
+                    "sudo".to_owned(),
+                    "/usr/sbin/chroot".to_owned(),
+                    "/target".to_owned(),
+                    "grub-install".to_owned(),
+                    "--target=x86_64-efi".to_owned(),
+                    "--efi-directory=/boot/efi".to_owned(),
+                    "--bootloader-id=DAIA".to_owned(),
+                ],
+            ]
+        );
+    }
+
+    #[test]
+    fn system_executor_returns_update_grub_failure() {
+        let mut executor =
+            SystemInstallationOperationExecutor::with_dependencies(FailingAtCommandRunner {
+                commands: Vec::new(),
+                fail_at: 3,
             });
 
         let operation = InstallationOperation::InstallBootloader {
@@ -3247,6 +3385,15 @@ mod tests {
                     "--efi-directory=/boot/efi".to_owned(),
                     "--bootloader-id=DAIA".to_owned(),
                     "--removable".to_owned(),
+                ],
+                vec![
+                    "sudo".to_owned(),
+                    "/usr/sbin/chroot".to_owned(),
+                    "/target".to_owned(),
+                    "grub-install".to_owned(),
+                    "--target=x86_64-efi".to_owned(),
+                    "--efi-directory=/boot/efi".to_owned(),
+                    "--bootloader-id=DAIA".to_owned(),
                 ],
                 vec![
                     "sudo".to_owned(),
@@ -3285,6 +3432,15 @@ mod tests {
                     "--efi-directory=/boot/efi".to_owned(),
                     "--bootloader-id=DAIA".to_owned(),
                     "--removable".to_owned(),
+                ],
+                vec![
+                    "sudo".to_owned(),
+                    "/usr/sbin/chroot".to_owned(),
+                    "/target".to_owned(),
+                    "grub-install".to_owned(),
+                    "--target=x86_64-efi".to_owned(),
+                    "--efi-directory=/boot/efi".to_owned(),
+                    "--bootloader-id=DAIA".to_owned(),
                 ],
                 vec![
                     "sudo".to_owned(),
@@ -4714,14 +4870,14 @@ mod tests {
                 "serial:test-disk",
             ),
             (
-                "path-only identity",
+                "path identity mismatch",
                 vec![DiscoveredStorage::new(
-                    "path:/dev/sdb",
+                    "path:/dev/sdc",
                     StorageKind::Secondary,
                     "/dev/sdb",
                 )],
                 false,
-                "path:/dev/sdb",
+                "path:/dev/sdc",
             ),
             ("inspection failure", vec![safe], true, "serial:test-disk"),
         ];

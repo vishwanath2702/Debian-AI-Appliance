@@ -351,7 +351,9 @@ fn validate_content_volume_protected_ancestry(
 
     if selected_state.occurrences != 1
         || selected_state.device_types.len() != 1
-        || !selected_state.device_types.contains("part")
+        || !(selected_state.device_types.contains("part")
+            || selected_state.device_types.contains("disk"))
+        || (selected_state.device_types.contains("disk") && !selected_state.children.is_empty())
     {
         return Err(StorageInspectError::InvalidOutput(
             "selected content partition has missing or ambiguous topology".to_owned(),
@@ -391,6 +393,58 @@ fn validate_content_volume_metadata(
     devices: &[crate::lsblk::LsblkDevice],
 ) -> Result<(), StorageInspectError> {
     use crate::lsblk::LsblkDevice;
+
+    // Whole-disk content filesystems have no partition table.
+    // Authorize them separately without relaxing partition checks.
+    let whole_disk_matches = devices
+        .iter()
+        .filter(|device| {
+            device.device_type == "disk" && Path::new(&device.path) == volume.device_path()
+        })
+        .collect::<Vec<_>>();
+
+    if !whole_disk_matches.is_empty() {
+        if whole_disk_matches.len() != 1 {
+            return Err(StorageInspectError::InvalidOutput(
+                "whole-disk content device has ambiguous topology".to_owned(),
+            ));
+        }
+
+        let disk = whole_disk_matches[0];
+
+        if volume.parent_device_path() != volume.device_path()
+            || !disk.children.is_empty()
+            || disk.mountpoint.is_some()
+            || volume.mountpoint().is_some()
+        {
+            return Err(StorageInspectError::InvalidOutput(
+                "whole-disk content device is partitioned, mounted, or mismatched".to_owned(),
+            ));
+        }
+
+        if disk.filesystem_type.as_deref() != Some(volume.filesystem_type()) {
+            return Err(StorageInspectError::InvalidOutput(
+                "whole-disk content filesystem does not match".to_owned(),
+            ));
+        }
+
+        if !matches!(
+            volume.filesystem_type(),
+            "ext4" | "ext3" | "xfs" | "btrfs" | "vfat" | "exfat" | "ntfs"
+        ) {
+            return Err(StorageInspectError::InvalidOutput(
+                "unsupported whole-disk content filesystem".to_owned(),
+            ));
+        }
+
+        if disk.filesystem_uuid.as_deref().is_none_or(str::is_empty) {
+            return Err(StorageInspectError::InvalidOutput(
+                "whole-disk content filesystem UUID is missing".to_owned(),
+            ));
+        }
+
+        return Ok(());
+    }
 
     fn find_partition<'a>(
         devices: &'a [LsblkDevice],
@@ -1067,6 +1121,89 @@ printf '%s\n' '{"blockdevices":[]}'
         assert!(
             result.is_err(),
             "selected partition must be rejected when a shared RAID descendant backs active root"
+        );
+    }
+
+    #[test]
+    fn mount_gate_accepts_unmounted_whole_disk_filesystem() {
+        let mut devices = metadata_fixture(None, None, "ext4");
+        let disk = &mut devices[0];
+
+        disk.filesystem_type = Some("ext4".to_owned());
+        disk.filesystem_uuid = Some("whole-disk-uuid".to_owned());
+        disk.label = Some("DAIA_MODELS".to_owned());
+        disk.children.clear();
+
+        let volume = DiscoveredContentVolume::new("/dev/sdb", "/dev/sdb", "ext4");
+
+        super::validate_mount_gate(&volume, &devices)
+            .expect("unmounted partitionless whole-disk filesystem should be eligible");
+    }
+
+    #[test]
+    fn mount_gate_rejects_unsafe_whole_disk_filesystems() {
+        fn whole_disk() -> Vec<crate::lsblk::LsblkDevice> {
+            let mut devices = metadata_fixture(None, None, "ext4");
+            let disk = &mut devices[0];
+            disk.filesystem_type = Some("ext4".to_owned());
+            disk.filesystem_uuid = Some("whole-disk-uuid".to_owned());
+            disk.children.clear();
+            devices
+        }
+
+        let volume = DiscoveredContentVolume::new("/dev/sdb", "/dev/sdb", "ext4");
+
+        let mut partitioned = whole_disk();
+        partitioned[0].children = metadata_fixture(None, None, "ext4")[0].children.clone();
+        assert!(
+            super::validate_mount_gate(&volume, &partitioned).is_err(),
+            "disk with child devices must be rejected"
+        );
+
+        let mut mounted = whole_disk();
+        mounted[0].mountpoint = Some("/".to_owned());
+        assert!(
+            super::validate_mount_gate(&volume, &mounted).is_err(),
+            "mounted disk must be rejected"
+        );
+
+        let mismatched = DiscoveredContentVolume::new("/dev/sdb", "/dev/sdc", "ext4");
+        assert!(
+            super::validate_mount_gate(&mismatched, &whole_disk()).is_err(),
+            "mismatched parent disk must be rejected"
+        );
+
+        let mut missing_uuid = whole_disk();
+        missing_uuid[0].filesystem_uuid = None;
+        assert!(
+            super::validate_mount_gate(&volume, &missing_uuid).is_err(),
+            "disk without filesystem UUID must be rejected"
+        );
+
+        let mut unsupported = whole_disk();
+        unsupported[0].filesystem_type = Some("crypto_LUKS".to_owned());
+        let unsupported_volume =
+            DiscoveredContentVolume::new("/dev/sdb", "/dev/sdb", "crypto_LUKS");
+        assert!(
+            super::validate_mount_gate(&unsupported_volume, &unsupported).is_err(),
+            "unsupported filesystem must be rejected"
+        );
+    }
+
+    #[test]
+    fn mount_gate_rejects_duplicate_whole_disk_identity() {
+        let mut devices = metadata_fixture(None, None, "ext4");
+        devices[0].filesystem_type = Some("ext4".to_owned());
+        devices[0].filesystem_uuid = Some("whole-disk-uuid".to_owned());
+        devices[0].children.clear();
+
+        devices.push(devices[0].clone());
+
+        let volume = DiscoveredContentVolume::new("/dev/sdb", "/dev/sdb", "ext4");
+
+        assert!(
+            super::validate_mount_gate(&volume, &devices).is_err(),
+            "duplicate whole-disk identity must be rejected"
         );
     }
 
