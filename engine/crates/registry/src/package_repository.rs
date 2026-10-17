@@ -186,6 +186,16 @@ packages:
                 "wget".to_owned(),
                 "rsync".to_owned(),
                 "openssh-client".to_owned(),
+                "openssh-server".to_owned(),
+                "fdisk".to_owned(),
+                "iproute2".to_owned(),
+                "iputils-ping".to_owned(),
+                "bind9-dnsutils".to_owned(),
+                "firmware-iwlwifi".to_owned(),
+                "wpasupplicant".to_owned(),
+                "iw".to_owned(),
+                "rfkill".to_owned(),
+                "wireless-regdb".to_owned(),
                 "unzip".to_owned(),
                 "zip".to_owned(),
                 "p7zip-full".to_owned(),
@@ -197,6 +207,7 @@ packages:
                 "xdg-utils".to_owned(),
                 "network-manager".to_owned(),
                 "network-manager-gnome".to_owned(),
+                "plasma-nm".to_owned(),
             ]
         );
     }

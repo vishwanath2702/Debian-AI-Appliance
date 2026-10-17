@@ -20,6 +20,8 @@ impl BootstrapConfig {
             .map(|repository| repository.components().to_vec())
             .unwrap_or_else(|| vec!["main".to_owned()]);
 
+        let components = Self::with_firmware_component(components);
+
         Self::new(
             metadata.codename().to_ascii_lowercase(),
             metadata.architecture().to_owned(),
@@ -28,6 +30,13 @@ impl BootstrapConfig {
             "minbase",
         )
     }
+    fn with_firmware_component(mut components: Vec<String>) -> Vec<String> {
+        if !components.iter().any(|component| component == "non-free-firmware") {
+            components.push("non-free-firmware".to_owned());
+        }
+        components
+    }
+
     /// Creates a bootstrap configuration.
     #[must_use]
     pub fn new(
@@ -79,10 +88,10 @@ impl BootstrapConfig {
 impl Default for BootstrapConfig {
     fn default() -> Self {
         Self::new(
-            "bookworm",
+            "trixie",
             "amd64",
             "https://deb.debian.org/debian",
-            vec!["main".to_owned()],
+            vec!["main".to_owned(), "non-free-firmware".to_owned()],
             "minbase",
         )
     }
@@ -91,6 +100,55 @@ impl Default for BootstrapConfig {
 #[cfg(test)]
 mod tests {
     use super::BootstrapConfig;
+
+    #[test]
+    fn metadata_bootstrap_preserves_trixie_and_adds_firmware_component() {
+        use inspector::{BootMode, IsoMetadata};
+        use std::path::PathBuf;
+
+        let metadata = IsoMetadata::new(
+            PathBuf::from("debian-13.iso"),
+            "Debian".to_owned(),
+            "13.1.0".to_owned(),
+            "trixie".to_owned(),
+            "amd64".to_owned(),
+            "netinst".to_owned(),
+            vec![BootMode::Uefi],
+        );
+
+        let config = BootstrapConfig::from_iso_metadata(&metadata);
+
+        assert_eq!(config.release(), "trixie");
+        assert_eq!(config.architecture(), "amd64");
+        assert_eq!(
+            config.components(),
+            &["main".to_owned(), "non-free-firmware".to_owned()]
+        );
+    }
+
+    #[test]
+    fn firmware_component_is_not_duplicated() {
+        let components = vec!["main".to_owned(), "non-free-firmware".to_owned()];
+
+        assert_eq!(
+            BootstrapConfig::with_firmware_component(components),
+            vec!["main".to_owned(), "non-free-firmware".to_owned()]
+        );
+    }
+
+    #[test]
+    fn firmware_component_preserves_existing_components() {
+        let components = vec!["main".to_owned(), "contrib".to_owned()];
+
+        assert_eq!(
+            BootstrapConfig::with_firmware_component(components),
+            vec![
+                "main".to_owned(),
+                "contrib".to_owned(),
+                "non-free-firmware".to_owned(),
+            ]
+        );
+    }
 
     #[test]
     fn exposes_bootstrap_configuration() {
@@ -112,13 +170,16 @@ mod tests {
         assert_eq!(config.variant(), "minbase");
     }
     #[test]
-    fn default_bootstrap_configuration_is_debian_bookworm() {
+    fn default_bootstrap_configuration_is_debian_trixie() {
         let config = BootstrapConfig::default();
 
-        assert_eq!(config.release(), "bookworm");
+        assert_eq!(config.release(), "trixie");
         assert_eq!(config.architecture(), "amd64");
         assert_eq!(config.mirror(), "https://deb.debian.org/debian");
-        assert_eq!(config.components(), &["main".to_owned()]);
+        assert_eq!(
+            config.components(),
+            &["main".to_owned(), "non-free-firmware".to_owned()]
+        );
         assert_eq!(config.variant(), "minbase");
     }
 }
