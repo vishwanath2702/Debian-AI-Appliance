@@ -56,6 +56,7 @@ use planner::{PlanError, Planner};
 use registry::{PackageRepository, Registry};
 use resolver::Resolver;
 use workflow::IsoWorkflow;
+pub use workflow::verify_desktop_rootfs;
 
 /// Error returned when an appliance build cannot be completed.
 #[derive(Debug)]

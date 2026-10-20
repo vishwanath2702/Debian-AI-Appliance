@@ -597,6 +597,32 @@ fn run_model_add(selected_directory: Option<&str>) -> ExitCode {
     )
 }
 
+fn run_verify_rootfs(capability: &str, rootfs: &str) -> ExitCode {
+    if capability != "desktop" {
+        eprintln!("Unsupported rootfs verification capability: {capability}");
+        return ExitCode::FAILURE;
+    }
+
+    let repository = match PackageRepository::from_directory(package_manifest_directory()) {
+        Ok(repository) => repository,
+        Err(error) => {
+            eprintln!("Error loading package manifests: {error}");
+            return ExitCode::FAILURE;
+        }
+    };
+
+    match engine::verify_desktop_rootfs(Path::new(rootfs), &repository) {
+        Ok(()) => {
+            println!("Desktop rootfs verification passed: {rootfs}");
+            ExitCode::SUCCESS
+        }
+        Err(error) => {
+            eprintln!("Desktop rootfs verification failed: {error}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
 fn run(arguments: &[String]) -> ExitCode {
     match arguments {
         [command, operation, rootfs, payload, workspace, output_iso]
@@ -635,6 +661,9 @@ fn run(arguments: &[String]) -> ExitCode {
             source_iso,
         ] if command == "iso-refresh" && operation == "package" => {
             run_iso_refresh_package(rootfs, payload, workspace, output_iso, source_iso)
+        }
+        [command, capability, rootfs] if command == "verify-rootfs" => {
+            run_verify_rootfs(capability, rootfs)
         }
         [command] if command == "wizard" => run_wizard(),
         [command] if command == "install" => run_install(),
@@ -945,6 +974,7 @@ fn print_usage() {
     eprintln!(
         "    daia iso-refresh package <rootfs> <payload> <candidate-workspace> <candidate-iso> <source-iso>"
     );
+    eprintln!("    daia verify-rootfs desktop <rootfs>");
     eprintln!("    daia install");
     eprintln!("    daia realize-models");
     eprintln!("    daia model discover");
@@ -3034,6 +3064,28 @@ mod tests {
 
         assert_eq!(result, ExitCode::FAILURE);
     }
+    #[test]
+    fn rejects_unsupported_rootfs_verification_capability() {
+        let arguments = vec![
+            "verify-rootfs".to_owned(),
+            "unknown".to_owned(),
+            "/nonexistent".to_owned(),
+        ];
+
+        assert_eq!(run(&arguments), ExitCode::FAILURE);
+    }
+
+    #[test]
+    fn rejects_missing_rootfs_for_verification() {
+        let arguments = vec![
+            "verify-rootfs".to_owned(),
+            "desktop".to_owned(),
+            "/nonexistent-daia-rootfs-verification".to_owned(),
+        ];
+
+        assert_eq!(run(&arguments), ExitCode::FAILURE);
+    }
+
     #[test]
     fn rejects_incomplete_iso_build_arguments() {
         let arguments = vec!["build-iso".to_owned(), "desktop".to_owned()];
