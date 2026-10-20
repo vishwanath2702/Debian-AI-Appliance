@@ -376,16 +376,6 @@ stage_runtime()
         "$DAIA_RUNTIME_SOURCE/modules" \
         "$DAIA_MODULES_TARGET"
 
-    ensure_directory "$DAIA_ROOT_TARGET/manifests"
-
-    copy_file \
-        "$PROJECT_ROOT/payload/packages/manifests/desktop.lst" \
-        "$DAIA_ROOT_TARGET/manifests/desktop.lst" \
-        0644
-
-    record_staged_component \
-        "Desktop package manifest staged successfully."
-
     stage_runtime_directory \
         "Runtime service definitions" \
         "$DAIA_RUNTIME_SOURCE/services" \

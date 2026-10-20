@@ -74,7 +74,6 @@ _DESKTOP_RUNTIME_DIRECTORY="$(
     pwd
 )"
 
-_DESKTOP_MANIFEST_PATH="${_DESKTOP_RUNTIME_DIRECTORY}/manifests/desktop.lst"
 
 _DESKTOP_SDDM_CONFIGURATION_DIRECTORY="/etc/sddm.conf.d"
 
@@ -177,49 +176,13 @@ _desktop_require_runtime()
 
     for required_function in \
         require_root \
-        require_command \
-        package_is_installed \
-        package_manifest_validate
+        require_command
     do
         _desktop_require_function "$required_function" ||
             return 1
     done
 }
 
-############################################################
-# _desktop_manifest_packages
-#
-# Read active package entries from the desktop manifest.
-#
-# Blank lines and comments are ignored. The manifest must be
-# validated before this helper is called.
-#
-# Arguments:
-#   None
-#
-# Returns:
-#   Package names on standard output.
-############################################################
-
-_desktop_manifest_packages()
-{
-    local raw_line
-    local package_name
-
-    while IFS= read -r raw_line || [[ -n "$raw_line" ]]
-    do
-        raw_line="${raw_line%$'\r'}"
-        raw_line="${raw_line%%#*}"
-
-        package_name="${raw_line#"${raw_line%%[![:space:]]*}"}"
-        package_name="${package_name%"${package_name##*[![:space:]]}"}"
-
-        if [[ -n "$package_name" ]]
-        then
-            printf '%s\n' "$package_name"
-        fi
-    done < "$_DESKTOP_MANIFEST_PATH"
-}
 
 ############################################################
 # _desktop_configure_manual_login
@@ -516,50 +479,6 @@ _desktop_enable_sddm()
         "SDDM service enabled successfully."
 }
 
-############################################################
-# _desktop_verify_manifest_packages
-#
-# Verify that every package declared by the desktop manifest
-# is installed.
-#
-# Arguments:
-#   None
-#
-# Returns:
-#   0 when every package is installed.
-#   1 when one or more packages are missing.
-############################################################
-
-_desktop_verify_manifest_packages()
-{
-    local package_name
-    local missing_package_count=0
-
-    while IFS= read -r package_name
-    do
-        if package_is_installed "$package_name"
-        then
-            _desktop_log_info \
-                "Desktop package is installed: $package_name"
-        else
-            _desktop_log_error \
-                "Desktop package is not installed: $package_name"
-
-            missing_package_count=$((missing_package_count + 1))
-        fi
-    done < <(_desktop_manifest_packages)
-
-    if [[ "$missing_package_count" -ne 0 ]]
-    then
-        _desktop_log_error \
-            "$missing_package_count desktop package(s) failed verification."
-
-        return 1
-    fi
-
-    _desktop_log_success \
-        "All desktop-manifest packages are installed."
-}
 
 ############################################################
 # _desktop_verify_sddm_enabled
@@ -705,8 +624,8 @@ _desktop_verify_manual_login()
 ############################################################
 # desktop_validate
 #
-# Validate the desktop module's runtime dependencies,
-# commands, and package manifest.
+# Validate the desktop module's runtime dependencies
+# and required commands.
 #
 # Arguments:
 #   None
@@ -733,9 +652,6 @@ desktop_validate()
     require_command tail
     require_command grep
 
-    package_manifest_validate \
-        "$_DESKTOP_MANIFEST_PATH" ||
-        return 1
 
     _desktop_log_success \
         "DAIA desktop module validation completed successfully."
@@ -744,7 +660,7 @@ desktop_validate()
 ############################################################
 # desktop_install
 #
-# Verify the desktop package manifest, enforce manual login,
+# Configure manual login and SPICE integration,
 # and enable the SDDM service.
 #
 # Arguments:
@@ -762,7 +678,6 @@ desktop_install()
 
     desktop_validate || return 1
 
-    _desktop_verify_manifest_packages || return 1
     _desktop_configure_manual_login || return 1
     _desktop_configure_spice_vdagent || return 1
     _desktop_enable_sddm || return 1
@@ -774,8 +689,8 @@ desktop_install()
 ############################################################
 # desktop_verify
 #
-# Verify the desktop package installation, SDDM service,
-# and manual-login security policy.
+# Verify the SDDM service, manual-login security policy,
+# and SPICE integration.
 #
 # Arguments:
 #   None
@@ -798,11 +713,7 @@ desktop_verify()
     require_command tail
     require_command grep
 
-    package_manifest_validate \
-        "$_DESKTOP_MANIFEST_PATH" ||
-        return 1
 
-    _desktop_verify_manifest_packages || return 1
     _desktop_verify_sddm_enabled || return 1
     _desktop_verify_manual_login || return 1
     _desktop_verify_spice_vdagent || return 1

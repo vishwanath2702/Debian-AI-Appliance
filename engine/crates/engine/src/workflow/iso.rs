@@ -9,6 +9,8 @@ use model::Plan;
 use registry::PackageRepository;
 use std::fs;
 
+use super::rootfs_verification::{verify_installed_packages, verify_intel_8265_firmware};
+
 /// Coordinates creation of a bootable ISO appliance.
 pub struct IsoWorkflow;
 
@@ -171,18 +173,52 @@ WantedBy=multi-user.target
     }
 }
 
-struct IsoPipeline<B, R, L, I> {
+trait RootfsVerifier {
+    fn verify(&self, build_context: &BuildContext, plan: &Plan) -> Result<(), BuildError>;
+}
+
+#[derive(Clone, Debug)]
+struct SystemRootfsVerifier {
+    package_repository: PackageRepository,
+}
+
+impl RootfsVerifier for SystemRootfsVerifier {
+    fn verify(&self, build_context: &BuildContext, plan: &Plan) -> Result<(), BuildError> {
+        if plan.capability.as_str() != "desktop" {
+            return Ok(());
+        }
+
+        let manifest = self.package_repository.manifest("desktop").ok_or_else(|| {
+            BuildError::Workspace(std::io::Error::other(
+                "rootfs verification failed: desktop package manifest missing",
+            ))
+        })?;
+
+        let required: Vec<&str> = manifest.packages().iter().map(String::as_str).collect();
+
+        verify_installed_packages(build_context.rootfs(), &required)
+            .map_err(BuildError::Workspace)?;
+
+        verify_intel_8265_firmware(build_context.rootfs()).map_err(BuildError::Workspace)?;
+
+        Ok(())
+    }
+}
+
+struct IsoPipeline<B, R, L, V, I> {
     bootstrapper: B,
     rootfs_backend: R,
     live_rootfs_preparer: L,
+    rootfs_verifier: V,
     iso_backend: I,
 }
 
-impl<B, R, L, I> IsoPipeline<B, R, L, I>
+impl<B, R, L, V, I> IsoPipeline<B, R, L, V, I>
 where
     B: Bootstrapper<Error = MmdebstrapError>,
     R: BuildBackend<Error = RootfsRunError>,
     L: LiveRootfsPreparer,
+    V: RootfsVerifier,
     I: BuildBackend<Error = std::io::Error>,
 {
     fn prepare(build_context: &BuildContext) -> Result<(), BuildError> {
@@ -201,6 +237,7 @@ where
         self.bootstrap(build_context)?;
         self.build_rootfs(plan)?;
         self.live_rootfs_preparer.prepare(build_context)?;
+        self.rootfs_verifier.verify(build_context, plan)?;
         self.build_iso(plan)?;
 
         Ok(())
@@ -456,8 +493,13 @@ impl IsoWorkflow {
     fn production_pipeline(
         build_context: &BuildContext,
         package_repository: &PackageRepository,
-    ) -> IsoPipeline<MmdebstrapBootstrapper, RootfsBackend, SystemLiveRootfsPreparer, IsoBackend>
-    {
+    ) -> IsoPipeline<
+        MmdebstrapBootstrapper,
+        RootfsBackend,
+        SystemLiveRootfsPreparer,
+        SystemRootfsVerifier,
+        IsoBackend,
+    > {
         IsoPipeline {
             bootstrapper: MmdebstrapBootstrapper::new(),
             rootfs_backend: RootfsBackend::new(
@@ -466,18 +508,22 @@ impl IsoWorkflow {
                 package_repository.clone(),
             ),
             live_rootfs_preparer: SystemLiveRootfsPreparer,
+            rootfs_verifier: SystemRootfsVerifier {
+                package_repository: package_repository.clone(),
+            },
             iso_backend: IsoBackend::from_context(build_context),
         }
     }
-    fn run_with<B, R, L, I>(
+    fn run_with<B, R, L, V, I>(
         build_context: &BuildContext,
         plan: Plan,
-        pipeline: IsoPipeline<B, R, L, I>,
+        pipeline: IsoPipeline<B, R, L, V, I>,
     ) -> Result<Plan, BuildError>
     where
         B: Bootstrapper<Error = MmdebstrapError>,
         R: BuildBackend<Error = RootfsRunError>,
         L: LiveRootfsPreparer,
+        V: RootfsVerifier,
         I: BuildBackend<Error = std::io::Error>,
     {
         pipeline.execute(build_context, &plan)?;
@@ -489,14 +535,19 @@ impl IsoWorkflow {
 mod tests {
 
     use executor::{ExecuteError, RootfsRunError};
-    use model::{Action, Capability, CapabilityId, Plan, PlanStep, Provider, ProviderId};
+    use model::{
+        Action, Capability, CapabilityId, PackageManifest, Plan, PlanStep, Provider, ProviderId,
+    };
     use registry::{PackageRepository, Registry};
     use std::{
         fs, io,
         sync::{Arc, Mutex},
     };
 
-    use super::{IsoPipeline, IsoWorkflow, LiveRootfsPreparer, SystemLiveRootfsPreparer};
+    use super::{
+        IsoPipeline, IsoWorkflow, LiveRootfsPreparer, RootfsVerifier, SystemLiveRootfsPreparer,
+        SystemRootfsVerifier,
+    };
     use crate::{
         BootstrapConfig, Bootstrapper, BuildBackend, BuildContext, BuildError, Engine,
         MmdebstrapError,
@@ -572,6 +623,28 @@ mod tests {
         }
     }
 
+    struct RecordingRootfsVerifier {
+        log: ExecutionLog,
+        error: bool,
+    }
+
+    impl RootfsVerifier for RecordingRootfsVerifier {
+        fn verify(&self, _context: &BuildContext, _plan: &Plan) -> Result<(), BuildError> {
+            self.log
+                .lock()
+                .expect("execution log should not be poisoned")
+                .push("verify");
+
+            if self.error {
+                Err(BuildError::Workspace(io::Error::other(
+                    "rootfs verification failed",
+                )))
+            } else {
+                Ok(())
+            }
+        }
+    }
+
     fn workflow_inputs() -> (Engine, Capability, BuildContext, PackageRepository) {
         let registry = Registry::from_providers(vec![Provider {
             id: ProviderId::new("desktop"),
@@ -609,6 +682,15 @@ mod tests {
     fn run_workflow(
         bootstrap_error: bool,
         rootfs_error: bool,
+        iso_error: bool,
+    ) -> (Result<Plan, BuildError>, ExecutionLog) {
+        run_workflow_with_verification(bootstrap_error, rootfs_error, false, iso_error)
+    }
+
+    fn run_workflow_with_verification(
+        bootstrap_error: bool,
+        rootfs_error: bool,
+        verification_error: bool,
         iso_error: bool,
     ) -> (Result<Plan, BuildError>, ExecutionLog) {
         let (engine, capability, _, _) = workflow_inputs();
@@ -663,6 +745,10 @@ mod tests {
                     error: rootfs_error,
                 },
                 live_rootfs_preparer: SystemLiveRootfsPreparer,
+                rootfs_verifier: RecordingRootfsVerifier {
+                    log: Arc::clone(&log),
+                    error: verification_error,
+                },
                 iso_backend: RecordingIsoBackend {
                     log: Arc::clone(&log),
                     error: iso_error,
@@ -880,7 +966,111 @@ mod tests {
         assert_eq!(plan.provider, ProviderId::new("desktop"));
         assert_eq!(
             *log.lock().expect("execution log should not be poisoned"),
-            vec!["bootstrap", "rootfs", "iso"]
+            vec!["bootstrap", "rootfs", "verify", "iso"]
+        );
+    }
+
+    #[test]
+    fn desktop_verifier_accepts_installed_packages_and_firmware() {
+        let temp = tempfile::tempdir().expect("temporary directory");
+        let rootfs = temp.path().join("rootfs");
+        let dpkg = rootfs.join("var/lib/dpkg");
+        let firmware = rootfs.join("usr/lib/firmware");
+
+        fs::create_dir_all(&dpkg).expect("create dpkg directory");
+        fs::create_dir_all(&firmware).expect("create firmware directory");
+
+        fs::write(
+            dpkg.join("status"),
+            "Package: network-manager\nStatus: install ok installed\n\nPackage: firmware-iwlwifi\nStatus: install ok installed\n\n",
+        )
+        .expect("write package status");
+
+        fs::write(firmware.join("iwlwifi-8265-36.ucode"), b"test firmware")
+            .expect("write firmware fixture");
+
+        let repository = PackageRepository::from_manifests(vec![PackageManifest::new(
+            "desktop",
+            vec!["network-manager".into(), "firmware-iwlwifi".into()],
+        )])
+        .expect("valid package repository");
+
+        let verifier = SystemRootfsVerifier {
+            package_repository: repository,
+        };
+
+        let (engine, capability, _, _) = workflow_inputs();
+        let plan = engine.plan(&capability).expect("desktop plan");
+
+        let context = BuildContext::new(
+            rootfs,
+            temp.path().join("source.iso"),
+            temp.path().join("work"),
+            temp.path().join("output.iso"),
+            temp.path().join("assets"),
+            BootstrapConfig::default(),
+        );
+
+        verifier
+            .verify(&context, &plan)
+            .expect("complete desktop rootfs should pass verification");
+    }
+
+    #[test]
+    fn desktop_verifier_rejects_missing_manifest_package() {
+        let temp = tempfile::tempdir().expect("temporary directory");
+
+        let rootfs = temp.path().join("rootfs");
+        let dpkg = rootfs.join("var/lib/dpkg");
+
+        fs::create_dir_all(&dpkg).expect("create dpkg directory");
+        fs::write(
+            dpkg.join("status"),
+            "Package: network-manager\nStatus: install ok installed\n\n",
+        )
+        .expect("write package status");
+
+        let repository = PackageRepository::from_manifests(vec![PackageManifest::new(
+            "desktop",
+            vec!["network-manager".into(), "firmware-iwlwifi".into()],
+        )])
+        .expect("valid package repository");
+
+        let verifier = SystemRootfsVerifier {
+            package_repository: repository,
+        };
+
+        let (engine, capability, _, _) = workflow_inputs();
+        let plan = engine.plan(&capability).expect("desktop plan");
+
+        let context = BuildContext::new(
+            rootfs,
+            temp.path().join("source.iso"),
+            temp.path().join("work"),
+            temp.path().join("output.iso"),
+            temp.path().join("assets"),
+            BootstrapConfig::default(),
+        );
+
+        let error = verifier
+            .verify(&context, &plan)
+            .expect_err("missing firmware package must fail verification");
+
+        assert!(
+            error.to_string().contains("firmware-iwlwifi")
+                || format!("{error:?}").contains("firmware-iwlwifi"),
+            "verification error should identify the missing package: {error:?}"
+        );
+    }
+
+    #[test]
+    fn verification_failure_prevents_iso_packaging() {
+        let (result, log) = run_workflow_with_verification(false, false, true, false);
+
+        assert!(matches!(result, Err(BuildError::Workspace(_))));
+        assert_eq!(
+            *log.lock().expect("execution log should not be poisoned"),
+            vec!["bootstrap", "rootfs", "verify"]
         );
     }
 
@@ -913,7 +1103,7 @@ mod tests {
         assert!(matches!(result, Err(BuildError::Iso(_))));
         assert_eq!(
             *log.lock().expect("execution log should not be poisoned"),
-            vec!["bootstrap", "rootfs", "iso"]
+            vec!["bootstrap", "rootfs", "verify", "iso"]
         );
     }
 }
