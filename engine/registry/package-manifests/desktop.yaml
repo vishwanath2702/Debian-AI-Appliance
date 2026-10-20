@@ -10,6 +10,10 @@ packages:
   - task-kde-desktop
   - kwin-x11
 
+  # DAIA graphical model importer
+  - kdialog
+  - pkexec
+
   # Desktop essentials
   - konsole
   - dolphin

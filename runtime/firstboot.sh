@@ -82,9 +82,14 @@ realize_models()
 # mark_firstboot_complete
 ############################################################
 
+prepare_model_directory()
+{
+    install -d -o root -g root -m 0755 "$DAIA_STATE_DIRECTORY"
+    install -d -o root -g root -m 0755 "$DAIA_STATE_DIRECTORY/content"
+}
+
 mark_firstboot_complete()
 {
-    mkdir -p "$DAIA_STATE_DIRECTORY"
     : > "$DAIA_FIRSTBOOT_COMPLETE"
 }
 
@@ -104,6 +109,7 @@ disable_firstboot_service()
 main()
 {
     require_root
+    prepare_model_directory
     run_runtime
     realize_models
     mark_firstboot_complete

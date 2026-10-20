@@ -31,7 +31,10 @@ impl BootstrapConfig {
         )
     }
     fn with_firmware_component(mut components: Vec<String>) -> Vec<String> {
-        if !components.iter().any(|component| component == "non-free-firmware") {
+        if !components
+            .iter()
+            .any(|component| component == "non-free-firmware")
+        {
             components.push("non-free-firmware".to_owned());
         }
         components

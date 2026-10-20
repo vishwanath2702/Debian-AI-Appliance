@@ -170,6 +170,8 @@ packages:
                 "xserver-xorg".to_owned(),
                 "task-kde-desktop".to_owned(),
                 "kwin-x11".to_owned(),
+                "kdialog".to_owned(),
+                "pkexec".to_owned(),
                 "konsole".to_owned(),
                 "dolphin".to_owned(),
                 "kate".to_owned(),

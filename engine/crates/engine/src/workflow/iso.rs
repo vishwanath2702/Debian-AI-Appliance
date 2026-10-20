@@ -74,6 +74,16 @@ impl LiveRootfsPreparer for SystemLiveRootfsPreparer {
             copy_file(daia_tui_binary, &destination)?;
         }
 
+        if let Some(model_import_binary) = build_context.daia_model_import_binary() {
+            let usr_bin = build_context.rootfs().join("usr/bin");
+
+            create_directory(&usr_bin)?;
+
+            let destination = usr_bin.join("daia-model-import");
+
+            copy_file(model_import_binary, &destination)?;
+        }
+
         let systemd_directory = build_context.rootfs().join("etc/systemd/system");
 
         let multi_user_wants = systemd_directory.join("multi-user.target.wants");
@@ -682,6 +692,7 @@ mod tests {
 
         let daia_binary = temp.path().join("daia");
         let daia_tui_binary = temp.path().join("daia-tui");
+        let model_import_binary = temp.path().join("daia-model-import");
 
         fs::create_dir_all(&rootfs).expect("rootfs should be created");
 
@@ -707,6 +718,8 @@ mod tests {
         fs::write(&daia_binary, b"daia").expect("DAIA binary fixture should be written");
         fs::write(&daia_tui_binary, b"daia-tui")
             .expect("DAIA TUI binary fixture should be written");
+        fs::write(&model_import_binary, b"daia-model-import")
+            .expect("model-import binary fixture should be written");
 
         let getty_wants = rootfs.join("etc/systemd/system/getty.target.wants");
         fs::create_dir_all(&getty_wants).expect("getty wants directory should be created");
@@ -724,7 +737,8 @@ mod tests {
             BootstrapConfig::default(),
         )
         .with_daia_binary(&daia_binary)
-        .with_daia_tui_binary(&daia_tui_binary);
+        .with_daia_tui_binary(&daia_tui_binary)
+        .with_daia_model_import_binary(&model_import_binary);
 
         let mut preparer = SystemLiveRootfsPreparer;
 
@@ -740,6 +754,12 @@ mod tests {
         assert_eq!(
             fs::read(rootfs.join("usr/bin/daia-tui")).expect("DAIA TUI binary should be copied"),
             b"daia-tui"
+        );
+
+        assert_eq!(
+            fs::read(rootfs.join("usr/bin/daia-model-import"))
+                .expect("model-import helper should be copied"),
+            b"daia-model-import"
         );
 
         let installer_service =

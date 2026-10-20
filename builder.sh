@@ -77,7 +77,8 @@ build_iso() {
         "${rootfs}" \
         "${source_iso}" \
         "${iso_work_directory}" \
-        "${output_iso}"
+        "${output_iso}" \
+        "${WORK_DIRECTORY}/payload/daia"
 }
 
 find_source_iso() {

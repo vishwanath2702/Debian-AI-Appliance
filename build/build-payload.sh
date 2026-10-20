@@ -407,6 +407,32 @@ stage_runtime()
             "Runtime orchestrator staged successfully."
     fi
 
+    if [[ -f "$DAIA_RUNTIME_SOURCE/daia-model-importer.sh" ]]
+    then
+        ensure_directory "$DAIA_WORKSPACE/usr/bin"
+
+        copy_file \
+            "$DAIA_RUNTIME_SOURCE/daia-model-importer.sh" \
+            "$DAIA_WORKSPACE/usr/bin/daia-model-importer" \
+            0755
+
+        record_staged_component \
+            "Graphical model importer staged successfully."
+    fi
+
+    if [[ -f "$DAIA_RUNTIME_SOURCE/daia-model-importer.desktop" ]]
+    then
+        ensure_directory "$DAIA_WORKSPACE/usr/share/applications"
+
+        copy_file \
+            "$DAIA_RUNTIME_SOURCE/daia-model-importer.desktop" \
+            "$DAIA_WORKSPACE/usr/share/applications/daia-model-importer.desktop" \
+            0644
+
+        record_staged_component \
+            "Graphical model importer desktop launcher staged successfully."
+    fi
+
     if [[ -f "$DAIA_RUNTIME_SOURCE/firstboot.sh" ]]
     then
         copy_file \

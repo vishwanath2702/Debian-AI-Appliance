@@ -73,6 +73,7 @@ impl IsoRefreshInputs {
             self.workspace.join(".daia-deploy-complete"),
             rootfs.join("usr/bin/daia"),
             rootfs.join("usr/bin/daia-tui"),
+            rootfs.join("usr/bin/daia-model-import"),
             payload.join("etc/systemd/system/daia-firstboot.service"),
         ];
 
@@ -149,6 +150,7 @@ impl IsoRefreshInputs {
         &self,
         cli_binary: &Path,
         tui_binary: &Path,
+        model_import_helper: &Path,
         firstboot_service: &Path,
     ) -> io::Result<()> {
         ensure_candidate_file(&self.workspace.join(".daia-stage-complete"))?;
@@ -162,6 +164,10 @@ impl IsoRefreshInputs {
             .join("../../registry/content-repositories/bundled-models.yaml");
 
         let replacements = [
+            (
+                model_import_helper,
+                self.workspace.join("rootfs/usr/bin/daia-model-import"),
+            ),
             (cli_binary, self.workspace.join("rootfs/usr/bin/daia")),
             (tui_binary, self.workspace.join("rootfs/usr/bin/daia-tui")),
             (
@@ -351,7 +357,12 @@ fn ensure_candidate_destination(workspace: &Path, destination: &Path) -> io::Res
         return Err(invalid("candidate replacement escapes workspace"));
     }
 
-    ensure_candidate_file(destination)
+    match std::fs::symlink_metadata(destination) {
+        Ok(metadata) if metadata.file_type().is_file() => Ok(()),
+        Ok(_) => Err(invalid("candidate replacement must be a regular file")),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error),
+    }
 }
 
 /// Rejects symlinks and non-regular files at a candidate replacement path.
@@ -377,7 +388,13 @@ fn replace_candidate_file(workspace: &Path, source: &Path, destination: &Path) -
     let temporary = tempfile::NamedTempFile::new_in(parent)?;
     std::fs::copy(source, temporary.path())?;
 
-    let permissions = std::fs::metadata(destination)?.permissions();
+    let permissions = match std::fs::symlink_metadata(destination) {
+        Ok(metadata) => metadata.permissions(),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            std::fs::metadata(source)?.permissions()
+        }
+        Err(error) => return Err(error),
+    };
     std::fs::set_permissions(temporary.path(), permissions)?;
 
     temporary
@@ -522,7 +539,7 @@ mod tests {
         };
 
         let missing = temp.path().join("missing-artifact");
-        let result = inputs.deploy_artifacts(&missing, &missing, &missing);
+        let result = inputs.deploy_artifacts(&missing, &missing, &missing, &missing);
 
         assert!(result.is_err());
         assert_eq!(
@@ -551,7 +568,7 @@ mod tests {
         };
 
         let missing = temp.path().join("missing-artifact");
-        let result = inputs.deploy_artifacts(&missing, &missing, &missing);
+        let result = inputs.deploy_artifacts(&missing, &missing, &missing, &missing);
 
         assert!(result.is_err());
         assert!(!workspace.join(".daia-stage-complete").exists());
@@ -602,6 +619,48 @@ mod tests {
 
         assert!(!workspace.join("iso-build").exists());
         assert!(!inputs.output_iso.exists());
+    }
+
+    #[test]
+    fn package_candidate_rejects_missing_model_import_helper() {
+        let temp = tempfile::tempdir().unwrap();
+        let rootfs = temp.path().join("source-rootfs");
+        let payload = temp.path().join("source-payload");
+        let workspace = temp.path().join("candidate");
+        let output_iso = temp.path().join("candidate.iso");
+
+        std::fs::create_dir(&rootfs).unwrap();
+        std::fs::create_dir(&payload).unwrap();
+        std::fs::create_dir(&workspace).unwrap();
+
+        for marker in [".daia-stage-complete", ".daia-deploy-complete"] {
+            std::fs::write(workspace.join(marker), b"completed").unwrap();
+        }
+
+        for artifact in [
+            workspace.join("rootfs/usr/bin/daia"),
+            workspace.join("rootfs/usr/bin/daia-tui"),
+            workspace.join("payload/etc/systemd/system/daia-firstboot.service"),
+        ] {
+            std::fs::create_dir_all(artifact.parent().unwrap()).unwrap();
+            std::fs::write(artifact, b"present").unwrap();
+        }
+
+        assert!(!workspace.join("rootfs/usr/bin/daia-model-import").exists());
+
+        let inputs = IsoRefreshInputs {
+            rootfs,
+            payload,
+            workspace: workspace.clone(),
+            output_iso: output_iso.clone(),
+        };
+
+        let result = inputs.package_candidate(&temp.path().join("source.iso"));
+
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err().kind(), std::io::ErrorKind::InvalidInput);
+        assert!(!workspace.join("iso-build").exists());
+        assert!(!output_iso.exists());
     }
 
     #[test]
@@ -798,6 +857,7 @@ mod tests {
 
         let cli_target = workspace.join("rootfs/usr/bin/daia");
         let tui_target = workspace.join("rootfs/usr/bin/daia-tui");
+        let helper_target = workspace.join("rootfs/usr/bin/daia-model-import");
         let service_target = workspace.join("payload/etc/systemd/system/daia-firstboot.service");
         let repository_target =
             workspace.join("rootfs/usr/share/daia/content-repositories/bundled-models.yaml");
@@ -805,19 +865,29 @@ mod tests {
         for destination in [
             &cli_target,
             &tui_target,
+            &helper_target,
             &service_target,
             &repository_target,
         ] {
             std::fs::create_dir_all(destination.parent().unwrap()).unwrap();
-            std::fs::write(destination, b"old").unwrap();
+            if destination != &helper_target {
+                std::fs::write(destination, b"old").unwrap();
+            }
         }
+
+        assert!(
+            !helper_target.exists(),
+            "model-import helper must initially be absent"
+        );
 
         let cli = temp.path().join("new-cli");
         let tui = temp.path().join("new-tui");
+        let helper = temp.path().join("new-model-import");
         let service = temp.path().join("new-service");
 
         std::fs::write(&cli, b"new-cli").unwrap();
         std::fs::write(&tui, b"new-tui").unwrap();
+        std::fs::write(&helper, b"new-model-import").unwrap();
         std::fs::write(&service, b"new-service").unwrap();
 
         let inputs = IsoRefreshInputs {
@@ -833,11 +903,22 @@ mod tests {
         )
         .unwrap();
 
-        inputs.deploy_artifacts(&cli, &tui, &service).unwrap();
+        inputs
+            .deploy_artifacts(&cli, &tui, &helper, &service)
+            .unwrap();
 
         assert_eq!(std::fs::read(cli_target).unwrap(), b"new-cli");
         assert_eq!(std::fs::read(tui_target).unwrap(), b"new-tui");
+        assert_eq!(std::fs::read(&helper_target).unwrap(), b"new-model-import");
         assert_eq!(std::fs::read(service_target).unwrap(), b"new-service");
+
+        assert!(
+            inputs
+                .workspace
+                .join("rootfs/usr/bin/daia-model-import")
+                .is_file(),
+            "ISO refresh must deploy the restricted model-import helper"
+        );
         assert_eq!(
             std::fs::read(repository_target).unwrap(),
             std::fs::read(

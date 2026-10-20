@@ -7,6 +7,12 @@ license.workspace = true
 [dependencies]
 model = { path = "../model" }
 registry = { path = "../registry" }
+engine = { path = "../engine" }
+inspector = { path = "../inspector" }
+state = { path = "../state" }
+
+[dev-dependencies]
+tempfile = "3"
 
 [lints]
 workspace = true

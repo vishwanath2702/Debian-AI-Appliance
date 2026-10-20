@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=DAIA Model Importer
+Comment=Import GGUF models from connected storage into Ollama
+Exec=/usr/bin/daia-model-importer
+Icon=drive-removable-media
+Terminal=false
+Categories=Utility;System;

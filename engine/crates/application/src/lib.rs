@@ -94,6 +94,27 @@ pub fn load_content_repositories() -> Result<Vec<model::ContentRepository>, Regi
     Ok(repository.repositories().to_vec())
 }
 
+mod post_install_models;
+pub use post_install_models::{DiscoveredModel, ModelDiscoveryIssue, ModelDiscoveryReport};
+
+pub use post_install_models::{resolve_selected_model_path, validate_selected_model_filename};
+
+pub use post_install_models::select_post_install_model_volume;
+
+pub use post_install_models::discover_models_on_volume_with;
+
+pub use post_install_models::{
+    apply_post_install_model_content_import, apply_post_install_model_import_with,
+    discover_models_on_fresh_volume_with, discover_models_on_post_install_volume,
+    discover_models_on_selected_volume_with, import_and_realize_selected_model_on_volume_with,
+    import_selected_model_on_volume_with, inspect_selected_model_on_volume_with,
+    realize_models_with,
+};
+
+pub use post_install_models::discover_post_install_model_volumes;
+
+pub use post_install_models::{discover_models_in_directory, discover_models_with_report};
+
 /// A keyboard layout offered by DAIA's localization wizard.
 ///
 /// The identifier is an XKB layout name, not a locale or country code.

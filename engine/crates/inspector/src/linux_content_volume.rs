@@ -28,6 +28,7 @@ pub struct LinuxContentVolumeInspector {
     command: PathBuf,
     findmnt_command: PathBuf,
     post_install_discovery: bool,
+    restricted_environment: bool,
 }
 
 impl ContentVolumeInspector for LinuxContentVolumeInspector {
@@ -35,7 +36,8 @@ impl ContentVolumeInspector for LinuxContentVolumeInspector {
         let system_disk_path = self.system_disk_path()?;
         let live_medium_disk_path = self.live_medium_disk_path()?;
 
-        let output = Command::new(&self.command)
+        let output = self
+            .subprocess(&self.command)
             .arg("--tree")
             .arg("--json")
             .arg("--paths")
@@ -78,6 +80,7 @@ impl LinuxContentVolumeInspector {
             command: PathBuf::from("lsblk"),
             findmnt_command: PathBuf::from("findmnt"),
             post_install_discovery: false,
+            restricted_environment: false,
         }
     }
 
@@ -104,6 +107,25 @@ impl LinuxContentVolumeInspector {
         self
     }
 
+    /// Enables a minimal subprocess environment for privileged callers.
+    #[must_use]
+    pub fn with_restricted_environment(mut self) -> Self {
+        self.restricted_environment = true;
+        self
+    }
+
+    fn subprocess(&self, executable: &Path) -> Command {
+        let mut command = Command::new(executable);
+
+        if self.restricted_environment {
+            command.env_clear();
+            command.env("PATH", "/usr/bin:/bin");
+            command.env("LC_ALL", "C");
+        }
+
+        command
+    }
+
     /// Returns the configured executable.
     #[must_use]
     pub fn command(&self) -> &Path {
@@ -117,7 +139,8 @@ impl LinuxContentVolumeInspector {
     }
 
     fn system_disk_path(&self) -> Result<Option<PathBuf>, StorageInspectError> {
-        let output = Command::new(&self.findmnt_command)
+        let output = self
+            .subprocess(&self.findmnt_command)
             .arg("--noheadings")
             .arg("--output")
             .arg("SOURCE")
@@ -145,7 +168,8 @@ impl LinuxContentVolumeInspector {
             return Ok(None);
         }
 
-        let output = Command::new(&self.command)
+        let output = self
+            .subprocess(&self.command)
             .arg("--paths")
             .arg("--noheadings")
             .arg("--output")
@@ -174,7 +198,8 @@ impl LinuxContentVolumeInspector {
     }
 
     fn live_medium_disk_path(&self) -> Result<Option<PathBuf>, StorageInspectError> {
-        let output = Command::new(&self.findmnt_command)
+        let output = self
+            .subprocess(&self.findmnt_command)
             .arg("--noheadings")
             .arg("--output")
             .arg("SOURCE")
@@ -192,7 +217,8 @@ impl LinuxContentVolumeInspector {
             return Ok(None);
         }
 
-        let output = Command::new(&self.command)
+        let output = self
+            .subprocess(&self.command)
             .arg("--paths")
             .arg("--noheadings")
             .arg("--output")
@@ -267,13 +293,34 @@ fn collect_content_volumes(
         return;
     }
 
+    // Protected boot and recovery partitions are not content sources.
+    // Mount authorization independently validates partition metadata.
+    const PROTECTED_PARTITION_TYPES: &[&str] = &[
+        "c12a7328-f81f-11d2-ba4b-00a0c93ec93b", // EFI
+        "21686148-6449-6e6f-744e-656564454649", // BIOS boot
+        "de94bba4-06d1-4d40-a16a-bfd50179d6ac", // Microsoft recovery
+        "a19d880f-05fc-4d3b-a006-743f0f84911e", // Windows recovery
+    ];
+
+    let protected_partition = device
+        .partition_type
+        .as_deref()
+        .is_some_and(|partition_type| {
+            PROTECTED_PARTITION_TYPES
+                .iter()
+                .any(|protected| partition_type.eq_ignore_ascii_case(protected))
+        });
+
     // A whole-disk filesystem is eligible only when the disk has no
     // partition, mapping, or other child block devices.
-    if (device.device_type != "disk" || device.children.is_empty())
-        && let Some(filesystem_type) = device
-            .filesystem_type
-            .as_deref()
-            .filter(|filesystem_type| !filesystem_type.is_empty())
+    if !protected_partition
+        && (device.device_type != "disk" || device.children.is_empty())
+        && let Some(filesystem_type) = device.filesystem_type.as_deref().filter(|filesystem_type| {
+            matches!(
+                *filesystem_type,
+                "ext4" | "ext3" | "xfs" | "btrfs" | "vfat" | "exfat" | "ntfs"
+            )
+        })
     {
         let mut volume = DiscoveredContentVolume::new(&device.path, parent_disk, filesystem_type);
 
@@ -310,6 +357,44 @@ mod tests {
     use tempfile::TempDir;
 
     use super::{ContentVolumeInspector, LinuxContentVolumeInspector};
+
+    #[test]
+    fn restricted_subprocess_uses_minimal_environment() {
+        let inspector = LinuxContentVolumeInspector::new().with_restricted_environment();
+        let command = inspector.subprocess(std::path::Path::new("/usr/bin/true"));
+
+        assert!(command.get_envs().any(|(key, value)| {
+            key == "PATH" && value == Some(std::ffi::OsStr::new("/usr/bin:/bin"))
+        }));
+        assert!(
+            command.get_envs().any(|(key, value)| {
+                key == "LC_ALL" && value == Some(std::ffi::OsStr::new("C"))
+            })
+        );
+        assert!(!command.get_envs().any(|(key, _)| key == "HOME"));
+    }
+
+    #[test]
+    fn restricted_subprocess_does_not_inherit_environment() {
+        let inspector = LinuxContentVolumeInspector::new().with_restricted_environment();
+        let mut command = inspector.subprocess(std::path::Path::new("/usr/bin/env"));
+
+        command.env("DAIA_TEST_MARKER", "present");
+        let output = command
+            .output()
+            .expect("environment command should execute");
+
+        assert!(output.status.success());
+
+        let environment = String::from_utf8(output.stdout).expect("environment should be UTF-8");
+
+        let entries: Vec<&str> = environment.lines().collect();
+
+        assert!(entries.contains(&"PATH=/usr/bin:/bin"));
+        assert!(entries.contains(&"LC_ALL=C"));
+        assert!(entries.contains(&"DAIA_TEST_MARKER=present"));
+        assert_eq!(entries.len(), 3, "unexpected inherited environment");
+    }
 
     fn command_script(contents: &str) -> (TempDir, std::path::PathBuf) {
         let directory = TempDir::new().expect("temporary directory should be created");
@@ -381,6 +466,54 @@ JSON
         assert_eq!(volumes.len(), 1);
         assert_eq!(volumes[0].device_path(), std::path::Path::new("/dev/sdb1"));
         assert_eq!(volumes[0].label(), Some("DAIA-MODELS"));
+    }
+
+    #[test]
+    fn excludes_efi_partition_but_keeps_fat_data_partition() {
+        use crate::lsblk::LsblkDevice;
+
+        fn partition(path: &str, partition_type: &str) -> LsblkDevice {
+            LsblkDevice {
+                path: path.to_owned(),
+                device_type: "part".to_owned(),
+                rm: true,
+                wwn: None,
+                serial: None,
+                size: 100_000_000,
+                filesystem_type: Some("vfat".to_owned()),
+                label: None,
+                mountpoint: None,
+                partition_type: Some(partition_type.to_owned()),
+                filesystem_uuid: Some("test-uuid".to_owned()),
+                children: Vec::new(),
+            }
+        }
+
+        let disk = LsblkDevice {
+            path: "/dev/sdb".to_owned(),
+            device_type: "disk".to_owned(),
+            rm: true,
+            wwn: None,
+            serial: None,
+            size: 300_000_000,
+            filesystem_type: None,
+            label: None,
+            mountpoint: None,
+            partition_type: None,
+            filesystem_uuid: None,
+            children: vec![
+                partition("/dev/sdb1", "c12a7328-f81f-11d2-ba4b-00a0c93ec93b"),
+                partition("/dev/sdb2", "ebd0a0a2-b9e5-4433-87c0-68b6b72699c7"),
+            ],
+        };
+
+        let volumes = super::content_volumes(&[disk], None, None, true);
+        let paths: Vec<_> = volumes
+            .iter()
+            .map(|volume| volume.device_path().to_path_buf())
+            .collect();
+
+        assert_eq!(paths, vec![std::path::PathBuf::from("/dev/sdb2")]);
     }
 
     #[test]

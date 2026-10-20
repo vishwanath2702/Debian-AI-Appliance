@@ -17,6 +17,10 @@ xserver-xorg
 # KDE Plasma desktop
 task-kde-desktop
 
+# DAIA graphical model importer
+kdialog
+pkexec
+
 # Network management
 network-manager
 network-manager-gnome

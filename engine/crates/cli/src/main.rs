@@ -115,29 +115,19 @@ where
     E: engine::ModelRealizationExecutor,
     E::Error: std::fmt::Display,
 {
-    let root = root.as_ref();
-
-    if let Err(error) =
-        engine.apply_post_install_content_import(prepared, model_realization_intents, root)
-    {
-        eprintln!("Error importing model content: {error}");
-        return ExitCode::FAILURE;
-    }
-
-    let appliance_state = match state::ApplianceState::read_from_root(root) {
-        Ok(appliance_state) => appliance_state,
+    match application::apply_post_install_model_import_with(
+        engine,
+        prepared,
+        model_realization_intents,
+        root,
+        executor,
+    ) {
+        Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
-            eprintln!("Error loading appliance state: {error}");
-            return ExitCode::FAILURE;
+            eprintln!("{error}");
+            ExitCode::FAILURE
         }
-    };
-
-    if let Err(error) = realize_models_with(appliance_state.model_realizations(), executor) {
-        eprintln!("Error realizing models: {error}");
-        return ExitCode::FAILURE;
     }
-
-    ExitCode::SUCCESS
 }
 
 // Owns a DAIA content mount until explicit cleanup or scope exit.
@@ -230,6 +220,128 @@ fn select_discovered_content_volume(
     }
 
     Ok(selected.clone())
+}
+
+fn format_model_volume_paths(paths: &[&str]) -> String {
+    paths.iter().map(|path| format!("{path}\n")).collect()
+}
+
+fn run_model_volume_list() -> ExitCode {
+    let volumes = match application::discover_post_install_model_volumes() {
+        Ok(volumes) => volumes,
+        Err(error) => {
+            eprintln!("Error discovering model source volumes: {error}");
+            return ExitCode::FAILURE;
+        }
+    };
+
+    let paths: Vec<_> = volumes
+        .iter()
+        .map(|volume| volume.device_path().to_string_lossy())
+        .collect();
+    let references: Vec<_> = paths.iter().map(|path| path.as_ref()).collect();
+
+    print!("{}", format_model_volume_paths(&references));
+
+    ExitCode::SUCCESS
+}
+
+fn format_model_filenames(report: &application::ModelDiscoveryReport) -> String {
+    let mut output = String::new();
+
+    for discovered in &report.models {
+        if let Some(filename) = discovered.item.path().file_name() {
+            output.push_str(&filename.to_string_lossy());
+            output.push('\n');
+        }
+    }
+
+    output
+}
+
+fn validate_model_import_arguments(
+    requested_device: &str,
+    filename: &str,
+    model_name: &str,
+) -> Result<(), String> {
+    if requested_device.trim().is_empty() {
+        return Err("Model source device cannot be empty".to_owned());
+    }
+
+    application::validate_selected_model_filename(Path::new(filename))?;
+
+    if model_name.trim().is_empty() {
+        return Err("DAIA model name cannot be empty".to_owned());
+    }
+
+    Ok(())
+}
+
+fn run_model_import_volume(requested_device: &str, filename: &str, model_name: &str) -> ExitCode {
+    if let Err(error) = validate_model_import_arguments(requested_device, filename, model_name) {
+        eprintln!("{error}");
+        return ExitCode::FAILURE;
+    }
+
+    let volumes = match application::discover_post_install_model_volumes() {
+        Ok(volumes) => volumes,
+        Err(error) => {
+            eprintln!("Error discovering model source volumes: {error}");
+            return ExitCode::FAILURE;
+        }
+    };
+
+    let volume = match application::select_post_install_model_volume(
+        &volumes,
+        Path::new(requested_device),
+    ) {
+        Ok(volume) => volume,
+        Err(error) => {
+            eprintln!("{error}");
+            return ExitCode::FAILURE;
+        }
+    };
+
+    let mounter = inspector::LinuxContentVolumeMounter::new();
+    let mut executor = engine::OllamaModelRealizationExecutor::default();
+
+    match application::import_and_realize_selected_model_on_volume_with(
+        &mounter,
+        &volume,
+        Path::new(filename),
+        model_name,
+        Path::new("/"),
+        &mut executor,
+    ) {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(error) => {
+            eprintln!("{error}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+fn run_model_file_list(requested_device: &str) -> ExitCode {
+    let report =
+        match application::discover_models_on_post_install_volume(Path::new(requested_device)) {
+            Ok(report) => report,
+            Err(error) => {
+                eprintln!("Error discovering GGUF models: {error}");
+                return ExitCode::FAILURE;
+            }
+        };
+
+    for issue in &report.issues {
+        eprintln!(
+            "Warning: could not inspect {}: {}",
+            issue.path.display(),
+            issue.message
+        );
+    }
+
+    print!("{}", format_model_filenames(&report));
+
+    ExitCode::SUCCESS
 }
 
 fn run_model_volume_discovery() -> ExitCode {
@@ -501,6 +613,7 @@ fn run(arguments: &[String]) -> ExitCode {
             output_iso,
             cli_binary,
             tui_binary,
+            model_import_helper,
             firstboot_service,
         ] if command == "iso-refresh" && operation == "deploy" => run_iso_refresh_deploy(
             rootfs,
@@ -509,6 +622,7 @@ fn run(arguments: &[String]) -> ExitCode {
             output_iso,
             cli_binary,
             tui_binary,
+            model_import_helper,
             firstboot_service,
         ),
         [
@@ -527,6 +641,17 @@ fn run(arguments: &[String]) -> ExitCode {
         [command] if command == "realize-models" => run_realize_models(),
         [command, subcommand] if command == "model" && subcommand == "discover" => {
             run_model_volume_discovery()
+        }
+        [command, subcommand] if command == "model" && subcommand == "list-volumes" => {
+            run_model_volume_list()
+        }
+        [command, subcommand, device] if command == "model" && subcommand == "list-models" => {
+            run_model_file_list(device)
+        }
+        [command, subcommand, device, filename, model_name]
+            if command == "model" && subcommand == "import-volume" =>
+        {
+            run_model_import_volume(device, filename, model_name)
         }
         [command, subcommand, device] if command == "model" && subcommand == "add-volume" => {
             run_model_add_volume(device)
@@ -594,6 +719,7 @@ fn run_iso_refresh_deploy(
     output_iso: &str,
     cli_binary: &str,
     tui_binary: &str,
+    model_import_helper: &str,
     firstboot_service: &str,
 ) -> ExitCode {
     let inputs = engine::IsoRefreshInputs {
@@ -606,6 +732,7 @@ fn run_iso_refresh_deploy(
     if let Err(error) = inputs.deploy_artifacts(
         Path::new(cli_binary),
         Path::new(tui_binary),
+        Path::new(model_import_helper),
         Path::new(firstboot_service),
     ) {
         eprintln!("ISO refresh deployment failed: {error}");
@@ -764,6 +891,16 @@ fn create_build_context(
         .into());
     }
 
+    let model_import_binary =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/release/daia-model-import");
+    if !model_import_binary.is_file() {
+        return Err(format!(
+            "DAIA model-import helper not found at {}. Build it first with: cargo build --release -p cli --bin daia-model-import",
+            model_import_binary.display()
+        )
+        .into());
+    }
+
     if !options.daia_payload_directory.is_dir() {
         return Err(format!(
             "DAIA payload directory not found at {}",
@@ -782,6 +919,7 @@ fn create_build_context(
     )
     .with_daia_binary(daia_binary)
     .with_daia_tui_binary(daia_tui_binary)
+    .with_daia_model_import_binary(model_import_binary)
     .with_daia_payload_directory(options.daia_payload_directory.clone()))
 }
 
@@ -802,7 +940,7 @@ fn print_usage() {
         "    daia iso-refresh stage <rootfs> <payload> <candidate-workspace> <candidate-iso>"
     );
     eprintln!(
-        "    daia iso-refresh deploy <rootfs> <payload> <candidate-workspace> <candidate-iso> <cli-binary> <tui-binary> <firstboot-service>"
+        "    daia iso-refresh deploy <rootfs> <payload> <candidate-workspace> <candidate-iso> <cli-binary> <tui-binary> <model-import-helper> <firstboot-service>"
     );
     eprintln!(
         "    daia iso-refresh package <rootfs> <payload> <candidate-workspace> <candidate-iso> <source-iso>"
@@ -810,6 +948,9 @@ fn print_usage() {
     eprintln!("    daia install");
     eprintln!("    daia realize-models");
     eprintln!("    daia model discover");
+    eprintln!("    daia model list-volumes");
+    eprintln!("    daia model list-models <device>");
+    eprintln!("    daia model import-volume <device> <filename> <model-name>");
     eprintln!("    daia model add");
     eprintln!("    daia model add <directory>");
     eprintln!("    daia model add-volume <device>");
@@ -2916,5 +3057,35 @@ mod tests {
         assert_eq!(options.work_directory, PathBuf::from("work"));
         assert_eq!(options.output_iso, PathBuf::from("output.iso"));
         assert_eq!(options.daia_payload_directory, PathBuf::from("payload"));
+    }
+}
+
+#[cfg(test)]
+mod model_volume_output_tests {
+    use super::format_model_volume_paths;
+
+    #[test]
+    fn model_volume_paths_are_newline_delimited_without_heading() {
+        assert_eq!(
+            format_model_volume_paths(&["/dev/sdb1", "/dev/sdc2"]),
+            "/dev/sdb1\n/dev/sdc2\n"
+        );
+        assert_eq!(format_model_volume_paths(&[]), "");
+    }
+
+    #[test]
+    fn model_import_arguments_reject_invalid_selections() {
+        let validate = super::validate_model_import_arguments;
+
+        assert!(validate("", "model.gguf", "my-model").is_err());
+        assert!(validate("/dev/example1", "../model.gguf", "my-model").is_err());
+        assert!(validate("/dev/example1", "model.gguf", "").is_err());
+        assert!(validate("/dev/example1", "model.gguf", "my-model").is_ok());
+    }
+
+    #[test]
+    fn empty_model_report_produces_no_filenames() {
+        let report = application::ModelDiscoveryReport::default();
+        assert_eq!(super::format_model_filenames(&report), "");
     }
 }

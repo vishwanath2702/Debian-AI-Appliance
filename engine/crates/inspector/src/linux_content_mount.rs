@@ -40,6 +40,7 @@ pub struct LinuxContentVolumeMounter {
     umount_command: PathBuf,
     lsblk_command: PathBuf,
     mount_root: PathBuf,
+    restricted_environment: bool,
 }
 
 impl Default for LinuxContentVolumeMounter {
@@ -57,6 +58,7 @@ impl LinuxContentVolumeMounter {
             umount_command: PathBuf::from("umount"),
             lsblk_command: PathBuf::from("lsblk"),
             mount_root: PathBuf::from("/run/daia/content"),
+            restricted_environment: false,
         }
     }
 
@@ -88,12 +90,32 @@ impl LinuxContentVolumeMounter {
         self
     }
 
+    /// Enables a minimal subprocess environment for privileged callers.
+    #[must_use]
+    pub fn with_restricted_environment(mut self) -> Self {
+        self.restricted_environment = true;
+        self
+    }
+
+    fn subprocess(&self, executable: &Path) -> Command {
+        let mut command = Command::new(executable);
+
+        if self.restricted_environment {
+            command.env_clear();
+            command.env("PATH", "/usr/bin:/bin");
+            command.env("LC_ALL", "C");
+        }
+
+        command
+    }
+
     // Obtains a fresh storage snapshot for mount-time safety validation.
     // The caller must validate the selected device against this snapshot.
     fn inspect_mount_topology(
         &self,
     ) -> Result<Vec<crate::lsblk::LsblkDevice>, StorageInspectError> {
-        let output = Command::new(&self.lsblk_command)
+        let output = self
+            .subprocess(&self.lsblk_command)
             .arg("--tree")
             .arg("--json")
             .arg("--paths")
@@ -156,6 +178,7 @@ impl LinuxContentVolumeMounter {
 
 // Resolves filesystem aliases before comparing device paths.
 // This alone is not sufficient for block-device mount authorization.
+#[cfg(test)]
 fn same_resolved_device_path(left: &Path, right: &Path) -> Result<bool, StorageInspectError> {
     let left = fs::canonicalize(left)?;
     let right = fs::canonicalize(right)?;
@@ -185,6 +208,7 @@ fn same_block_device(left: &Path, right: &Path) -> Result<bool, StorageInspectEr
 
 // Checks whether a selected block-device path appears in the active swap table.
 // This does not resolve device aliases or stacked-device ancestry.
+#[cfg(test)]
 fn validate_content_volume_swap(selected: &Path, swaps: &str) -> Result<(), StorageInspectError> {
     let mut lines = swaps.lines();
 
@@ -275,10 +299,7 @@ fn validate_content_volume_swap_identity(
 
 // Reads the kernel's active swap table and rejects active swap devices.
 // This is an additional safety check, not mount authorization.
-fn validate_content_volume_active_swap(selected: &Path) -> Result<(), StorageInspectError> {
-    validate_content_volume_active_swap_from(selected, Path::new("/proc/swaps"))
-}
-
+#[cfg(test)]
 fn validate_content_volume_active_swap_from(
     selected: &Path,
     swaps_path: &Path,
@@ -289,6 +310,7 @@ fn validate_content_volume_active_swap_from(
 
 // Combines partition metadata and active-swap checks.
 // Passing this check does not authorize mounting.
+#[cfg(test)]
 fn validate_content_volume_eligibility(
     volume: &DiscoveredContentVolume,
     devices: &[crate::lsblk::LsblkDevice],
@@ -599,7 +621,8 @@ impl LinuxContentVolumeMounter {
         fs::create_dir_all(&self.mount_root)?;
         fs::create_dir(&mountpoint)?;
 
-        let output = Command::new(&self.command)
+        let output = self
+            .subprocess(&self.command)
             .arg("--read-only")
             .arg("--types")
             .arg(volume.filesystem_type())
@@ -696,7 +719,8 @@ impl ContentVolumeMounter for LinuxContentVolumeMounter {
             )));
         }
 
-        let output = Command::new(&self.umount_command)
+        let output = self
+            .subprocess(&self.umount_command)
             .arg("--")
             .arg(mountpoint)
             .output()?;
@@ -733,6 +757,44 @@ mod tests {
     use tempfile::TempDir;
 
     use super::{ContentVolumeMounter, LinuxContentVolumeMounter};
+
+    #[test]
+    fn restricted_subprocess_uses_minimal_environment() {
+        let inspector = LinuxContentVolumeMounter::new().with_restricted_environment();
+        let command = inspector.subprocess(std::path::Path::new("/usr/bin/true"));
+
+        assert!(command.get_envs().any(|(key, value)| {
+            key == "PATH" && value == Some(std::ffi::OsStr::new("/usr/bin:/bin"))
+        }));
+        assert!(
+            command.get_envs().any(|(key, value)| {
+                key == "LC_ALL" && value == Some(std::ffi::OsStr::new("C"))
+            })
+        );
+        assert!(!command.get_envs().any(|(key, _)| key == "HOME"));
+    }
+
+    #[test]
+    fn restricted_subprocess_does_not_inherit_environment() {
+        let inspector = LinuxContentVolumeMounter::new().with_restricted_environment();
+        let mut command = inspector.subprocess(std::path::Path::new("/usr/bin/env"));
+
+        command.env("DAIA_TEST_MARKER", "present");
+        let output = command
+            .output()
+            .expect("environment command should execute");
+
+        assert!(output.status.success());
+
+        let environment = String::from_utf8(output.stdout).expect("environment should be UTF-8");
+
+        let entries: Vec<&str> = environment.lines().collect();
+
+        assert!(entries.contains(&"PATH=/usr/bin:/bin"));
+        assert!(entries.contains(&"LC_ALL=C"));
+        assert!(entries.contains(&"DAIA_TEST_MARKER=present"));
+        assert_eq!(entries.len(), 3, "unexpected inherited environment");
+    }
 
     fn command_script(contents: &str) -> (TempDir, std::path::PathBuf) {
         let directory = TempDir::new().expect("temporary directory should be created");

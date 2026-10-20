@@ -15,6 +15,7 @@ pub struct BuildContext {
     bootstrap: BootstrapConfig,
     daia_binary: Option<PathBuf>,
     daia_tui_binary: Option<PathBuf>,
+    daia_model_import_binary: Option<PathBuf>,
     daia_payload_directory: Option<PathBuf>,
 }
 
@@ -38,6 +39,7 @@ impl BuildContext {
             bootstrap,
             daia_binary: None,
             daia_tui_binary: None,
+            daia_model_import_binary: None,
             daia_payload_directory: None,
         }
     }
@@ -101,6 +103,19 @@ impl BuildContext {
     #[must_use]
     pub fn daia_tui_binary(&self) -> Option<&Path> {
         self.daia_tui_binary.as_deref()
+    }
+
+    /// Sets the restricted model-import helper to include in the live root filesystem.
+    #[must_use]
+    pub fn with_daia_model_import_binary(mut self, binary: impl Into<PathBuf>) -> Self {
+        self.daia_model_import_binary = Some(binary.into());
+        self
+    }
+
+    /// Returns the restricted model-import helper binary.
+    #[must_use]
+    pub fn daia_model_import_binary(&self) -> Option<&Path> {
+        self.daia_model_import_binary.as_deref()
     }
 
     /// Sets the DAIA installer payload directory to include in the ISO.

@@ -249,6 +249,93 @@ impl SystemContentImportFileSystem {
         }
     }
 }
+#[cfg(target_os = "linux")]
+fn open_content_import_directory(path: &std::path::Path) -> std::io::Result<std::os::fd::OwnedFd> {
+    use rustix::fs::{Mode, OFlags};
+    use std::path::Component;
+
+    if !path.is_absolute() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "content import directory must be absolute",
+        ));
+    }
+
+    let mut directory = rustix::fs::open(
+        "/",
+        OFlags::RDONLY | OFlags::DIRECTORY | OFlags::CLOEXEC,
+        Mode::empty(),
+    )?;
+
+    for component in path.components() {
+        let Component::Normal(name) = component else {
+            if matches!(component, Component::RootDir | Component::CurDir) {
+                continue;
+            }
+
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "invalid content import directory component",
+            ));
+        };
+
+        let flags = OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC;
+
+        directory = match rustix::fs::openat(&directory, name, flags, Mode::empty()) {
+            Ok(next) => next,
+            Err(rustix::io::Errno::NOENT) => {
+                match rustix::fs::mkdirat(&directory, name, Mode::from_raw_mode(0o755)) {
+                    Ok(()) | Err(rustix::io::Errno::EXIST) => {}
+                    Err(error) => return Err(error.into()),
+                }
+
+                rustix::fs::openat(&directory, name, flags, Mode::empty())?
+            }
+            Err(error) => return Err(error.into()),
+        };
+    }
+
+    Ok(directory)
+}
+
+#[cfg(target_os = "linux")]
+fn create_content_import_temporary_file(
+    directory: &std::os::fd::OwnedFd,
+) -> std::io::Result<(String, std::fs::File)> {
+    use rustix::fs::{Mode, OFlags};
+
+    for _ in 0..16 {
+        let mut random = [0_u8; 16];
+        let filled = rustix::rand::getrandom(&mut random, rustix::rand::GetRandomFlags::empty())?;
+
+        if filled != random.len() {
+            return Err(std::io::Error::other(
+                "incomplete content import temporary-name randomness",
+            ));
+        }
+
+        let suffix: String = random.iter().map(|byte| format!("{byte:02x}")).collect();
+
+        let name = format!(".daia-import-{suffix}");
+
+        match rustix::fs::openat(
+            directory,
+            name.as_str(),
+            OFlags::WRONLY | OFlags::CREATE | OFlags::EXCL | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+            Mode::from_raw_mode(0o600),
+        ) {
+            Ok(fd) => return Ok((name, std::fs::File::from(fd))),
+            Err(rustix::io::Errno::EXIST) => continue,
+            Err(error) => return Err(error.into()),
+        }
+    }
+
+    Err(std::io::Error::new(
+        std::io::ErrorKind::AlreadyExists,
+        "unable to allocate unique content import temporary file",
+    ))
+}
+
 impl ContentImportFileSystem for SystemContentImportFileSystem {
     type Error = std::io::Error;
 
@@ -264,29 +351,193 @@ impl ContentImportFileSystem for SystemContentImportFileSystem {
             )
         })?;
 
-        let destination = self.destination_path(destination);
+        let requested_destination = std::path::Path::new(destination.path());
 
-        std::fs::create_dir_all(&destination)?;
-
-        let destination = destination.join(file_name);
-
-        if destination.exists() {
+        if requested_destination.components().any(|component| {
+            matches!(
+                component,
+                std::path::Component::ParentDir | std::path::Component::Prefix(_)
+            )
+        }) {
             return Err(std::io::Error::new(
-                std::io::ErrorKind::AlreadyExists,
-                format!(
-                    "content import destination already exists: {}",
-                    destination.display()
-                ),
+                std::io::ErrorKind::InvalidInput,
+                "content import destination contains invalid path components",
             ));
         }
 
-        std::fs::copy(item.path(), &destination)?;
+        let destination = self.destination_path(destination);
 
-        #[cfg(unix)]
+        #[cfg(target_os = "linux")]
+        let destination_directory_fd = open_content_import_directory(&destination)?;
+
+        #[cfg(not(target_os = "linux"))]
         {
+            for component in destination
+                .ancestors()
+                .collect::<Vec<_>>()
+                .into_iter()
+                .rev()
+            {
+                match std::fs::symlink_metadata(component) {
+                    Ok(metadata) if metadata.file_type().is_symlink() => {
+                        return Err(std::io::Error::new(
+                            std::io::ErrorKind::InvalidInput,
+                            format!(
+                                "content import destination contains a symlink: {}",
+                                component.display()
+                            ),
+                        ));
+                    }
+                    Ok(_) => {}
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                    Err(error) => return Err(error),
+                }
+            }
+
+            std::fs::create_dir_all(&destination)?;
+        }
+
+        let destination = destination.join(file_name);
+
+        #[cfg(target_os = "linux")]
+        let mut source_file = {
+            use rustix::fs::{Mode, OFlags, ResolveFlags};
+
+            let root_fd = rustix::fs::open(
+                "/",
+                OFlags::RDONLY | OFlags::DIRECTORY | OFlags::CLOEXEC,
+                Mode::empty(),
+            )?;
+
+            let source_path = item.path();
+            if !source_path.is_absolute()
+                || source_path
+                    .components()
+                    .any(|component| matches!(component, std::path::Component::ParentDir))
+            {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "content import source must be an absolute path without parent traversal",
+                ));
+            }
+
+            let relative_source = source_path.strip_prefix("/").map_err(|_| {
+                std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "invalid content import source path",
+                )
+            })?;
+
+            let fd = rustix::fs::openat2(
+                &root_fd,
+                relative_source,
+                OFlags::RDONLY | OFlags::NONBLOCK | OFlags::CLOEXEC,
+                Mode::empty(),
+                ResolveFlags::BENEATH | ResolveFlags::NO_SYMLINKS,
+            )?;
+
+            std::fs::File::from(fd)
+        };
+
+        #[cfg(not(target_os = "linux"))]
+        let mut source_file = {
+            for component in item
+                .path()
+                .parent()
+                .into_iter()
+                .flat_map(std::path::Path::ancestors)
+                .collect::<Vec<_>>()
+                .into_iter()
+                .rev()
+            {
+                match std::fs::symlink_metadata(component) {
+                    Ok(metadata) if metadata.file_type().is_symlink() => {
+                        return Err(std::io::Error::new(
+                            std::io::ErrorKind::InvalidInput,
+                            format!(
+                                "content import source contains a directory symlink: {}",
+                                component.display()
+                            ),
+                        ));
+                    }
+                    Ok(_) => {}
+                    Err(error) => return Err(error),
+                }
+            }
+
+            std::fs::File::open(item.path())?
+        };
+
+        if !source_file.metadata()?.is_file() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "content import source must be a regular file",
+            ));
+        }
+
+        #[cfg(target_os = "linux")]
+        {
+            use rustix::fs::{AtFlags, RenameFlags};
             use std::os::unix::fs::PermissionsExt;
 
-            std::fs::set_permissions(&destination, std::fs::Permissions::from_mode(0o644))?;
+            let (temporary_name, mut temporary_file) =
+                create_content_import_temporary_file(&destination_directory_fd)?;
+
+            let result = (|| -> std::io::Result<()> {
+                std::io::copy(&mut source_file, &mut temporary_file)?;
+
+                temporary_file.set_permissions(std::fs::Permissions::from_mode(0o644))?;
+
+                temporary_file.sync_all()?;
+
+                rustix::fs::renameat_with(
+                    &destination_directory_fd,
+                    temporary_name.as_str(),
+                    &destination_directory_fd,
+                    file_name,
+                    RenameFlags::NOREPLACE,
+                )?;
+
+                Ok(())
+            })();
+
+            drop(temporary_file);
+
+            if result.is_err() {
+                let _ = rustix::fs::unlinkat(
+                    &destination_directory_fd,
+                    temporary_name.as_str(),
+                    AtFlags::empty(),
+                );
+            }
+
+            result?;
+        }
+
+        #[cfg(not(target_os = "linux"))]
+        {
+            let mut destination_options = std::fs::OpenOptions::new();
+            destination_options.write(true).create_new(true);
+
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::OpenOptionsExt;
+                destination_options.mode(0o600);
+            }
+
+            let mut destination_file = destination_options.open(&destination)?;
+
+            if let Err(error) = std::io::copy(&mut source_file, &mut destination_file) {
+                drop(destination_file);
+                let _ = std::fs::remove_file(&destination);
+                return Err(error);
+            }
+
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                destination_file.set_permissions(std::fs::Permissions::from_mode(0o644))?;
+            }
         }
 
         Ok(ImportedContentItem::new(item.id().clone(), destination))
@@ -1509,6 +1760,388 @@ mod tests {
             "existing model"
         );
     }
+    #[cfg(unix)]
+    #[test]
+    fn system_content_import_file_system_rejects_dangling_destination_symlink() {
+        use std::os::unix::fs::symlink;
+
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let source = directory.path().join("source.gguf");
+        let destination = directory.path().join("content");
+        let outside = directory.path().join("outside.gguf");
+
+        std::fs::write(&source, "model").expect("write source");
+        std::fs::create_dir(&destination).expect("create destination");
+        symlink(&outside, destination.join("source.gguf"))
+            .expect("create dangling destination symlink");
+
+        let item = ExternalContentItem::new(ContentSourceId::new("local-models-directory"), source);
+
+        let mut file_system = SystemContentImportFileSystem::new();
+
+        let result = file_system.copy_item(
+            &item,
+            &ContentImportDestination::new(destination.to_string_lossy()),
+        );
+
+        assert!(result.is_err(), "destination symlink must be rejected");
+        assert!(
+            !outside.exists(),
+            "import must not write outside destination"
+        );
+        assert!(
+            std::fs::symlink_metadata(destination.join("source.gguf"))
+                .expect("original symlink must remain")
+                .file_type()
+                .is_symlink()
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn system_content_import_file_system_rejects_symlinked_destination_directory() {
+        use std::os::unix::fs::symlink;
+
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let source = directory.path().join("model.gguf");
+        let outside = directory.path().join("outside");
+        let destination = directory.path().join("content");
+
+        std::fs::write(&source, "model").expect("write source");
+        std::fs::create_dir(&outside).expect("create outside directory");
+        symlink(&outside, &destination).expect("create directory symlink");
+
+        let item = ExternalContentItem::new(ContentSourceId::new("local-models-directory"), source);
+
+        let mut file_system = SystemContentImportFileSystem::new();
+
+        let result = file_system.copy_item(
+            &item,
+            &ContentImportDestination::new(destination.to_string_lossy()),
+        );
+
+        assert!(
+            result.is_err(),
+            "symlinked destination directory must be rejected"
+        );
+        assert!(
+            !outside.join("model.gguf").exists(),
+            "import must not write through a directory symlink"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn system_content_import_file_system_rejects_intermediate_directory_symlink() {
+        use std::os::unix::fs::symlink;
+
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let source = directory.path().join("model.gguf");
+        let root = directory.path().join("target");
+        let outside = directory.path().join("outside");
+
+        std::fs::write(&source, "model").expect("write source");
+        std::fs::create_dir_all(&root).expect("create root");
+        std::fs::create_dir_all(&outside).expect("create outside directory");
+
+        symlink(&outside, root.join("var")).expect("create intermediate directory symlink");
+
+        let item = ExternalContentItem::new(ContentSourceId::new("local-models-directory"), source);
+
+        let mut file_system = SystemContentImportFileSystem::with_root(&root);
+
+        let result = file_system.copy_item(
+            &item,
+            &ContentImportDestination::new("/var/lib/daia/content"),
+        );
+
+        assert!(
+            result.is_err(),
+            "intermediate directory symlink must be rejected"
+        );
+        assert!(
+            !outside.join("lib/daia/content/model.gguf").exists(),
+            "import must not escape through intermediate symlink"
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn system_content_import_file_system_cleans_up_after_source_read_failure() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let source = directory.path().join("source.gguf");
+        let destination = directory.path().join("content");
+
+        std::fs::create_dir(&source).expect("create directory as unreadable source");
+
+        let item = ExternalContentItem::new(ContentSourceId::new("local-models-directory"), source);
+
+        let mut file_system = SystemContentImportFileSystem::new();
+
+        let result = file_system.copy_item(
+            &item,
+            &ContentImportDestination::new(destination.to_string_lossy()),
+        );
+
+        assert!(result.is_err(), "reading a directory as content must fail");
+        assert!(
+            !destination.join("source.gguf").exists(),
+            "failed copy must not leave a destination file"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn system_content_import_file_system_rejects_source_symlink() {
+        use std::os::unix::fs::symlink;
+
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let actual_source = directory.path().join("actual.gguf");
+        let source = directory.path().join("source.gguf");
+        let destination = directory.path().join("content");
+
+        std::fs::write(&actual_source, "model").expect("write actual source");
+        symlink(&actual_source, &source).expect("create source symlink");
+
+        let item = ExternalContentItem::new(ContentSourceId::new("local-models-directory"), source);
+
+        let mut file_system = SystemContentImportFileSystem::new();
+
+        let result = file_system.copy_item(
+            &item,
+            &ContentImportDestination::new(destination.to_string_lossy()),
+        );
+
+        assert!(result.is_err(), "source symlink must be rejected");
+        assert!(
+            !destination.join("source.gguf").exists(),
+            "rejected source must not create imported content"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&actual_source).expect("read actual source"),
+            "model"
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn system_content_import_file_system_rejects_symlinked_source_parent() {
+        use std::os::unix::fs::symlink;
+
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let actual_directory = directory.path().join("actual");
+        let linked_directory = directory.path().join("linked");
+        let destination = directory.path().join("content");
+
+        std::fs::create_dir(&actual_directory).expect("create actual directory");
+        std::fs::write(actual_directory.join("model.gguf"), "model").expect("write actual source");
+        symlink(&actual_directory, &linked_directory).expect("create source parent symlink");
+
+        let item = ExternalContentItem::new(
+            ContentSourceId::new("local-models-directory"),
+            linked_directory.join("model.gguf"),
+        );
+
+        let mut file_system = SystemContentImportFileSystem::new();
+
+        let result = file_system.copy_item(
+            &item,
+            &ContentImportDestination::new(destination.to_string_lossy()),
+        );
+
+        assert!(
+            result.is_err(),
+            "symlinked source parent directory must be rejected"
+        );
+        assert!(
+            !destination.join("model.gguf").exists(),
+            "rejected source must not create imported content"
+        );
+    }
+
+    #[test]
+    fn system_content_import_file_system_rejects_destination_parent_traversal() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let source = directory.path().join("model.gguf");
+        let root = directory.path().join("target");
+        let escaped = directory.path().join("escaped");
+
+        std::fs::write(&source, "model").expect("write source");
+        std::fs::create_dir(&root).expect("create target root");
+
+        let item = ExternalContentItem::new(ContentSourceId::new("local-models-directory"), source);
+
+        let mut file_system = SystemContentImportFileSystem::with_root(&root);
+
+        let result = file_system.copy_item(&item, &ContentImportDestination::new("/../escaped"));
+
+        assert!(
+            result.is_err(),
+            "destination parent traversal must be rejected"
+        );
+        assert!(
+            !escaped.join("model.gguf").exists(),
+            "import must not write outside its configured root"
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn content_import_directory_helper_creates_missing_directories() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let destination = directory.path().join("var/lib/daia/content");
+
+        let _directory_fd =
+            super::open_content_import_directory(&destination).expect("open destination directory");
+
+        assert!(destination.is_dir());
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn content_import_directory_helper_rejects_symlinked_component() {
+        use std::os::unix::fs::symlink;
+
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let outside = directory.path().join("outside");
+        let linked = directory.path().join("linked");
+
+        std::fs::create_dir(&outside).expect("create outside directory");
+        symlink(&outside, &linked).expect("create directory symlink");
+
+        let result = super::open_content_import_directory(&linked.join("content"));
+
+        assert!(result.is_err(), "directory symlink must be rejected");
+        assert!(
+            !outside.join("content").exists(),
+            "helper must not create directories through a symlink"
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn system_content_import_file_system_leaves_no_partial_model_on_copy_failure() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let source = directory.path().join("source.gguf");
+        let destination = directory.path().join("imported");
+
+        std::fs::create_dir(&source).expect("create unreadable source directory");
+
+        let item = ExternalContentItem::new(ContentSourceId::new("local-models-directory"), source);
+
+        let mut file_system = SystemContentImportFileSystem::new();
+
+        let result = file_system.copy_item(
+            &item,
+            &ContentImportDestination::new(destination.to_string_lossy().into_owned()),
+        );
+
+        assert!(result.is_err(), "directory source must be rejected");
+        assert!(
+            !destination.join("source.gguf").exists(),
+            "failed import must not publish a model"
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn content_import_temporary_file_is_created_inside_destination_directory() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let destination = directory.path().join("imported");
+
+        let directory_fd =
+            super::open_content_import_directory(&destination).expect("open destination directory");
+
+        let (temporary_name, temporary_file) =
+            super::create_content_import_temporary_file(&directory_fd)
+                .expect("create temporary file");
+
+        assert!(temporary_name.starts_with(".daia-import-"));
+        assert!(destination.join(&temporary_name).is_file());
+        assert!(!destination.join("model.gguf").exists());
+
+        let permissions = temporary_file
+            .metadata()
+            .expect("temporary file metadata")
+            .permissions()
+            .mode()
+            & 0o777;
+
+        assert_eq!(permissions, 0o600);
+
+        rustix::fs::unlinkat(
+            &directory_fd,
+            temporary_name.as_str(),
+            rustix::fs::AtFlags::empty(),
+        )
+        .expect("remove temporary file");
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn system_content_import_atomic_publication_cleans_up_on_existing_destination() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let source = directory.path().join("model.gguf");
+        let destination = directory.path().join("imported");
+
+        std::fs::write(&source, b"new model").expect("write source");
+        std::fs::create_dir(&destination).expect("create destination");
+        std::fs::write(destination.join("model.gguf"), b"existing model")
+            .expect("write existing model");
+
+        let item = ExternalContentItem::new(ContentSourceId::new("local-models-directory"), source);
+
+        let mut file_system = SystemContentImportFileSystem::new();
+
+        let result = file_system.copy_item(
+            &item,
+            &ContentImportDestination::new(destination.to_string_lossy().into_owned()),
+        );
+
+        assert!(result.is_err(), "existing model must not be replaced");
+
+        assert_eq!(
+            std::fs::read(destination.join("model.gguf")).expect("read existing model"),
+            b"existing model"
+        );
+
+        let remaining: Vec<_> = std::fs::read_dir(&destination)
+            .expect("read destination directory")
+            .map(|entry| {
+                entry
+                    .expect("directory entry")
+                    .file_name()
+                    .to_string_lossy()
+                    .into_owned()
+            })
+            .collect();
+
+        assert_eq!(remaining, vec!["model.gguf"]);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    #[ignore = "privileged destination ownership validation belongs at the import boundary"]
+    fn content_import_directory_helper_rejects_world_writable_directory() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let destination = directory.path().join("unsafe");
+
+        std::fs::create_dir(&destination).expect("create destination");
+        std::fs::set_permissions(&destination, std::fs::Permissions::from_mode(0o777))
+            .expect("set unsafe directory permissions");
+
+        let result = super::open_content_import_directory(&destination);
+
+        assert!(
+            result.is_err(),
+            "world-writable import destination must be rejected"
+        );
+    }
+
     #[test]
     fn creates_system_content_import_operation_executor() {
         let mut executor =
