@@ -84,8 +84,10 @@ realize_models()
 
 prepare_model_directory()
 {
-    install -d -o root -g root -m 0755 "$DAIA_STATE_DIRECTORY"
-    install -d -o root -g root -m 0755 "$DAIA_STATE_DIRECTORY/content"
+    local state_directory="$1"
+
+    install -d -o root -g root -m 0755 "$state_directory"
+    install -d -o root -g root -m 0755 "$state_directory/content"
 }
 
 mark_firstboot_complete()
@@ -109,7 +111,7 @@ disable_firstboot_service()
 main()
 {
     require_root
-    prepare_model_directory
+    prepare_model_directory "$DAIA_STATE_DIRECTORY"
     run_runtime
     realize_models
     mark_firstboot_complete

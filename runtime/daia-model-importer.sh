@@ -40,8 +40,15 @@ else
         status=$?
 
         if (( status == 0 )) && [[ -n "$selected_device" ]]; then
+            if ! command -v pkexec >/dev/null 2>&1; then
+                kdialog --title "$TITLE" \
+                    --error "Administrator authorization (pkexec) is unavailable."
+                exit 1
+            fi
+
+            : > "$error_file"
             models_output="$(
-                "$DAIA_COMMAND" model list-models "$selected_device" 2>"$error_file"
+                pkexec /usr/bin/daia-model-import list-models "$selected_device" 2>"$error_file"
             )"
             status=$?
 
@@ -100,11 +107,34 @@ Continue with model import?"; then
 Ollama name: $model_name"
                             else
                                 details="$(cat "$error_file")"
-                                kdialog --title "$TITLE" \
-                                    --error "Model import failed.
 
-${details:-Administrator authorization was cancelled or the import failed.}"
-                                exit 1
+                                if kdialog --title "$TITLE" \
+                                    --yesno "Model import failed.
+
+${details:-Administrator authorization was cancelled or the import failed.}
+
+If the GGUF was already imported, DAIA can retry Ollama registration without copying it again.
+
+Attempt recovery for: $model_name?"; then
+                                    : > "$error_file"
+
+                                    if pkexec /usr/bin/daia-model-import \
+                                        resume-model "$model_name" 2>"$error_file"; then
+                                        kdialog --title "$TITLE" \
+                                            --msgbox "Model recovery completed successfully.
+
+Ollama name: $model_name"
+                                    else
+                                        details="$(cat "$error_file")"
+                                        kdialog --title "$TITLE" \
+                                            --error "Model recovery failed.
+
+${details:-Administrator authorization was cancelled or recovery failed.}"
+                                        exit 1
+                                    fi
+                                else
+                                    exit 1
+                                fi
                             fi
                         fi
                     fi

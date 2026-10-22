@@ -31,11 +31,10 @@ impl BootstrapConfig {
         )
     }
     fn with_firmware_component(mut components: Vec<String>) -> Vec<String> {
-        if !components
-            .iter()
-            .any(|component| component == "non-free-firmware")
-        {
-            components.push("non-free-firmware".to_owned());
+        for required in ["main", "contrib", "non-free", "non-free-firmware"] {
+            if !components.iter().any(|component| component == required) {
+                components.push(required.to_owned());
+            }
         }
         components
     }
@@ -94,7 +93,12 @@ impl Default for BootstrapConfig {
             "trixie",
             "amd64",
             "https://deb.debian.org/debian",
-            vec!["main".to_owned(), "non-free-firmware".to_owned()],
+            vec![
+                "main".to_owned(),
+                "contrib".to_owned(),
+                "non-free".to_owned(),
+                "non-free-firmware".to_owned(),
+            ],
             "minbase",
         )
     }
@@ -125,17 +129,27 @@ mod tests {
         assert_eq!(config.architecture(), "amd64");
         assert_eq!(
             config.components(),
-            &["main".to_owned(), "non-free-firmware".to_owned()]
+            &[
+                "main".to_owned(),
+                "contrib".to_owned(),
+                "non-free".to_owned(),
+                "non-free-firmware".to_owned(),
+            ]
         );
     }
 
     #[test]
     fn firmware_component_is_not_duplicated() {
-        let components = vec!["main".to_owned(), "non-free-firmware".to_owned()];
+        let components = vec![
+            "main".to_owned(),
+            "contrib".to_owned(),
+            "non-free".to_owned(),
+            "non-free-firmware".to_owned(),
+        ];
 
         assert_eq!(
-            BootstrapConfig::with_firmware_component(components),
-            vec!["main".to_owned(), "non-free-firmware".to_owned()]
+            BootstrapConfig::with_firmware_component(components.clone()),
+            components
         );
     }
 
@@ -148,6 +162,7 @@ mod tests {
             vec![
                 "main".to_owned(),
                 "contrib".to_owned(),
+                "non-free".to_owned(),
                 "non-free-firmware".to_owned(),
             ]
         );
@@ -181,7 +196,12 @@ mod tests {
         assert_eq!(config.mirror(), "https://deb.debian.org/debian");
         assert_eq!(
             config.components(),
-            &["main".to_owned(), "non-free-firmware".to_owned()]
+            &[
+                "main".to_owned(),
+                "contrib".to_owned(),
+                "non-free".to_owned(),
+                "non-free-firmware".to_owned(),
+            ]
         );
         assert_eq!(config.variant(), "minbase");
     }

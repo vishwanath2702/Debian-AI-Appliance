@@ -1,0 +1,14 @@
+name: nvidia
+
+# NVIDIA Ampere GPU support (including RTX 3060).
+# Hardware-specific: do not install on every DAIA system.
+# Secure Boot module signing/enrollment requires separate handling.
+packages:
+  - nvidia-driver
+  - nvidia-open-kernel-dkms
+  - firmware-nvidia-gsp
+  - linux-headers-amd64
+  - dkms
+  - nvidia-smi
+  - nvidia-settings
+  - mokutil

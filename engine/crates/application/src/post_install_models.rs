@@ -577,6 +577,110 @@ where
         .map_err(|error| format!("Error realizing models: {error}"))
 }
 
+/// Retries realization of an existing imported model without importing it again.
+///
+/// The persisted model and its content are left unchanged.
+///
+/// # Errors
+///
+/// Returns an error if the model is missing, ambiguous, its stored content is
+/// unavailable, or realization fails.
+pub fn resume_model_realization_with<E>(
+    model_name: &str,
+    root: &std::path::Path,
+    executor: &mut E,
+) -> Result<(), String>
+where
+    E: engine::ModelRealizationExecutor,
+    E::Error: std::fmt::Display,
+{
+    if model_name.trim().is_empty() {
+        return Err("DAIA model name cannot be empty".to_owned());
+    }
+
+    let appliance_state = state::ApplianceState::read_from_root(root)
+        .map_err(|error| format!("Error loading appliance state: {error}"))?;
+
+    let selected: Vec<_> = appliance_state
+        .model_realizations()
+        .iter()
+        .filter(|realization| realization.id().as_str() == model_name)
+        .cloned()
+        .collect();
+
+    if selected.len() != 1 {
+        return Err(format!(
+            "Expected exactly one existing model named {model_name:?}, found {}",
+            selected.len()
+        ));
+    }
+
+    let stored_path = selected[0].content().path();
+
+    let content_directory = std::path::Path::new("/var/lib/daia/content");
+
+    let filename = stored_path
+        .strip_prefix(content_directory)
+        .map_err(|_| "Imported model path is outside DAIA content storage".to_owned())?;
+
+    if filename.components().count() != 1
+        || !matches!(
+            filename.components().next(),
+            Some(std::path::Component::Normal(_))
+        )
+    {
+        return Err("Imported model path contains unsafe components".to_owned());
+    }
+
+    let content_directory_path = root.join("var/lib/daia/content");
+
+    for component in ["var", "var/lib", "var/lib/daia", "var/lib/daia/content"] {
+        let directory_path = root.join(component);
+        let metadata = std::fs::symlink_metadata(&directory_path).map_err(|error| {
+            format!(
+                "Cannot inspect DAIA directory {}: {error}",
+                directory_path.display()
+            )
+        })?;
+
+        if !metadata.file_type().is_dir() {
+            return Err(format!(
+                "DAIA directory must be a real directory, not a symlink: {}",
+                directory_path.display()
+            ));
+        }
+    }
+
+    let content_path = content_directory_path.join(filename);
+
+    let metadata = std::fs::symlink_metadata(&content_path).map_err(|error| {
+        format!(
+            "Cannot inspect imported model content {}: {error}",
+            stored_path.display()
+        )
+    })?;
+
+    if metadata.file_type().is_symlink() {
+        return Err(format!(
+            "Imported model content must not be a symlink: {}",
+            stored_path.display()
+        ));
+    }
+
+    if !content_path.is_file() {
+        return Err(format!(
+            "Imported model content is missing or not a regular file: {}",
+            stored_path.display()
+        ));
+    }
+
+    inspector::inspect_gguf(&content_path)
+        .map_err(|error| format!("Error validating imported GGUF: {error}"))?;
+
+    realize_models_with(&selected, executor)
+        .map_err(|error| format!("Error resuming model realization: {error}"))
+}
+
 /// Realizes models using the caller-provided executor.
 ///
 /// Stops at the first realization failure.
@@ -1677,6 +1781,393 @@ mod post_install_model_import_tests {
             persisted.model_realizations()[0].id().as_str(),
             "post-install-model"
         );
+    }
+}
+
+#[cfg(test)]
+mod model_realization_recovery_tests {
+    use engine::ModelRealizationExecutor;
+
+    #[derive(Default)]
+    struct RecordingExecutor {
+        names: Vec<String>,
+    }
+
+    impl ModelRealizationExecutor for RecordingExecutor {
+        type Error = String;
+
+        fn execute(&mut self, realization: &model::ModelRealization) -> Result<(), Self::Error> {
+            self.names.push(realization.id().as_str().to_owned());
+            Ok(())
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn refuses_recovery_for_symlinked_daia_directory() {
+        use std::os::unix::fs::symlink;
+
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let root = temporary.path().join("appliance");
+        let lib_directory = root.join("var/lib");
+        let outside_daia = temporary.path().join("outside-daia");
+        let outside_content = outside_daia.join("content");
+        let outside_model = outside_content.join("model.gguf");
+
+        std::fs::create_dir_all(&lib_directory).expect("create lib directory");
+        std::fs::create_dir_all(&outside_content).expect("create outside content directory");
+        std::fs::write(&outside_model, b"outside-content").expect("write outside model");
+        symlink(&outside_daia, lib_directory.join("daia"))
+            .expect("create escaping ancestor symlink");
+
+        let mut appliance_state = state::ApplianceState::new("desktop");
+        appliance_state.record_model_realization(model::ModelRealization::new(
+            model::ModelRealizationId::new("ancestor-symlink-model"),
+            model::InferenceEngineId::ollama(),
+            model::ImportedContentItem::new(
+                model::ExternalContentItemId::new("ancestor-symlink-source"),
+                "/var/lib/daia/content/model.gguf",
+            ),
+        ));
+        appliance_state
+            .write_to_root(&root)
+            .expect("persist test state");
+
+        let mut executor = RecordingExecutor::default();
+        let result =
+            super::resume_model_realization_with("ancestor-symlink-model", &root, &mut executor);
+
+        assert!(
+            result.is_err(),
+            "symlinked DAIA ancestor directory must be rejected"
+        );
+        assert!(
+            executor.names.is_empty(),
+            "executor must not run for escaping ancestor symlink"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn refuses_recovery_for_symlinked_content_directory() {
+        use std::os::unix::fs::symlink;
+
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let root = temporary.path().join("appliance");
+        let daia_directory = root.join("var/lib/daia");
+        let outside_directory = temporary.path().join("outside");
+        let outside = outside_directory.join("model.gguf");
+
+        std::fs::create_dir_all(&daia_directory).expect("create DAIA directory");
+        std::fs::create_dir_all(&outside_directory).expect("create outside directory");
+        std::fs::write(&outside, b"outside-content").expect("write outside content");
+        symlink(&outside_directory, daia_directory.join("content"))
+            .expect("create escaping directory symlink");
+
+        let mut appliance_state = state::ApplianceState::new("desktop");
+        appliance_state.record_model_realization(model::ModelRealization::new(
+            model::ModelRealizationId::new("directory-symlink-model"),
+            model::InferenceEngineId::ollama(),
+            model::ImportedContentItem::new(
+                model::ExternalContentItemId::new("directory-symlink-source"),
+                "/var/lib/daia/content/model.gguf",
+            ),
+        ));
+        appliance_state
+            .write_to_root(&root)
+            .expect("persist test state");
+
+        let mut executor = RecordingExecutor::default();
+
+        let result =
+            super::resume_model_realization_with("directory-symlink-model", &root, &mut executor);
+
+        assert!(
+            result.is_err(),
+            "symlinked content directory must be rejected"
+        );
+        assert!(
+            executor.names.is_empty(),
+            "executor must not run for escaping directory symlink"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn refuses_recovery_for_symlink_escape() {
+        use std::os::unix::fs::symlink;
+
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let root = temporary.path().join("appliance");
+        let content_directory = root.join("var/lib/daia/content");
+        let outside = root.join("var/lib/daia/outside.gguf");
+        let link = content_directory.join("linked.gguf");
+
+        std::fs::create_dir_all(&content_directory).expect("create content directory");
+        std::fs::write(&outside, b"outside-content").expect("write outside content");
+        symlink(&outside, &link).expect("create escaping symlink");
+
+        let mut appliance_state = state::ApplianceState::new("desktop");
+        appliance_state.record_model_realization(model::ModelRealization::new(
+            model::ModelRealizationId::new("symlink-model"),
+            model::InferenceEngineId::ollama(),
+            model::ImportedContentItem::new(
+                model::ExternalContentItemId::new("symlink-source"),
+                "/var/lib/daia/content/linked.gguf",
+            ),
+        ));
+        appliance_state
+            .write_to_root(&root)
+            .expect("persist test state");
+
+        let mut executor = RecordingExecutor::default();
+
+        let result = super::resume_model_realization_with("symlink-model", &root, &mut executor);
+
+        assert!(result.is_err(), "symlink escape must be rejected");
+        assert!(
+            executor.names.is_empty(),
+            "executor must not run for escaping symlink"
+        );
+        assert_eq!(
+            std::fs::read(&outside).expect("read outside content"),
+            b"outside-content"
+        );
+    }
+
+    #[test]
+    fn refuses_recovery_for_path_traversal() {
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let root = temporary.path().join("appliance");
+        let outside = root.join("var/lib/daia/outside.gguf");
+
+        std::fs::create_dir_all(root.join("var/lib/daia/content"))
+            .expect("create content directory");
+
+        std::fs::create_dir_all(outside.parent().unwrap()).expect("create test directory");
+        std::fs::write(&outside, b"outside-content").expect("write outside content");
+
+        let mut appliance_state = state::ApplianceState::new("desktop");
+        appliance_state.record_model_realization(model::ModelRealization::new(
+            model::ModelRealizationId::new("traversal-model"),
+            model::InferenceEngineId::ollama(),
+            model::ImportedContentItem::new(
+                model::ExternalContentItemId::new("traversal-source"),
+                "/var/lib/daia/content/../outside.gguf",
+            ),
+        ));
+        appliance_state
+            .write_to_root(&root)
+            .expect("persist test state");
+
+        let mut executor = RecordingExecutor::default();
+
+        let result = super::resume_model_realization_with("traversal-model", &root, &mut executor);
+
+        assert!(result.is_err(), "path traversal must be rejected");
+        assert!(
+            executor.names.is_empty(),
+            "executor must not run for unsafe paths"
+        );
+        assert_eq!(
+            std::fs::read(&outside).expect("read outside content"),
+            b"outside-content"
+        );
+    }
+
+    #[test]
+    fn refuses_recovery_for_invalid_gguf() {
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let root = temporary.path().join("appliance");
+        let content = root.join("var/lib/daia/content/invalid.gguf");
+
+        std::fs::create_dir_all(content.parent().unwrap()).expect("create content directory");
+        std::fs::write(&content, b"not-a-gguf-model").expect("write invalid GGUF");
+
+        let mut appliance_state = state::ApplianceState::new("desktop");
+        appliance_state.record_model_realization(model::ModelRealization::new(
+            model::ModelRealizationId::new("invalid-gguf-model"),
+            model::InferenceEngineId::ollama(),
+            model::ImportedContentItem::new(
+                model::ExternalContentItemId::new("invalid-gguf-source"),
+                "/var/lib/daia/content/invalid.gguf",
+            ),
+        ));
+        appliance_state
+            .write_to_root(&root)
+            .expect("persist test state");
+
+        let mut executor = RecordingExecutor::default();
+
+        let result =
+            super::resume_model_realization_with("invalid-gguf-model", &root, &mut executor);
+
+        assert!(result.is_err(), "invalid GGUF must be rejected");
+        assert!(
+            executor.names.is_empty(),
+            "executor must not run for invalid GGUF"
+        );
+    }
+
+    #[test]
+    fn refuses_recovery_when_imported_content_is_missing() {
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let root = temporary.path().join("appliance");
+
+        let mut appliance_state = state::ApplianceState::new("desktop");
+        appliance_state.record_model_realization(model::ModelRealization::new(
+            model::ModelRealizationId::new("missing-model"),
+            model::InferenceEngineId::ollama(),
+            model::ImportedContentItem::new(
+                model::ExternalContentItemId::new("missing-source"),
+                "/var/lib/daia/content/missing.gguf",
+            ),
+        ));
+        appliance_state
+            .write_to_root(&root)
+            .expect("persist existing state");
+
+        let mut executor = RecordingExecutor::default();
+
+        let result = super::resume_model_realization_with("missing-model", &root, &mut executor);
+
+        assert!(result.is_err(), "missing content must prevent recovery");
+        assert!(
+            executor.names.is_empty(),
+            "Ollama executor must not run when content is missing"
+        );
+
+        let persisted = state::ApplianceState::read_from_root(&root).expect("read state");
+        assert_eq!(persisted.model_realizations().len(), 1);
+    }
+
+    #[test]
+    fn failed_recovery_preserves_imported_model_for_retry() {
+        struct FailingExecutor;
+
+        impl engine::ModelRealizationExecutor for FailingExecutor {
+            type Error = String;
+
+            fn execute(
+                &mut self,
+                _realization: &model::ModelRealization,
+            ) -> Result<(), Self::Error> {
+                Err("simulated Ollama registration failure".to_owned())
+            }
+        }
+
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let root = temporary.path().join("appliance");
+        let content = root.join("var/lib/daia/content/model.gguf");
+
+        std::fs::create_dir_all(content.parent().unwrap()).expect("create content directory");
+
+        let mut bytes = Vec::from(*b"GGUF");
+        bytes.extend_from_slice(&3_u32.to_le_bytes());
+        bytes.extend_from_slice(&0_u64.to_le_bytes());
+        bytes.extend_from_slice(&1_u64.to_le_bytes());
+
+        let key = b"general.architecture";
+        bytes.extend_from_slice(&(key.len() as u64).to_le_bytes());
+        bytes.extend_from_slice(key);
+        bytes.extend_from_slice(&8_u32.to_le_bytes());
+
+        let value = b"llama";
+        bytes.extend_from_slice(&(value.len() as u64).to_le_bytes());
+        bytes.extend_from_slice(value);
+
+        std::fs::write(&content, &bytes).expect("write GGUF fixture");
+
+        let mut appliance_state = state::ApplianceState::new("desktop");
+        appliance_state.record_model_realization(model::ModelRealization::new(
+            model::ModelRealizationId::new("retry-model"),
+            model::InferenceEngineId::ollama(),
+            model::ImportedContentItem::new(
+                model::ExternalContentItemId::new("existing-source"),
+                "/var/lib/daia/content/model.gguf",
+            ),
+        ));
+        appliance_state
+            .write_to_root(&root)
+            .expect("persist model state");
+
+        let result =
+            super::resume_model_realization_with("retry-model", &root, &mut FailingExecutor);
+
+        assert!(result.is_err(), "executor failure must propagate");
+        assert_eq!(
+            std::fs::read(&content).expect("read retained GGUF"),
+            bytes,
+            "imported content must remain unchanged"
+        );
+
+        let persisted = state::ApplianceState::read_from_root(&root).expect("read retained state");
+
+        assert_eq!(
+            persisted.model_realizations().len(),
+            1,
+            "desired model state must remain available for retry"
+        );
+
+        let mut retry_executor = RecordingExecutor::default();
+        super::resume_model_realization_with("retry-model", &root, &mut retry_executor)
+            .expect("retry should succeed");
+
+        assert_eq!(retry_executor.names, vec!["retry-model"]);
+    }
+
+    #[test]
+    fn resumes_existing_model_without_reimporting_content() {
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let root = temporary.path().join("appliance");
+        let content = root.join("var/lib/daia/content/model.gguf");
+
+        std::fs::create_dir_all(content.parent().unwrap()).expect("create content directory");
+        std::fs::write(&content, {
+            let mut bytes = Vec::from(*b"GGUF");
+            bytes.extend_from_slice(&3_u32.to_le_bytes());
+            bytes.extend_from_slice(&0_u64.to_le_bytes());
+            bytes.extend_from_slice(&1_u64.to_le_bytes());
+
+            let key = b"general.architecture";
+            bytes.extend_from_slice(&(key.len() as u64).to_le_bytes());
+            bytes.extend_from_slice(key);
+            bytes.extend_from_slice(&8_u32.to_le_bytes());
+
+            let value = b"llama";
+            bytes.extend_from_slice(&(value.len() as u64).to_le_bytes());
+            bytes.extend_from_slice(value);
+            bytes
+        })
+        .expect("write existing content");
+
+        let mut appliance_state = state::ApplianceState::new("desktop");
+        appliance_state.record_model_realization(model::ModelRealization::new(
+            model::ModelRealizationId::new("recovery-model"),
+            model::InferenceEngineId::ollama(),
+            model::ImportedContentItem::new(
+                model::ExternalContentItemId::new("existing-source"),
+                "/var/lib/daia/content/model.gguf",
+            ),
+        ));
+        appliance_state
+            .write_to_root(&root)
+            .expect("persist existing state");
+
+        let original_content = std::fs::read(&content).expect("read content");
+        let mut executor = RecordingExecutor::default();
+
+        super::resume_model_realization_with("recovery-model", &root, &mut executor)
+            .expect("existing model should resume");
+
+        assert_eq!(executor.names, vec!["recovery-model"]);
+        assert_eq!(
+            std::fs::read(&content).expect("read content after recovery"),
+            original_content,
+        );
+
+        let persisted = state::ApplianceState::read_from_root(&root).expect("read state");
+        assert_eq!(persisted.model_realizations().len(), 1);
     }
 }
 

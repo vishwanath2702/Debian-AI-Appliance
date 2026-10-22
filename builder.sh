@@ -115,6 +115,7 @@ run_cli() {
         --quiet \
         --manifest-path "${ENGINE_DIRECTORY}/Cargo.toml" \
         --package cli \
+        --bin daia \
         -- "$@"
 }
 require_command() {

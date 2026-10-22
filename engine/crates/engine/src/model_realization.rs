@@ -2,7 +2,10 @@
 
 use std::{io, path::Path, process::Command};
 
-use tempfile::TempDir;
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
+
+use tempfile::Builder;
 
 use model::{InferenceEngineId, ModelRealization};
 
@@ -17,6 +20,17 @@ pub trait ModelRealizationExecutor {
 
 /// Runs commands required by the Ollama model-realization adapter.
 pub trait OllamaCommandRunner {
+    /// Prepares an engine-created temporary Modelfile for execution.
+    ///
+    /// The default implementation preserves existing runner behavior.
+    fn prepare_modelfile(
+        &mut self,
+        _directory: &tempfile::TempDir,
+        _modelfile: &Path,
+    ) -> io::Result<()> {
+        Ok(())
+    }
+
     /// Executes an Ollama command.
     fn status(&mut self, command: &mut Command) -> io::Result<()>;
 }
@@ -27,14 +41,25 @@ pub struct ProcessOllamaCommandRunner;
 
 impl OllamaCommandRunner for ProcessOllamaCommandRunner {
     fn status(&mut self, command: &mut Command) -> io::Result<()> {
-        let status = command.status()?;
+        let output = command.output()?;
 
-        if status.success() {
+        if output.status.success() {
             Ok(())
         } else {
-            Err(io::Error::other(format!(
-                "Ollama command exited unsuccessfully: {status}"
-            )))
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            let detail = stderr.trim();
+
+            if detail.is_empty() {
+                Err(io::Error::other(format!(
+                    "Ollama command exited unsuccessfully: {}",
+                    output.status
+                )))
+            } else {
+                Err(io::Error::other(format!(
+                    "Ollama command exited unsuccessfully: {}: {detail}",
+                    output.status
+                )))
+            }
         }
     }
 }
@@ -101,10 +126,25 @@ where
             ));
         }
 
-        let temporary_directory = TempDir::new()?;
+        let temporary_directory = Builder::new()
+            .permissions(std::fs::Permissions::from_mode(0o700))
+            .tempdir_in("/tmp")?;
         let modelfile_path = temporary_directory.path().join("Modelfile");
 
         std::fs::write(&modelfile_path, ollama_modelfile(realization))?;
+
+        // The temporary directory must remain at its original location
+        // before ownership is handed to the Ollama service account.
+        let directory_metadata = std::fs::symlink_metadata(temporary_directory.path())?;
+        if !directory_metadata.file_type().is_dir() {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "Ollama temporary directory was replaced",
+            ));
+        }
+
+        self.runner
+            .prepare_modelfile(&temporary_directory, &modelfile_path)?;
 
         let mut command = ollama_create_command(realization, &modelfile_path);
         self.runner.status(&mut command)
@@ -125,6 +165,59 @@ mod tests {
         ModelRealizationId,
     };
     use std::{io, process::Command};
+
+    #[cfg(unix)]
+    #[test]
+    fn ollama_modelfile_directory_is_private() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let directory = tempfile::Builder::new()
+            .permissions(std::fs::Permissions::from_mode(0o700))
+            .tempdir()
+            .expect("temporary directory");
+        let permissions = std::fs::metadata(directory.path())
+            .expect("directory metadata")
+            .permissions();
+
+        assert_eq!(
+            permissions.mode() & 0o777,
+            0o700,
+            "Ollama temporary directory must remain private"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn process_ollama_runner_preserves_failure_stderr() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let script = directory.path().join("failing-ollama");
+
+        std::fs::write(
+            &script,
+            "#!/bin/sh\nprintf 'model registration failed\n' >&2\nexit 17\n",
+        )
+        .expect("write failing command");
+
+        let mut permissions = std::fs::metadata(&script)
+            .expect("script metadata")
+            .permissions();
+        permissions.set_mode(0o700);
+        std::fs::set_permissions(&script, permissions).expect("make script executable");
+
+        let mut command = std::process::Command::new(&script);
+        let mut runner = super::ProcessOllamaCommandRunner;
+
+        let error = runner
+            .status(&mut command)
+            .expect_err("failing command must return an error");
+
+        let message = error.to_string();
+
+        assert!(message.contains("exit status: 17"), "{message}");
+        assert!(message.contains("model registration failed"), "{message}");
+    }
 
     #[derive(Default)]
     struct RecordingOllamaCommandRunner {
@@ -336,6 +429,63 @@ mod tests {
         assert_eq!(
             super::ollama_modelfile(&realization),
             "FROM \"/var/lib/daia/content/My Model.gguf\"\n"
+        );
+    }
+
+    #[test]
+    fn ollama_executor_cleans_up_temporary_modelfile() {
+        use model::{
+            ExternalContentItemId, ImportedContentItem, InferenceEngineId, ModelRealization,
+            ModelRealizationId,
+        };
+        use std::path::PathBuf;
+
+        struct RecordingRunner {
+            temporary_directory: Option<PathBuf>,
+        }
+
+        impl OllamaCommandRunner for RecordingRunner {
+            fn prepare_modelfile(
+                &mut self,
+                directory: &tempfile::TempDir,
+                modelfile: &std::path::Path,
+            ) -> io::Result<()> {
+                assert!(modelfile.is_file());
+                self.temporary_directory = Some(directory.path().to_path_buf());
+                Ok(())
+            }
+
+            fn status(&mut self, _command: &mut std::process::Command) -> io::Result<()> {
+                Ok(())
+            }
+        }
+
+        let realization = ModelRealization::new(
+            ModelRealizationId::new("cleanup-test"),
+            InferenceEngineId::ollama(),
+            ImportedContentItem::new(
+                ExternalContentItemId::new("cleanup-source"),
+                "/tmp/cleanup-test.gguf",
+            ),
+        );
+
+        let mut executor = OllamaModelRealizationExecutor::new(RecordingRunner {
+            temporary_directory: None,
+        });
+
+        executor
+            .execute(&realization)
+            .expect("realization succeeds");
+
+        let directory = executor
+            .runner
+            .temporary_directory
+            .as_ref()
+            .expect("runner recorded temporary directory");
+
+        assert!(
+            !directory.exists(),
+            "temporary Modelfile directory must be removed after execution"
         );
     }
 

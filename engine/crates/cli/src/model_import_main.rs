@@ -8,6 +8,44 @@ use std::process::ExitCode;
 fn main() -> ExitCode {
     let arguments: Vec<_> = env::args_os().skip(1).collect();
 
+    if is_model_list_request(&arguments) {
+        let Some(device) = arguments[1].to_str() else {
+            eprintln!("Invalid device path encoding");
+            return ExitCode::FAILURE;
+        };
+
+        if let Err(message) = validate_device_path(device) {
+            eprintln!("{message}");
+            return ExitCode::FAILURE;
+        }
+
+        if !is_root() {
+            eprintln!("DAIA model discovery requires administrator authorization");
+            return ExitCode::FAILURE;
+        }
+
+        return run_restricted_model_list(device);
+    }
+
+    if is_model_resume_request(&arguments) {
+        let Some(model_name) = arguments[1].to_str() else {
+            eprintln!("Invalid model name encoding");
+            return ExitCode::FAILURE;
+        };
+
+        if let Err(message) = validate_model_name(model_name) {
+            eprintln!("{message}");
+            return ExitCode::FAILURE;
+        }
+
+        if !is_root() {
+            eprintln!("DAIA model recovery requires administrator authorization");
+            return ExitCode::FAILURE;
+        }
+
+        return run_restricted_model_resume(model_name);
+    }
+
     if let Err(message) = validate_argument_count(arguments.len()) {
         eprintln!("{message}");
         return ExitCode::FAILURE;
@@ -51,6 +89,66 @@ fn main() -> ExitCode {
     run_restricted_model_import(device, filename, model_name)
 }
 
+fn is_model_resume_request(arguments: &[std::ffi::OsString]) -> bool {
+    arguments.len() == 2 && arguments[0] == "resume-model"
+}
+
+fn run_restricted_model_resume(model_name: &str) -> ExitCode {
+    use std::path::Path;
+
+    if let Err(error) = validate_privileged_model_destination() {
+        eprintln!("Model recovery destination security check failed: {error}");
+        return ExitCode::FAILURE;
+    }
+
+    let mut executor =
+        engine::OllamaModelRealizationExecutor::new(RestrictedOllamaRunner::default());
+
+    match application::resume_model_realization_with(model_name, Path::new("/"), &mut executor) {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(error) => {
+            eprintln!("Model recovery failed: {error}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+fn is_model_list_request(arguments: &[std::ffi::OsString]) -> bool {
+    arguments.len() == 2 && arguments[0] == "list-models"
+}
+
+fn run_restricted_model_list(device: &str) -> ExitCode {
+    use std::path::Path;
+
+    let inspector = inspector::LinuxContentVolumeInspector::new()
+        .with_command("/usr/bin/lsblk")
+        .with_findmnt_command("/usr/bin/findmnt")
+        .with_post_install_discovery()
+        .with_restricted_environment();
+
+    let mounter = inspector::LinuxContentVolumeMounter::new()
+        .with_command("/usr/bin/mount")
+        .with_umount_command("/usr/bin/umount")
+        .with_lsblk_command("/usr/bin/lsblk")
+        .with_restricted_environment();
+
+    match application::discover_models_on_fresh_volume_with(&inspector, &mounter, Path::new(device))
+    {
+        Ok(report) => {
+            for discovered in report.models {
+                if let Some(filename) = discovered.item.path().file_name() {
+                    println!("{}", filename.to_string_lossy());
+                }
+            }
+            ExitCode::SUCCESS
+        }
+        Err(error) => {
+            eprintln!("Error discovering GGUF models: {error}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
 #[allow(dead_code)]
 fn validate_ollama_create_command(command: &std::process::Command) -> Result<(), &'static str> {
     use std::ffi::OsStr;
@@ -81,20 +179,197 @@ fn restricted_ollama_command(original: &std::process::Command) -> std::process::
     command.args(original.get_args());
     command.env_clear();
     command.env("PATH", "/usr/local/bin:/usr/bin:/bin");
+    command.env("HOME", "/var/lib/ollama");
+    command.env("OLLAMA_MODELS", "/var/lib/ollama/models");
     command.env("OLLAMA_HOST", "127.0.0.1:11434");
 
     command
 }
 
+// Resolve the Ollama service account rather than assuming a fixed UID/GID.
+fn ollama_service_identity() -> std::io::Result<(u32, u32)> {
+    let passwd = std::fs::read_to_string("/etc/passwd")?;
+    parse_ollama_service_identity(&passwd)
+}
+
+fn parse_ollama_service_identity(passwd: &str) -> std::io::Result<(u32, u32)> {
+    use std::io::{Error, ErrorKind};
+
+    let identities: Vec<_> = passwd
+        .lines()
+        .filter_map(|line| {
+            let fields: Vec<_> = line.split(':').collect();
+
+            if fields.len() != 7 || fields[0] != "ollama" {
+                return None;
+            }
+
+            Some((fields[2], fields[3]))
+        })
+        .collect();
+
+    let [(uid, gid)] = identities.as_slice() else {
+        return Err(Error::new(
+            ErrorKind::NotFound,
+            "Expected exactly one Ollama service account",
+        ));
+    };
+
+    let uid = uid
+        .parse::<u32>()
+        .map_err(|_| Error::new(ErrorKind::InvalidData, "Invalid Ollama UID"))?;
+
+    let gid = gid
+        .parse::<u32>()
+        .map_err(|_| Error::new(ErrorKind::InvalidData, "Invalid Ollama GID"))?;
+
+    if uid == 0 || gid == 0 {
+        return Err(Error::new(
+            ErrorKind::PermissionDenied,
+            "Ollama service account must not use root UID or GID",
+        ));
+    }
+
+    Ok((uid, gid))
+}
+
+fn restricted_ollama_service_command(
+    command: &std::process::Command,
+    uid: u32,
+    gid: u32,
+) -> std::process::Command {
+    let original = restricted_ollama_command(command);
+    let mut restricted = std::process::Command::new("/usr/bin/setpriv");
+
+    restricted
+        .arg("--reuid")
+        .arg(uid.to_string())
+        .arg("--regid")
+        .arg(gid.to_string())
+        .arg("--clear-groups")
+        .arg("--no-new-privs")
+        .arg(original.get_program())
+        .args(original.get_args());
+
+    restricted.env_clear();
+    restricted.env("PATH", "/usr/local/bin:/usr/bin:/bin");
+    restricted.env("HOME", "/var/lib/ollama");
+    restricted.env("OLLAMA_MODELS", "/var/lib/ollama/models");
+    restricted.env("OLLAMA_HOST", "127.0.0.1:11434");
+
+    restricted
+}
+
+fn open_private_ollama_modelfile(
+    directory: &std::path::Path,
+    modelfile: &std::path::Path,
+) -> std::io::Result<(std::os::fd::OwnedFd, std::os::fd::OwnedFd)> {
+    use rustix::fs::{Mode, OFlags, fstat, openat};
+    use std::io::{Error, ErrorKind};
+
+    if modelfile.parent() != Some(directory)
+        || modelfile.file_name() != Some(std::ffi::OsStr::new("Modelfile"))
+    {
+        return Err(Error::new(
+            ErrorKind::InvalidInput,
+            "Unexpected temporary Ollama Modelfile path",
+        ));
+    }
+
+    let directory_fd = openat(
+        rustix::fs::CWD,
+        directory,
+        OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+        Mode::empty(),
+    )?;
+
+    let directory_stat = fstat(&directory_fd)?;
+
+    if directory_stat.st_uid != 0 || directory_stat.st_mode & 0o777 != 0o700 {
+        return Err(Error::new(
+            ErrorKind::PermissionDenied,
+            "Temporary Ollama directory must be root-owned and private",
+        ));
+    }
+
+    let file_fd = openat(
+        &directory_fd,
+        "Modelfile",
+        OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+        Mode::empty(),
+    )?;
+
+    let file_stat = fstat(&file_fd)?;
+
+    if file_stat.st_uid != 0
+        || file_stat.st_mode & 0o170000 != 0o100000
+        || file_stat.st_nlink != 1
+        || file_stat.st_mode & 0o022 != 0
+    {
+        return Err(Error::new(
+            ErrorKind::PermissionDenied,
+            "Temporary Ollama Modelfile has unsafe ownership or permissions",
+        ));
+    }
+
+    Ok((directory_fd, file_fd))
+}
+
 #[derive(Default)]
-struct RestrictedOllamaRunner;
+struct RestrictedOllamaRunner {
+    prepared_modelfile: Option<std::path::PathBuf>,
+}
 
 impl engine::OllamaCommandRunner for RestrictedOllamaRunner {
+    fn prepare_modelfile(
+        &mut self,
+        directory: &tempfile::TempDir,
+        modelfile: &std::path::Path,
+    ) -> std::io::Result<()> {
+        use rustix::fs::{Mode, fchmod, fchown};
+        use rustix::process::{Gid, Uid};
+
+        let (_, gid) = ollama_service_identity()?;
+        let (directory_fd, file_fd) = open_private_ollama_modelfile(directory.path(), modelfile)?;
+
+        let group = Some(Gid::from_raw(gid));
+
+        // Keep both objects root-owned. Ollama may traverse the directory
+        // and read the Modelfile, but may modify neither.
+        fchown(&file_fd, Some(Uid::from_raw(0)), group)?;
+        fchmod(&file_fd, Mode::from_raw_mode(0o640))?;
+        fchown(&directory_fd, Some(Uid::from_raw(0)), group)?;
+        fchmod(&directory_fd, Mode::from_raw_mode(0o710))?;
+
+        self.prepared_modelfile = Some(modelfile.to_path_buf());
+
+        Ok(())
+    }
+
     fn status(&mut self, command: &mut std::process::Command) -> std::io::Result<()> {
         validate_ollama_create_command(command)
             .map_err(|message| std::io::Error::new(std::io::ErrorKind::InvalidInput, message))?;
 
-        let mut restricted = restricted_ollama_command(command);
+        let prepared = self.prepared_modelfile.take().ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                "Ollama Modelfile was not prepared",
+            )
+        })?;
+
+        let arguments: Vec<_> = command.get_args().collect();
+
+        if std::path::Path::new(arguments[2]) != prepared {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                "Ollama command does not reference the prepared Modelfile",
+            ));
+        }
+
+        let (uid, gid) = ollama_service_identity()?;
+
+        let mut restricted = restricted_ollama_service_command(command, uid, gid);
+
         engine::OllamaCommandRunner::status(
             &mut engine::ProcessOllamaCommandRunner,
             &mut restricted,
@@ -147,7 +422,8 @@ fn run_restricted_model_import(
         .with_umount_command("/usr/bin/umount")
         .with_lsblk_command("/usr/bin/lsblk")
         .with_restricted_environment();
-    let mut executor = engine::OllamaModelRealizationExecutor::new(RestrictedOllamaRunner);
+    let mut executor =
+        engine::OllamaModelRealizationExecutor::new(RestrictedOllamaRunner::default());
 
     match application::import_and_realize_selected_model_on_volume_with(
         &mounter,
@@ -372,6 +648,244 @@ mod tests {
     }
 
     #[test]
+    fn ollama_identity_resolves_only_valid_named_service_account() {
+        let parse = super::parse_ollama_service_identity;
+
+        let valid = "root:x:0:0:root:/root:/bin/bash\\n\\
+ollama:x:989:989::/var/lib/ollama:/usr/sbin/nologin\\n";
+
+        assert_eq!(parse(valid).unwrap(), (989, 989));
+
+        for invalid in [
+            "root:x:0:0:root:/root:/bin/bash\\n",
+            "ollama:x:0:989::/var/lib/ollama:/usr/sbin/nologin\\n",
+            "ollama:x:989:0::/var/lib/ollama:/usr/sbin/nologin\\n",
+            "ollama:x:invalid:989::/var/lib/ollama:/usr/sbin/nologin\\n",
+            "ollama:x:989:989::/var/lib/ollama:/usr/sbin/nologin\\n\\
+ollama:x:990:990::/var/lib/ollama:/usr/sbin/nologin\\n",
+        ] {
+            assert!(parse(invalid).is_err(), "{invalid:?}");
+        }
+    }
+
+    #[test]
+    fn private_ollama_modelfile_rejects_unexpected_path() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let unexpected = directory.path().join("unexpected");
+
+        let error = super::open_private_ollama_modelfile(directory.path(), &unexpected)
+            .expect_err("unexpected Modelfile path must be rejected");
+
+        assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn private_ollama_modelfile_rejects_symlink() {
+        use std::os::unix::fs::symlink;
+
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let target = directory.path().join("target");
+        let modelfile = directory.path().join("Modelfile");
+
+        std::fs::write(&target, "FROM /tmp/example.gguf\\n").expect("write target");
+        symlink(&target, &modelfile).expect("create symlink");
+
+        assert!(
+            super::open_private_ollama_modelfile(directory.path(), &modelfile,).is_err(),
+            "symbolic-link Modelfile must be rejected"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn private_ollama_modelfile_rejects_permissive_directory() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let modelfile = directory.path().join("Modelfile");
+
+        std::fs::write(&modelfile, "FROM /tmp/example.gguf\\n").expect("write Modelfile");
+
+        std::fs::set_permissions(directory.path(), std::fs::Permissions::from_mode(0o777))
+            .expect("set permissive directory permissions");
+
+        assert!(
+            super::open_private_ollama_modelfile(directory.path(), &modelfile,).is_err(),
+            "permissive temporary directory must be rejected"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn private_ollama_modelfile_rejects_hard_link() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let modelfile = directory.path().join("Modelfile");
+        let second_link = directory.path().join("second-link");
+
+        std::fs::write(&modelfile, "FROM /tmp/example.gguf\\n").expect("write Modelfile");
+
+        std::fs::hard_link(&modelfile, &second_link).expect("create hard link");
+
+        assert!(
+            super::open_private_ollama_modelfile(directory.path(), &modelfile,).is_err(),
+            "hard-linked Modelfile must be rejected"
+        );
+    }
+
+    #[test]
+    #[ignore = "requires root and the local Ollama service account"]
+    fn restricted_runner_prepares_readonly_modelfile_for_ollama() {
+        use engine::OllamaCommandRunner;
+        use std::os::unix::fs::{MetadataExt, PermissionsExt};
+
+        assert_eq!(rustix::process::geteuid().as_raw(), 0);
+
+        let (uid, gid) = super::ollama_service_identity().expect("resolve Ollama identity");
+
+        let directory = tempfile::Builder::new()
+            .permissions(std::fs::Permissions::from_mode(0o700))
+            .tempdir_in("/tmp")
+            .expect("create private temporary directory");
+
+        let modelfile = directory.path().join("Modelfile");
+        let content = "FROM \"/tmp/example.gguf\"\n";
+
+        std::fs::write(&modelfile, content).expect("write Modelfile");
+
+        let mut runner = super::RestrictedOllamaRunner::default();
+
+        runner
+            .prepare_modelfile(&directory, &modelfile)
+            .expect("prepare Modelfile");
+
+        let directory_metadata = std::fs::metadata(directory.path()).expect("directory metadata");
+        let file_metadata = std::fs::metadata(&modelfile).expect("Modelfile metadata");
+
+        assert_eq!(directory_metadata.uid(), 0);
+        assert_eq!(directory_metadata.gid(), gid);
+        assert_eq!(directory_metadata.permissions().mode() & 0o777, 0o710);
+
+        assert_eq!(file_metadata.uid(), 0);
+        assert_eq!(file_metadata.gid(), gid);
+        assert_eq!(file_metadata.permissions().mode() & 0o777, 0o640);
+
+        assert_eq!(
+            runner.prepared_modelfile.as_deref(),
+            Some(modelfile.as_path())
+        );
+
+        let output = std::process::Command::new("/usr/bin/setpriv")
+            .args([
+                "--reuid",
+                &uid.to_string(),
+                "--regid",
+                &gid.to_string(),
+                "--clear-groups",
+                "--no-new-privs",
+                "/usr/bin/cat",
+            ])
+            .arg(&modelfile)
+            .output()
+            .expect("execute service-account read");
+
+        assert!(
+            output.status.success(),
+            "Ollama read failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+
+        assert_eq!(output.stdout, content.as_bytes());
+
+        let temporary_path = directory.path().to_path_buf();
+        drop(directory);
+
+        assert!(
+            !temporary_path.exists(),
+            "temporary Modelfile directory must be removed"
+        );
+    }
+
+    #[test]
+    fn restricted_runner_rejects_different_prepared_modelfile() {
+        use engine::OllamaCommandRunner;
+
+        let mut runner = super::RestrictedOllamaRunner {
+            prepared_modelfile: Some(std::path::PathBuf::from("/tmp/prepared/Modelfile")),
+        };
+
+        let mut command = std::process::Command::new("ollama");
+        command.args(["create", "-f", "/tmp/different/Modelfile", "qwen2.5-local"]);
+
+        let error = runner
+            .status(&mut command)
+            .expect_err("different Modelfile must not execute");
+
+        assert_eq!(error.kind(), std::io::ErrorKind::PermissionDenied);
+        assert!(
+            error
+                .to_string()
+                .contains("does not reference the prepared Modelfile"),
+            "{error}"
+        );
+        assert!(
+            runner.prepared_modelfile.is_none(),
+            "prepared state must be consumed even on mismatch"
+        );
+    }
+
+    #[test]
+    fn restricted_runner_rejects_unprepared_modelfile() {
+        use engine::OllamaCommandRunner;
+
+        let mut runner = super::RestrictedOllamaRunner::default();
+        let mut command = std::process::Command::new("ollama");
+
+        command.args(["create", "-f", "/tmp/unprepared/Modelfile", "qwen2.5-local"]);
+
+        let error = runner
+            .status(&mut command)
+            .expect_err("unprepared Modelfile must not execute");
+
+        assert_eq!(error.kind(), std::io::ErrorKind::PermissionDenied);
+    }
+
+    #[test]
+    fn restricted_ollama_service_command_drops_privileges() {
+        let mut original = std::process::Command::new("ollama");
+        original.args(["create", "-f", "/tmp/example/Modelfile", "qwen2.5-local"]);
+
+        let restricted = super::restricted_ollama_service_command(&original, 997, 986);
+
+        assert_eq!(
+            restricted.get_program(),
+            std::ffi::OsStr::new("/usr/bin/setpriv")
+        );
+
+        let arguments: Vec<_> = restricted
+            .get_args()
+            .map(|argument| argument.to_string_lossy().into_owned())
+            .collect();
+
+        assert_eq!(
+            arguments,
+            vec![
+                "--reuid",
+                "997",
+                "--regid",
+                "986",
+                "--clear-groups",
+                "--no-new-privs",
+                "/usr/local/bin/ollama",
+                "create",
+                "-f",
+                "/tmp/example/Modelfile",
+                "qwen2.5-local",
+            ]
+        );
+    }
+
+    #[test]
     fn restricted_ollama_command_uses_fixed_executable() {
         use std::ffi::OsStr;
         use std::process::Command;
@@ -392,7 +906,13 @@ mod tests {
 
         let environment = restricted.get_envs().collect::<Vec<_>>();
 
-        assert_eq!(environment.len(), 2);
+        assert_eq!(environment.len(), 4);
+        assert!(environment.iter().any(|(key, value)| {
+            *key == "HOME" && *value == Some(OsStr::new("/var/lib/ollama"))
+        }));
+        assert!(environment.iter().any(|(key, value)| {
+            *key == "OLLAMA_MODELS" && *value == Some(OsStr::new("/var/lib/ollama/models"))
+        }));
         assert!(environment.iter().any(|(key, value)| {
             *key == "PATH" && *value == Some(OsStr::new("/usr/local/bin:/usr/bin:/bin"))
         }));
@@ -431,7 +951,7 @@ mod tests {
         use std::io::ErrorKind;
         use std::process::Command;
 
-        let mut runner = super::RestrictedOllamaRunner;
+        let mut runner = super::RestrictedOllamaRunner::default();
         let mut command = Command::new("/bin/sh");
         command.args(["-c", "echo should-not-run"]);
 
@@ -440,6 +960,62 @@ mod tests {
             .expect_err("unexpected executable must be rejected");
 
         assert_eq!(error.kind(), ErrorKind::InvalidInput);
+    }
+
+    #[test]
+    fn recognizes_only_explicit_model_listing_requests() {
+        use std::ffi::OsString;
+
+        let args =
+            |values: &[&str]| -> Vec<OsString> { values.iter().map(OsString::from).collect() };
+
+        assert!(super::is_model_list_request(&args(&[
+            "list-models",
+            "/dev/sda1",
+        ])));
+
+        assert!(!super::is_model_list_request(&args(&[])));
+        assert!(!super::is_model_list_request(&args(&["list-models"])));
+        assert!(!super::is_model_list_request(&args(&[
+            "list-models",
+            "/dev/sda1",
+            "extra",
+        ])));
+        assert!(!super::is_model_list_request(&args(&[
+            "/dev/sda1",
+            "model.gguf",
+            "model-name",
+        ])));
+    }
+
+    #[test]
+    fn recognizes_only_explicit_model_recovery_requests() {
+        use std::ffi::OsString;
+
+        let args =
+            |values: &[&str]| -> Vec<OsString> { values.iter().map(OsString::from).collect() };
+
+        assert!(super::is_model_resume_request(&args(&[
+            "resume-model",
+            "recovery-model",
+        ])));
+
+        assert!(!super::is_model_resume_request(&args(&[])));
+        assert!(!super::is_model_resume_request(&args(&["resume-model"])));
+        assert!(!super::is_model_resume_request(&args(&[
+            "resume-model",
+            "recovery-model",
+            "extra",
+        ])));
+        assert!(!super::is_model_resume_request(&args(&[
+            "list-models",
+            "/dev/sda1",
+        ])));
+        assert!(!super::is_model_resume_request(&args(&[
+            "/dev/sda1",
+            "model.gguf",
+            "recovery-model",
+        ])));
     }
 
     #[test]

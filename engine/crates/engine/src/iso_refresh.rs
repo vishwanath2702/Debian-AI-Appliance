@@ -74,6 +74,8 @@ impl IsoRefreshInputs {
             rootfs.join("usr/bin/daia"),
             rootfs.join("usr/bin/daia-tui"),
             rootfs.join("usr/bin/daia-model-import"),
+            payload.join("usr/bin/daia-model-importer"),
+            payload.join("opt/daia/firstboot.sh"),
             payload.join("etc/systemd/system/daia-firstboot.service"),
         ];
 
@@ -163,7 +165,19 @@ impl IsoRefreshInputs {
         let bundled_repository = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../registry/content-repositories/bundled-models.yaml");
 
-        let replacements = [
+        let project_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
+        let graphical_importer = project_root.join("runtime/daia-model-importer.sh");
+        let firstboot_script = project_root.join("runtime/firstboot.sh");
+
+        let replacements: [(&Path, PathBuf); 7] = [
+            (
+                graphical_importer.as_path(),
+                self.workspace.join("payload/usr/bin/daia-model-importer"),
+            ),
+            (
+                firstboot_script.as_path(),
+                self.workspace.join("payload/opt/daia/firstboot.sh"),
+            ),
             (
                 model_import_helper,
                 self.workspace.join("rootfs/usr/bin/daia-model-import"),
@@ -183,12 +197,34 @@ impl IsoRefreshInputs {
         ];
 
         for (source, destination) in &replacements {
-            ensure_candidate_destination(&self.workspace, &destination)?;
-            ensure_candidate_file(source)?;
+            ensure_candidate_destination(&self.workspace, destination).map_err(|error| {
+                io::Error::new(
+                    error.kind(),
+                    format!(
+                        "invalid candidate destination {}: {error}",
+                        destination.display()
+                    ),
+                )
+            })?;
+            ensure_candidate_file(source).map_err(|error| {
+                io::Error::new(
+                    error.kind(),
+                    format!("invalid deployment source {}: {error}", source.display()),
+                )
+            })?;
         }
 
         for (source, destination) in &replacements {
-            replace_candidate_file(&self.workspace, source, &destination)?;
+            replace_candidate_file(&self.workspace, source, destination).map_err(|error| {
+                io::Error::new(
+                    error.kind(),
+                    format!(
+                        "failed deploying {} to {}: {error}",
+                        source.display(),
+                        destination.display()
+                    ),
+                )
+            })?;
         }
 
         std::fs::write(
@@ -622,6 +658,67 @@ mod tests {
     }
 
     #[test]
+    fn package_candidate_rejects_missing_graphical_importer() {
+        assert_package_rejects_missing_runtime_script("payload/usr/bin/daia-model-importer");
+    }
+
+    #[test]
+    fn package_candidate_rejects_missing_firstboot_script() {
+        assert_package_rejects_missing_runtime_script("payload/opt/daia/firstboot.sh");
+    }
+
+    fn assert_package_rejects_missing_runtime_script(missing: &str) {
+        let temp = tempfile::tempdir().unwrap();
+        let workspace = temp.path().join("candidate");
+        let rootfs = temp.path().join("source-rootfs");
+        let payload = temp.path().join("source-payload");
+        let output_iso = temp.path().join("candidate.iso");
+
+        std::fs::create_dir(&rootfs).unwrap();
+        std::fs::create_dir(&payload).unwrap();
+        std::fs::create_dir(&workspace).unwrap();
+
+        for marker in [".daia-stage-complete", ".daia-deploy-complete"] {
+            std::fs::write(workspace.join(marker), b"completed").unwrap();
+        }
+
+        let artifacts = [
+            "rootfs/usr/bin/daia",
+            "rootfs/usr/bin/daia-tui",
+            "rootfs/usr/bin/daia-model-import",
+            "payload/usr/bin/daia-model-importer",
+            "payload/opt/daia/firstboot.sh",
+            "payload/etc/systemd/system/daia-firstboot.service",
+        ];
+
+        assert!(artifacts.contains(&missing));
+
+        for artifact in artifacts {
+            if artifact == missing {
+                continue;
+            }
+
+            let destination = workspace.join(artifact);
+            std::fs::create_dir_all(destination.parent().unwrap()).unwrap();
+            std::fs::write(destination, b"present").unwrap();
+        }
+
+        let inputs = IsoRefreshInputs {
+            rootfs,
+            payload,
+            workspace: workspace.clone(),
+            output_iso: output_iso.clone(),
+        };
+
+        let result = inputs.package_candidate(&temp.path().join("source.iso"));
+
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err().kind(), std::io::ErrorKind::InvalidInput);
+        assert!(!workspace.join("iso-build").exists());
+        assert!(!output_iso.exists());
+    }
+
+    #[test]
     fn package_candidate_rejects_missing_model_import_helper() {
         let temp = tempfile::tempdir().unwrap();
         let rootfs = temp.path().join("source-rootfs");
@@ -858,6 +955,8 @@ mod tests {
         let cli_target = workspace.join("rootfs/usr/bin/daia");
         let tui_target = workspace.join("rootfs/usr/bin/daia-tui");
         let helper_target = workspace.join("rootfs/usr/bin/daia-model-import");
+        let importer_target = workspace.join("payload/usr/bin/daia-model-importer");
+        let firstboot_target = workspace.join("payload/opt/daia/firstboot.sh");
         let service_target = workspace.join("payload/etc/systemd/system/daia-firstboot.service");
         let repository_target =
             workspace.join("rootfs/usr/share/daia/content-repositories/bundled-models.yaml");
@@ -866,6 +965,8 @@ mod tests {
             &cli_target,
             &tui_target,
             &helper_target,
+            &importer_target,
+            &firstboot_target,
             &service_target,
             &repository_target,
         ] {
@@ -903,6 +1004,9 @@ mod tests {
         )
         .unwrap();
 
+        std::fs::create_dir_all(inputs.workspace.join("rootfs/usr/bin")).unwrap();
+        std::fs::create_dir_all(inputs.workspace.join("payload/opt/daia")).unwrap();
+
         inputs
             .deploy_artifacts(&cli, &tui, &helper, &service)
             .unwrap();
@@ -911,6 +1015,21 @@ mod tests {
         assert_eq!(std::fs::read(tui_target).unwrap(), b"new-tui");
         assert_eq!(std::fs::read(&helper_target).unwrap(), b"new-model-import");
         assert_eq!(std::fs::read(service_target).unwrap(), b"new-service");
+        assert_eq!(
+            std::fs::read(importer_target).unwrap(),
+            std::fs::read(
+                Path::new(env!("CARGO_MANIFEST_DIR"))
+                    .join("../../../runtime/daia-model-importer.sh")
+            )
+            .unwrap()
+        );
+        assert_eq!(
+            std::fs::read(firstboot_target).unwrap(),
+            std::fs::read(
+                Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../runtime/firstboot.sh")
+            )
+            .unwrap()
+        );
 
         assert!(
             inputs

@@ -280,7 +280,7 @@ _desktop_configure_manual_login()
 
     if ! printf '%s\n' \
         '[Last]' \
-        'Session=/usr/share/xsessions/plasmax11.desktop' \
+        'Session=/usr/share/wayland-sessions/plasma.desktop' \
         > "$temporary_file"
     then
         rm -f -- "$temporary_file"
@@ -309,7 +309,7 @@ _desktop_configure_manual_login()
     rm -f -- "$temporary_file"
 
     _desktop_log_success \
-        "SDDM has been configured for manual login with Plasma X11 preselected."
+        "SDDM has been configured for manual login with Plasma Wayland preselected."
 }
 
 ############################################################
@@ -609,10 +609,10 @@ _desktop_verify_manual_login()
         tail -n 1
     )"
 
-    if [[ "$session_value" != "/usr/share/xsessions/plasmax11.desktop" ]]
+    if [[ "$session_value" != "/usr/share/wayland-sessions/plasma.desktop" ]]
     then
         _desktop_log_error \
-            "SDDM Plasma X11 session is not preselected."
+            "SDDM Plasma Wayland session is not preselected."
 
         return 1
     fi
