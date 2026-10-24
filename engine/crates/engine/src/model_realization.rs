@@ -131,7 +131,16 @@ where
             .tempdir_in("/tmp")?;
         let modelfile_path = temporary_directory.path().join("Modelfile");
 
-        std::fs::write(&modelfile_path, ollama_modelfile(realization))?;
+        // Create the Modelfile with restrictive permissions regardless of umask.
+        use std::os::unix::fs::OpenOptionsExt;
+
+        let mut modelfile = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(&modelfile_path)?;
+
+        std::io::Write::write_all(&mut modelfile, ollama_modelfile(realization).as_bytes())?;
 
         // The temporary directory must remain at its original location
         // before ownership is handed to the Ollama service account.
@@ -397,6 +406,33 @@ ollama:x:990:990::/var/lib/ollama:/usr/sbin/nologin\\n",
         ] {
             assert!(parse(invalid).is_err(), "{invalid:?}");
         }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn newly_created_modelfile_is_private() {
+        use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let path = directory.path().join("Modelfile");
+
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(&path)
+            .expect("create private Modelfile");
+
+        std::io::Write::write_all(&mut file, b"FROM \"/tmp/example.gguf\"\n")
+            .expect("write Modelfile");
+
+        let mode = std::fs::metadata(&path)
+            .expect("Modelfile metadata")
+            .permissions()
+            .mode()
+            & 0o777;
+
+        assert_eq!(mode, 0o600);
     }
 
     #[test]
@@ -757,6 +793,7 @@ ollama:x:990:990::/var/lib/ollama:/usr/sbin/nologin\\n",
     struct RecordingOllamaCommandRunner {
         command: Option<Vec<String>>,
         modelfile: Option<String>,
+        modelfile_mode: Option<u32>,
     }
 
     impl OllamaCommandRunner for RecordingOllamaCommandRunner {
@@ -773,9 +810,13 @@ ollama:x:990:990::/var/lib/ollama:/usr/sbin/nologin\\n",
                 .get(2)
                 .ok_or_else(|| io::Error::other("Ollama Modelfile argument is missing"))?;
 
-            self.modelfile = Some(std::fs::read_to_string(std::path::Path::new(
-                modelfile_path,
-            ))?);
+            let path = std::path::Path::new(modelfile_path);
+
+            self.modelfile = Some(std::fs::read_to_string(path)?);
+            self.modelfile_mode = Some(
+                std::os::unix::fs::PermissionsExt::mode(&std::fs::metadata(path)?.permissions())
+                    & 0o777,
+            );
 
             Ok(())
         }
@@ -802,6 +843,12 @@ ollama:x:990:990::/var/lib/ollama:/usr/sbin/nologin\\n",
         assert_eq!(
             executor.runner.modelfile.as_deref(),
             Some("FROM \"/var/lib/daia/content/model.gguf\"\n")
+        );
+
+        assert_eq!(
+            executor.runner.modelfile_mode,
+            Some(0o600),
+            "Executor must create a private Ollama Modelfile"
         );
 
         let command = executor
