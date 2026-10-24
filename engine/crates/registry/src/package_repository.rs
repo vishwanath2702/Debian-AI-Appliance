@@ -180,7 +180,7 @@ packages:
                 "konsole".to_owned(),
                 "dolphin".to_owned(),
                 "kate".to_owned(),
-                "spectacle".to_owned(),
+                "kde-spectacle".to_owned(),
                 "firefox-esr".to_owned(),
                 "spice-vdagent".to_owned(),
                 "pipewire".to_owned(),

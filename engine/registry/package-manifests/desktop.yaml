@@ -23,7 +23,7 @@ packages:
   - konsole
   - dolphin
   - kate
-  - spectacle
+  - kde-spectacle
   - firefox-esr
   - spice-vdagent
 
@@ -41,9 +41,9 @@ packages:
   - less
   - bash-completion
   - file
-  - util-linux
 
   # DAIA/runtime and transfer utilities
+  - util-linux
   - zstd
   - ca-certificates
   - curl
