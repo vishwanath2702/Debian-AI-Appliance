@@ -88,6 +88,22 @@ impl LiveRootfsPreparer for SystemLiveRootfsPreparer {
             copy_file(model_import_binary, &destination)?;
         }
 
+        if let Some(payload) = build_context.daia_payload_directory() {
+            for relative_path in [
+                "usr/bin/daia-model-importer",
+                "usr/share/applications/daia-model-importer.desktop",
+            ] {
+                let source = payload.join(relative_path);
+                let destination = build_context.rootfs().join(relative_path);
+
+                if let Some(parent) = destination.parent() {
+                    create_directory(parent)?;
+                }
+
+                copy_file(&source, &destination)?;
+            }
+        }
+
         let systemd_directory = build_context.rootfs().join("etc/systemd/system");
 
         let multi_user_wants = systemd_directory.join("multi-user.target.wants");
@@ -203,6 +219,36 @@ impl RootfsVerifier for SystemRootfsVerifier {
 
         verify_intel_8265_firmware(build_context.rootfs()).map_err(BuildError::Workspace)?;
         verify_setpriv(build_context.rootfs()).map_err(BuildError::Workspace)?;
+
+        if build_context.daia_payload_directory().is_some() {
+            use std::os::unix::fs::PermissionsExt;
+
+            for relative_path in [
+                "usr/bin/daia-model-importer",
+                "usr/share/applications/daia-model-importer.desktop",
+            ] {
+                let path = build_context.rootfs().join(relative_path);
+                if !path.is_file() {
+                    return Err(BuildError::Workspace(std::io::Error::other(format!(
+                        "rootfs verification failed: missing {}",
+                        path.display()
+                    ))));
+                }
+            }
+
+            let launcher = build_context.rootfs().join("usr/bin/daia-model-importer");
+            let mode = fs::metadata(&launcher)
+                .map_err(BuildError::Workspace)?
+                .permissions()
+                .mode();
+
+            if mode & 0o111 == 0 {
+                return Err(BuildError::Workspace(std::io::Error::other(format!(
+                    "rootfs verification failed: graphical importer is not executable: {}",
+                    launcher.display()
+                ))));
+            }
+        }
 
         Ok(())
     }
@@ -782,6 +828,9 @@ mod tests {
         let daia_binary = temp.path().join("daia");
         let daia_tui_binary = temp.path().join("daia-tui");
         let model_import_binary = temp.path().join("daia-model-import");
+        let payload = temp.path().join("payload");
+        let importer = payload.join("usr/bin/daia-model-importer");
+        let desktop_entry = payload.join("usr/share/applications/daia-model-importer.desktop");
 
         fs::create_dir_all(&rootfs).expect("rootfs should be created");
 
@@ -810,6 +859,23 @@ mod tests {
         fs::write(&model_import_binary, b"daia-model-import")
             .expect("model-import binary fixture should be written");
 
+        fs::create_dir_all(importer.parent().unwrap())
+            .expect("importer payload directory should be created");
+        fs::create_dir_all(desktop_entry.parent().unwrap())
+            .expect("desktop payload directory should be created");
+
+        fs::write(&importer, b"#!/bin/sh\\n").expect("importer fixture should be written");
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&importer, fs::Permissions::from_mode(0o755))
+                .expect("importer fixture should be executable");
+        }
+        fs::write(
+            &desktop_entry,
+            b"[Desktop Entry]\\nExec=/usr/bin/daia-model-importer\\n",
+        )
+        .expect("desktop entry fixture should be written");
+
         let getty_wants = rootfs.join("etc/systemd/system/getty.target.wants");
         fs::create_dir_all(&getty_wants).expect("getty wants directory should be created");
 
@@ -827,7 +893,8 @@ mod tests {
         )
         .with_daia_binary(&daia_binary)
         .with_daia_tui_binary(&daia_tui_binary)
-        .with_daia_model_import_binary(&model_import_binary);
+        .with_daia_model_import_binary(&model_import_binary)
+        .with_daia_payload_directory(&payload);
 
         let mut preparer = SystemLiveRootfsPreparer;
 
@@ -849,6 +916,27 @@ mod tests {
             fs::read(rootfs.join("usr/bin/daia-model-import"))
                 .expect("model-import helper should be copied"),
             b"daia-model-import"
+        );
+
+        assert_eq!(
+            fs::read(rootfs.join("usr/bin/daia-model-importer"))
+                .expect("graphical importer should be installed"),
+            b"#!/bin/sh\\n"
+        );
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = fs::metadata(rootfs.join("usr/bin/daia-model-importer"))
+                .expect("installed importer metadata should be readable")
+                .permissions()
+                .mode()
+                & 0o777;
+
+            assert_eq!(mode, 0o755, "graphical importer must be executable");
+        }
+        assert_eq!(
+            fs::read(rootfs.join("usr/share/applications/daia-model-importer.desktop"))
+                .expect("desktop entry should be installed"),
+            b"[Desktop Entry]\\nExec=/usr/bin/daia-model-importer\\n"
         );
 
         let installer_service =
@@ -1028,6 +1116,68 @@ mod tests {
         verifier
             .verify(&context, &plan)
             .expect("complete desktop rootfs should pass verification");
+    }
+
+    #[test]
+    fn desktop_verifier_rejects_missing_graphical_importer() {
+        let temp = tempfile::tempdir().expect("temporary directory");
+        let rootfs = temp.path().join("rootfs");
+        let dpkg = rootfs.join("var/lib/dpkg");
+        let firmware = rootfs.join("usr/lib/firmware");
+        let setpriv = rootfs.join("usr/bin/setpriv");
+
+        fs::create_dir_all(&dpkg).expect("create dpkg directory");
+        fs::create_dir_all(&firmware).expect("create firmware directory");
+        fs::create_dir_all(setpriv.parent().expect("setpriv parent"))
+            .expect("create binary directory");
+
+        fs::write(
+            dpkg.join("status"),
+            "Package: network-manager\nStatus: install ok installed\n\nPackage: firmware-iwlwifi\nStatus: install ok installed\n\n",
+        )
+        .expect("write package status");
+
+        fs::write(firmware.join("iwlwifi-8265-36.ucode"), b"test firmware")
+            .expect("write firmware fixture");
+        fs::write(&setpriv, b"test executable").expect("write setpriv fixture");
+
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&setpriv, fs::Permissions::from_mode(0o755))
+                .expect("make setpriv executable");
+        }
+
+        let repository = PackageRepository::from_manifests(vec![PackageManifest::new(
+            "desktop",
+            vec!["network-manager".into(), "firmware-iwlwifi".into()],
+        )])
+        .expect("valid package repository");
+
+        let verifier = SystemRootfsVerifier {
+            package_repository: repository,
+        };
+
+        let (engine, capability, _, _) = workflow_inputs();
+        let plan = engine.plan(&capability).expect("desktop plan");
+
+        let context = BuildContext::new(
+            rootfs,
+            temp.path().join("source.iso"),
+            temp.path().join("work"),
+            temp.path().join("output.iso"),
+            temp.path().join("assets"),
+            BootstrapConfig::default(),
+        )
+        .with_daia_payload_directory(temp.path().join("payload"));
+
+        let error = verifier
+            .verify(&context, &plan)
+            .expect_err("missing graphical importer must fail verification");
+
+        assert!(
+            error.to_string().contains("daia-model-importer"),
+            "error must identify missing graphical importer: {error:?}"
+        );
     }
 
     #[test]
