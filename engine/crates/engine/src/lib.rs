@@ -49,7 +49,7 @@ use model::{
 pub use model::{ModelRealization, ModelRealizationId};
 pub use model_realization::{
     ModelRealizationExecutor, OllamaCommandRunner, OllamaModelRealizationExecutor,
-    ProcessOllamaCommandRunner,
+    ProcessOllamaCommandRunner, RestrictedOllamaRunner,
 };
 
 use planner::{PlanError, Planner};

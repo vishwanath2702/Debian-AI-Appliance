@@ -95,7 +95,8 @@ where
 }
 
 fn run_realize_models_from_root(root: impl AsRef<std::path::Path>) -> ExitCode {
-    let mut executor = engine::OllamaModelRealizationExecutor::default();
+    let mut executor =
+        engine::OllamaModelRealizationExecutor::new(engine::RestrictedOllamaRunner::default());
 
     run_realize_models_from_root_with(root, &mut executor)
 }
@@ -303,7 +304,8 @@ fn run_model_import_volume(requested_device: &str, filename: &str, model_name: &
     };
 
     let mounter = inspector::LinuxContentVolumeMounter::new();
-    let mut executor = engine::OllamaModelRealizationExecutor::default();
+    let mut executor =
+        engine::OllamaModelRealizationExecutor::new(engine::RestrictedOllamaRunner::default());
 
     match application::import_and_realize_selected_model_on_volume_with(
         &mounter,
@@ -586,7 +588,8 @@ fn run_model_add(selected_directory: Option<&str>) -> ExitCode {
         item.id().clone(),
     );
 
-    let mut executor = engine::OllamaModelRealizationExecutor::default();
+    let mut executor =
+        engine::OllamaModelRealizationExecutor::new(engine::RestrictedOllamaRunner::default());
 
     apply_post_install_model_add_with(
         &engine,

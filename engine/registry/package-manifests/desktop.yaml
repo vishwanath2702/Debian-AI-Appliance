@@ -41,6 +41,7 @@ packages:
   - less
   - bash-completion
   - file
+  - util-linux
 
   # DAIA/runtime and transfer utilities
   - zstd

@@ -194,6 +194,7 @@ packages:
                 "less".to_owned(),
                 "bash-completion".to_owned(),
                 "file".to_owned(),
+                "util-linux".to_owned(),
                 "zstd".to_owned(),
                 "ca-certificates".to_owned(),
                 "curl".to_owned(),

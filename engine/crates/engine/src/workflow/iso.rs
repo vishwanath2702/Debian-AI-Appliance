@@ -9,7 +9,9 @@ use model::Plan;
 use registry::PackageRepository;
 use std::fs;
 
-use super::rootfs_verification::{verify_installed_packages, verify_intel_8265_firmware};
+use super::rootfs_verification::{
+    verify_installed_packages, verify_intel_8265_firmware, verify_setpriv,
+};
 
 /// Coordinates creation of a bootable ISO appliance.
 pub struct IsoWorkflow;
@@ -200,6 +202,7 @@ impl RootfsVerifier for SystemRootfsVerifier {
             .map_err(BuildError::Workspace)?;
 
         verify_intel_8265_firmware(build_context.rootfs()).map_err(BuildError::Workspace)?;
+        verify_setpriv(build_context.rootfs()).map_err(BuildError::Workspace)?;
 
         Ok(())
     }
@@ -989,6 +992,17 @@ mod tests {
         fs::write(firmware.join("iwlwifi-8265-36.ucode"), b"test firmware")
             .expect("write firmware fixture");
 
+        let setpriv = rootfs.join("usr/bin/setpriv");
+        fs::create_dir_all(setpriv.parent().expect("setpriv parent"))
+            .expect("create setpriv directory");
+        fs::write(&setpriv, b"test executable").expect("write setpriv fixture");
+
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&setpriv, fs::Permissions::from_mode(0o755))
+                .expect("make setpriv executable");
+        }
+
         let repository = PackageRepository::from_manifests(vec![PackageManifest::new(
             "desktop",
             vec!["network-manager".into(), "firmware-iwlwifi".into()],
@@ -1014,6 +1028,57 @@ mod tests {
         verifier
             .verify(&context, &plan)
             .expect("complete desktop rootfs should pass verification");
+    }
+
+    #[test]
+    fn desktop_verifier_rejects_missing_setpriv() {
+        let temp = tempfile::tempdir().expect("temporary directory");
+        let rootfs = temp.path().join("rootfs");
+        let dpkg = rootfs.join("var/lib/dpkg");
+        let firmware = rootfs.join("usr/lib/firmware");
+
+        fs::create_dir_all(&dpkg).expect("create dpkg directory");
+        fs::create_dir_all(&firmware).expect("create firmware directory");
+
+        fs::write(
+            dpkg.join("status"),
+            "Package: network-manager\nStatus: install ok installed\n\nPackage: firmware-iwlwifi\nStatus: install ok installed\n\n",
+        )
+        .expect("write package status");
+
+        fs::write(firmware.join("iwlwifi-8265-36.ucode"), b"test firmware")
+            .expect("write firmware fixture");
+
+        let repository = PackageRepository::from_manifests(vec![PackageManifest::new(
+            "desktop",
+            vec!["network-manager".into(), "firmware-iwlwifi".into()],
+        )])
+        .expect("valid package repository");
+
+        let verifier = SystemRootfsVerifier {
+            package_repository: repository,
+        };
+
+        let (engine, capability, _, _) = workflow_inputs();
+        let plan = engine.plan(&capability).expect("desktop plan");
+
+        let context = BuildContext::new(
+            rootfs,
+            temp.path().join("source.iso"),
+            temp.path().join("work"),
+            temp.path().join("output.iso"),
+            temp.path().join("assets"),
+            BootstrapConfig::default(),
+        );
+
+        let error = verifier
+            .verify(&context, &plan)
+            .expect_err("missing setpriv must fail desktop verification");
+
+        assert!(
+            format!("{error:?}").contains("/usr/bin/setpriv"),
+            "verification error should identify missing setpriv: {error:?}"
+        );
     }
 
     #[test]

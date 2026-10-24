@@ -73,6 +73,26 @@ pub(super) fn verify_intel_8265_firmware(rootfs: &Path) -> io::Result<()> {
     ))
 }
 
+pub(super) fn verify_setpriv(rootfs: &Path) -> io::Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+
+    let path = rootfs.join("usr/bin/setpriv");
+
+    let metadata = fs::symlink_metadata(&path).map_err(|error| {
+        io::Error::other(format!(
+            "rootfs Ollama verification failed: /usr/bin/setpriv is unavailable: {error}"
+        ))
+    })?;
+
+    if !metadata.file_type().is_file() || metadata.permissions().mode() & 0o111 == 0 {
+        return Err(io::Error::other(
+            "rootfs Ollama verification failed: /usr/bin/setpriv is not an executable regular file",
+        ));
+    }
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -91,6 +111,61 @@ mod tests {
         fs::create_dir_all(&dpkg).expect("create fixture");
         fs::write(dpkg.join("status"), status).expect("write status");
         root
+    }
+
+    #[test]
+    fn accepts_executable_setpriv() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let root = fixture("");
+        let binary = root.join("usr/bin/setpriv");
+
+        fs::create_dir_all(binary.parent().unwrap()).unwrap();
+        fs::write(&binary, b"test executable").unwrap();
+        fs::set_permissions(&binary, fs::Permissions::from_mode(0o755)).unwrap();
+
+        assert!(verify_setpriv(&root).is_ok());
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn rejects_missing_setpriv() {
+        let root = fixture("");
+
+        let error = verify_setpriv(&root).expect_err("missing setpriv must fail");
+        assert!(error.to_string().contains("/usr/bin/setpriv"));
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn rejects_nonexecutable_setpriv() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let root = fixture("");
+        let binary = root.join("usr/bin/setpriv");
+
+        fs::create_dir_all(binary.parent().unwrap()).unwrap();
+        fs::write(&binary, b"not executable").unwrap();
+        fs::set_permissions(&binary, fs::Permissions::from_mode(0o644)).unwrap();
+
+        assert!(verify_setpriv(&root).is_err());
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn rejects_setpriv_symlink() {
+        let root = fixture("");
+        let binary = root.join("usr/bin/setpriv");
+
+        fs::create_dir_all(binary.parent().unwrap()).unwrap();
+        std::os::unix::fs::symlink("/usr/bin/true", &binary).unwrap();
+
+        assert!(verify_setpriv(&root).is_err());
+
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
