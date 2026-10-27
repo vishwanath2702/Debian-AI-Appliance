@@ -1,5 +1,6 @@
 //! High-level orchestration for the DAIA engine.
 
+mod apt_query;
 mod bootstrap;
 mod bootstrapper;
 mod context;
@@ -669,6 +670,287 @@ impl PreparedContentImport {
         Ok(imported_items)
     }
 }
+/// Whether discovered GPUs warrant NVIDIA driver evaluation.
+///
+/// This does not establish driver or CUDA compatibility.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum GpuDriverDecision {
+    /// GPU driver evaluation has not been performed.
+    NotEvaluated,
+    /// At least one NVIDIA GPU was discovered.
+    EvaluateNvidiaDriver,
+    /// No NVIDIA GPU was discovered.
+    NoNvidiaDriverRequired,
+}
+
+/// Classifies discovered GPUs for later driver planning.
+#[must_use]
+pub fn gpu_driver_decision(gpus: &[facts::GpuFacts]) -> GpuDriverDecision {
+    if gpus.iter().any(facts::GpuFacts::is_nvidia) {
+        GpuDriverDecision::EvaluateNvidiaDriver
+    } else {
+        GpuDriverDecision::NoNvidiaDriverRequired
+    }
+}
+
+/// Identifies the package metadata environment to inspect.
+///
+/// This is descriptive only. It does not execute APT commands, refresh
+/// package indexes, or authorize package installation.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum PackageQueryEnvironment {
+    /// Inspect package metadata from the running system.
+    LiveSystem,
+    /// Inspect package metadata from an explicitly selected root filesystem.
+    RootFilesystem(std::path::PathBuf),
+}
+
+/// Queries local APT package availability without installing packages.
+///
+/// An explicit rootfs uses isolated APT metadata. Live-system querying
+/// remains unsupported until separately validated.
+///
+/// This advisory result never changes installation operations.
+#[must_use]
+pub fn query_package_availability(
+    environment: &PackageQueryEnvironment,
+    package: &str,
+) -> PackageAvailability {
+    match environment {
+        PackageQueryEnvironment::LiveSystem => PackageAvailability::Indeterminate,
+        PackageQueryEnvironment::RootFilesystem(rootfs) => {
+            apt_query::query_rootfs_package_availability(rootfs, package)
+        }
+    }
+}
+
+/// Checks for minimal local APT metadata in a selected root filesystem.
+///
+/// This is a prerequisite only. It does not establish index freshness,
+/// package availability, or isolation from host APT configuration.
+/// No APT commands are executed.
+pub fn rootfs_has_apt_metadata(rootfs: &std::path::Path) -> bool {
+    if !rootfs.is_absolute() || !rootfs.is_dir() {
+        return false;
+    }
+
+    let mut ancestor = std::path::PathBuf::new();
+
+    for component in rootfs.components() {
+        match component {
+            std::path::Component::RootDir | std::path::Component::Normal(_) => {
+                ancestor.push(component.as_os_str());
+            }
+            _ => return false,
+        }
+
+        let Ok(metadata) = std::fs::symlink_metadata(&ancestor) else {
+            return false;
+        };
+
+        if metadata.file_type().is_symlink() || !metadata.is_dir() {
+            return false;
+        }
+    }
+
+    for relative in [
+        "var",
+        "var/lib",
+        "var/lib/apt",
+        "var/lib/apt/lists",
+        "var/lib/dpkg",
+    ] {
+        if rootfs.join(relative).is_symlink() {
+            return false;
+        }
+    }
+
+    let status = rootfs.join("var/lib/dpkg/status");
+    let lists = rootfs.join("var/lib/apt/lists");
+
+    if !status.is_file() || status.is_symlink() {
+        return false;
+    }
+
+    if !lists.is_dir() || lists.is_symlink() {
+        return false;
+    }
+
+    let Ok(entries) = std::fs::read_dir(lists) else {
+        return false;
+    };
+
+    entries.filter_map(Result::ok).any(|entry| {
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        let path = entry.path();
+
+        let package_index = [
+            "_Packages",
+            "_Packages.lz4",
+            "_Packages.gz",
+            "_Packages.xz",
+            "_Packages.bz2",
+            "_Packages.zst",
+        ]
+        .iter()
+        .any(|suffix| name.ends_with(suffix));
+
+        package_index && path.is_file() && !path.is_symlink()
+    })
+}
+
+/// Read-only assessment of a package candidate in a specified package environment.
+///
+/// This result does not authorize package installation.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PackageAvailability {
+    /// A package candidate was confirmed in the evaluated environment.
+    Available,
+    /// No installable candidate was found in the evaluated environment.
+    Unavailable,
+    /// The candidate could not be determined reliably.
+    Indeterminate,
+}
+
+/// Conservatively checks the shape of a Debian package version.
+///
+/// This is not a complete implementation of Debian version comparison.
+fn is_plausible_debian_version(version: &str) -> bool {
+    let upstream = if let Some((epoch, remainder)) = version.split_once(':') {
+        if epoch.is_empty() || !epoch.bytes().all(|byte| byte.is_ascii_digit()) {
+            return false;
+        }
+        remainder
+    } else {
+        version
+    };
+
+    let mut characters = upstream.chars();
+
+    if !characters
+        .next()
+        .is_some_and(|character| character.is_ascii_digit())
+    {
+        return false;
+    }
+
+    upstream.chars().all(|character| {
+        character.is_ascii_alphanumeric() || matches!(character, '.' | '+' | '-' | '~' | ':')
+    })
+}
+
+/// Interprets captured `apt-cache policy` output without executing APT.
+///
+/// The caller must independently establish the package-query environment,
+/// command success, and trustworthiness of its package metadata.
+/// This classification does not authorize installation.
+pub fn parse_apt_candidate_availability(package: &str, output: &str) -> PackageAvailability {
+    if package.is_empty()
+        || package.chars().any(char::is_whitespace)
+        || output.lines().next().map(str::trim) != Some(&format!("{package}:")[..])
+    {
+        return PackageAvailability::Indeterminate;
+    }
+
+    let candidates: Vec<&str> = output
+        .lines()
+        .filter_map(|line| line.trim().strip_prefix("Candidate:"))
+        .map(str::trim)
+        .collect();
+
+    if candidates.len() != 1 {
+        return PackageAvailability::Indeterminate;
+    }
+
+    match candidates[0] {
+        "(none)" => PackageAvailability::Unavailable,
+        "" => PackageAvailability::Indeterminate,
+        version if is_plausible_debian_version(version) => PackageAvailability::Available,
+        _ => PackageAvailability::Indeterminate,
+    }
+}
+
+/// Debian NVIDIA driver-family compatibility classification.
+///
+/// This does not guarantee that a package is available, installable,
+/// or suitable for the running kernel.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum NvidiaDriverCompatibility {
+    /// Compatibility has not been evaluated.
+    NotEvaluated,
+    /// GPU is listed for Debian's standard NVIDIA driver family.
+    StandardDriver,
+    /// GPU is listed for the Tesla 535 driver family.
+    Tesla535Driver,
+    /// GPU is known only to an unsupported legacy driver family.
+    UnsupportedLegacy,
+    /// No supported driver-family match has been established.
+    Unknown,
+}
+
+/// Driver-family compatibility for one discovered GPU.
+///
+/// The PCI identifier preserves which GPU was evaluated.
+/// This record does not authorize driver installation.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct GpuCompatibilityRecord {
+    identifier: String,
+    compatibility: NvidiaDriverCompatibility,
+}
+
+impl GpuCompatibilityRecord {
+    /// Creates a GPU compatibility record.
+    #[must_use]
+    pub fn new(identifier: impl Into<String>, compatibility: NvidiaDriverCompatibility) -> Self {
+        Self {
+            identifier: identifier.into(),
+            compatibility,
+        }
+    }
+
+    /// Returns the discovered GPU identifier.
+    #[must_use]
+    pub fn identifier(&self) -> &str {
+        &self.identifier
+    }
+
+    /// Returns the evaluated driver-family compatibility.
+    #[must_use]
+    pub const fn compatibility(&self) -> NvidiaDriverCompatibility {
+        self.compatibility
+    }
+}
+
+/// Evaluates NVIDIA driver-family database membership for one GPU.
+///
+/// The databases are supplied by the caller and are expected to use
+/// Debian's eight-hex-digit PCI ID format.
+///
+/// This does not verify package availability, kernel compatibility,
+/// Secure Boot support, or CUDA capability.
+#[must_use]
+pub fn evaluate_nvidia_driver_compatibility(
+    gpu: &facts::GpuFacts,
+    standard_ids: &str,
+    tesla_535_ids: &str,
+    legacy_ids: &str,
+) -> NvidiaDriverCompatibility {
+    if !gpu.is_nvidia() {
+        return NvidiaDriverCompatibility::Unknown;
+    }
+
+    if gpu.matches_nvidia_pci_id_database(standard_ids) {
+        NvidiaDriverCompatibility::StandardDriver
+    } else if gpu.matches_nvidia_pci_id_database(tesla_535_ids) {
+        NvidiaDriverCompatibility::Tesla535Driver
+    } else if gpu.matches_nvidia_pci_id_database(legacy_ids) {
+        NvidiaDriverCompatibility::UnsupportedLegacy
+    } else {
+        NvidiaDriverCompatibility::Unknown
+    }
+}
+
 /// High-level orchestration entry point.
 
 #[derive(Clone, Debug)]
@@ -3149,6 +3431,87 @@ mod tests {
         assert_eq!(prepared.content(), &content);
     }
     #[test]
+    fn prepared_appliance_installation_preserves_gpu_driver_decision() {
+        let intent = InstallationIntent::new(
+            "desktop",
+            DiscoveredStorageId::new("serial:usb-disk"),
+            model::UserConfiguration::new("admin", "DAIA Administrator"),
+        );
+
+        let storage = DiscoveredStorage::new("serial:usb-disk", StorageKind::Removable, "/dev/sdb");
+
+        let installation = PreparedInstallation::new(
+            intent,
+            storage,
+            Vec::new(),
+            "/run/live/medium/live/filesystem.squashfs".into(),
+        );
+
+        let content = PreparedContentImport::new(
+            ContentImportIntent::new(Vec::new()),
+            Vec::new(),
+            ContentImportDestination::new("/var/lib/daia/content"),
+        );
+
+        let prepared = PreparedApplianceInstallation::new(installation, content, Vec::new())
+            .with_gpu_driver_decision(crate::GpuDriverDecision::EvaluateNvidiaDriver);
+
+        assert_eq!(
+            prepared.installation().gpu_driver_decision(),
+            crate::GpuDriverDecision::EvaluateNvidiaDriver
+        );
+    }
+
+    #[test]
+    fn prepared_appliance_installation_preserves_gpu_compatibility_records() {
+        let intent = InstallationIntent::new(
+            "desktop",
+            DiscoveredStorageId::new("serial:usb-disk"),
+            model::UserConfiguration::new("admin", "DAIA Administrator"),
+        );
+
+        let storage = DiscoveredStorage::new("serial:usb-disk", StorageKind::Removable, "/dev/sdb");
+
+        let installation = PreparedInstallation::new(
+            intent,
+            storage,
+            Vec::new(),
+            "/run/live/medium/live/filesystem.squashfs".into(),
+        );
+
+        let content = PreparedContentImport::new(
+            ContentImportIntent::new(Vec::new()),
+            Vec::new(),
+            ContentImportDestination::new("/var/lib/daia/content"),
+        );
+
+        let records = vec![
+            crate::GpuCompatibilityRecord::new(
+                "0000:01:00.0",
+                crate::NvidiaDriverCompatibility::StandardDriver,
+            ),
+            crate::GpuCompatibilityRecord::new(
+                "0000:02:00.0",
+                crate::NvidiaDriverCompatibility::Tesla535Driver,
+            ),
+        ];
+
+        let prepared = PreparedApplianceInstallation::new(installation, content, Vec::new())
+            .with_gpu_driver_decision(crate::GpuDriverDecision::EvaluateNvidiaDriver)
+            .with_gpu_compatibility_records(records.clone());
+
+        assert_eq!(
+            prepared.installation().gpu_compatibility_records(),
+            records.as_slice(),
+        );
+
+        assert_eq!(
+            prepared.installation().gpu_driver_decision(),
+            crate::GpuDriverDecision::EvaluateNvidiaDriver,
+        );
+    }
+
+    #[test]
     fn prepared_appliance_installation_omits_empty_content_import() {
         let intent = InstallationIntent::new(
             "desktop",
@@ -3830,5 +4193,690 @@ mod tests {
         );
 
         assert!(matches!(result, Err(BuildError::Plan(_))));
+    }
+}
+
+#[cfg(test)]
+mod gpu_driver_policy_tests {
+    use super::{GpuDriverDecision, gpu_driver_decision};
+    use facts::GpuFacts;
+
+    #[test]
+    fn nvidia_gpu_requires_driver_evaluation() {
+        let gpus = [GpuFacts::new("0000:01:00.0", "0x10de", "0x2684")];
+
+        assert_eq!(
+            gpu_driver_decision(&gpus),
+            GpuDriverDecision::EvaluateNvidiaDriver
+        );
+    }
+
+    #[test]
+    fn non_nvidia_gpu_does_not_require_nvidia_driver() {
+        let gpus = [GpuFacts::new("0000:00:02.0", "0x8086", "0x1234")];
+
+        assert_eq!(
+            gpu_driver_decision(&gpus),
+            GpuDriverDecision::NoNvidiaDriverRequired
+        );
+    }
+
+    #[test]
+    fn empty_gpu_list_does_not_require_nvidia_driver() {
+        assert_eq!(
+            gpu_driver_decision(&[]),
+            GpuDriverDecision::NoNvidiaDriverRequired
+        );
+    }
+
+    #[test]
+    fn mixed_gpu_list_requires_driver_evaluation() {
+        let gpus = [
+            GpuFacts::new("0000:00:02.0", "0x8086", "0x1234"),
+            GpuFacts::new("0000:01:00.0", "0x10de", "0x2684"),
+        ];
+
+        assert_eq!(
+            gpu_driver_decision(&gpus),
+            GpuDriverDecision::EvaluateNvidiaDriver
+        );
+    }
+}
+
+#[cfg(test)]
+mod nvidia_driver_compatibility_tests {
+    use super::{NvidiaDriverCompatibility, evaluate_nvidia_driver_compatibility};
+    use facts::GpuFacts;
+
+    fn gpu(vendor: &str, device: &str) -> GpuFacts {
+        GpuFacts::new("gpu0", vendor, device)
+    }
+
+    #[test]
+    fn standard_driver_match() {
+        assert_eq!(
+            evaluate_nvidia_driver_compatibility(&gpu("0x10de", "0x1340"), "10DE1340\n", "", "",),
+            NvidiaDriverCompatibility::StandardDriver
+        );
+    }
+
+    #[test]
+    fn standard_driver_takes_priority_over_tesla() {
+        assert_eq!(
+            evaluate_nvidia_driver_compatibility(
+                &gpu("0x10de", "0x1340"),
+                "10DE1340\n",
+                "10DE1340\n",
+                "10DE1340\n",
+            ),
+            NvidiaDriverCompatibility::StandardDriver
+        );
+    }
+
+    #[test]
+    fn tesla_535_driver_match() {
+        assert_eq!(
+            evaluate_nvidia_driver_compatibility(&gpu("0x10de", "0x1340"), "", "10DE1340\n", "",),
+            NvidiaDriverCompatibility::Tesla535Driver
+        );
+    }
+
+    #[test]
+    fn tesla_takes_priority_over_legacy() {
+        assert_eq!(
+            evaluate_nvidia_driver_compatibility(
+                &gpu("0x10de", "0x1340"),
+                "",
+                "10DE1340\n",
+                "10DE1340\n",
+            ),
+            NvidiaDriverCompatibility::Tesla535Driver
+        );
+    }
+
+    #[test]
+    fn unsupported_legacy_driver_match() {
+        assert_eq!(
+            evaluate_nvidia_driver_compatibility(&gpu("0x10de", "0x1340"), "", "", "10DE1340\n",),
+            NvidiaDriverCompatibility::UnsupportedLegacy
+        );
+    }
+
+    #[test]
+    fn unknown_nvidia_device() {
+        assert_eq!(
+            evaluate_nvidia_driver_compatibility(&gpu("0x10de", "0x1340"), "", "", "",),
+            NvidiaDriverCompatibility::Unknown
+        );
+    }
+
+    #[test]
+    fn non_nvidia_device_is_unknown_even_with_matching_database() {
+        assert_eq!(
+            evaluate_nvidia_driver_compatibility(&gpu("0x8086", "0x1340"), "80861340\n", "", "",),
+            NvidiaDriverCompatibility::Unknown
+        );
+    }
+}
+
+#[cfg(test)]
+mod gpu_compatibility_record_tests {
+    use super::{GpuCompatibilityRecord, NvidiaDriverCompatibility};
+
+    #[test]
+    fn preserves_discovered_gpu_identifier() {
+        let record =
+            GpuCompatibilityRecord::new("0000:01:00.0", NvidiaDriverCompatibility::StandardDriver);
+
+        assert_eq!(record.identifier(), "0000:01:00.0");
+    }
+
+    #[test]
+    fn preserves_driver_family_classification() {
+        let record =
+            GpuCompatibilityRecord::new("0000:02:00.0", NvidiaDriverCompatibility::Tesla535Driver);
+
+        assert_eq!(
+            record.compatibility(),
+            NvidiaDriverCompatibility::Tesla535Driver,
+        );
+    }
+
+    #[test]
+    fn multiple_gpu_records_remain_independent() {
+        let records = [
+            GpuCompatibilityRecord::new("0000:01:00.0", NvidiaDriverCompatibility::StandardDriver),
+            GpuCompatibilityRecord::new(
+                "0000:02:00.0",
+                NvidiaDriverCompatibility::UnsupportedLegacy,
+            ),
+        ];
+
+        assert_eq!(records[0].identifier(), "0000:01:00.0");
+        assert_eq!(
+            records[0].compatibility(),
+            NvidiaDriverCompatibility::StandardDriver,
+        );
+
+        assert_eq!(records[1].identifier(), "0000:02:00.0");
+        assert_eq!(
+            records[1].compatibility(),
+            NvidiaDriverCompatibility::UnsupportedLegacy,
+        );
+    }
+}
+
+#[cfg(test)]
+mod apt_candidate_parser_tests {
+    use super::{PackageAvailability, parse_apt_candidate_availability};
+
+    #[test]
+    fn mismatched_package_identity_is_indeterminate() {
+        assert_eq!(
+            parse_apt_candidate_availability(
+                "nvidia-driver",
+                "unrelated-package:\n  Candidate: 1.0\n"
+            ),
+            PackageAvailability::Indeterminate
+        );
+    }
+
+    #[test]
+    fn missing_package_header_is_indeterminate() {
+        assert_eq!(
+            parse_apt_candidate_availability("nvidia-driver", "  Candidate: 550.163.01-2\n"),
+            PackageAvailability::Indeterminate
+        );
+    }
+
+    #[test]
+    fn malformed_package_header_is_indeterminate() {
+        assert_eq!(
+            parse_apt_candidate_availability(
+                "nvidia-driver",
+                "nvidia-driver: unexpected\n  Candidate: 550.163.01-2\n"
+            ),
+            PackageAvailability::Indeterminate
+        );
+    }
+
+    #[test]
+    fn empty_requested_package_is_indeterminate() {
+        assert_eq!(
+            parse_apt_candidate_availability("", "nvidia-driver:\n  Candidate: 550.163.01-2\n"),
+            PackageAvailability::Indeterminate
+        );
+    }
+
+    #[test]
+    fn whitespace_in_requested_package_is_indeterminate() {
+        assert_eq!(
+            parse_apt_candidate_availability(
+                "nvidia driver",
+                "nvidia driver:\n  Candidate: 550.163.01-2\n"
+            ),
+            PackageAvailability::Indeterminate
+        );
+    }
+
+    #[test]
+    fn malformed_candidate_version_is_indeterminate() {
+        assert_eq!(
+            parse_apt_candidate_availability(
+                "nvidia-driver",
+                "nvidia-driver:\n  Candidate: garbage\n"
+            ),
+            PackageAvailability::Indeterminate
+        );
+    }
+
+    #[test]
+    fn punctuation_only_candidate_is_indeterminate() {
+        assert_eq!(
+            parse_apt_candidate_availability("nvidia-driver", "nvidia-driver:\n  Candidate: ???\n"),
+            PackageAvailability::Indeterminate
+        );
+    }
+
+    #[test]
+    fn epoch_prefixed_candidate_is_available() {
+        assert_eq!(
+            parse_apt_candidate_availability(
+                "nvidia-driver",
+                "nvidia-driver:\n  Candidate: 1:2.3-4\n"
+            ),
+            PackageAvailability::Available
+        );
+    }
+
+    #[test]
+    fn debian_version_edge_cases() {
+        let cases = [
+            ("550.163.01-2", PackageAvailability::Available),
+            ("535.274.02-1~deb13u1", PackageAvailability::Available),
+            ("1:2.3-4", PackageAvailability::Available),
+            ("2:1.0~rc1+dfsg-3", PackageAvailability::Available),
+            ("1.0+really2.0-1", PackageAvailability::Available),
+            ("0", PackageAvailability::Available),
+            ("garbage", PackageAvailability::Indeterminate),
+            ("???", PackageAvailability::Indeterminate),
+            ("", PackageAvailability::Indeterminate),
+            ("1:", PackageAvailability::Indeterminate),
+            (":1.0", PackageAvailability::Indeterminate),
+            ("abc:1.0", PackageAvailability::Indeterminate),
+            ("1.0:extra", PackageAvailability::Indeterminate),
+            ("1.0_1", PackageAvailability::Indeterminate),
+            ("1.0/1", PackageAvailability::Indeterminate),
+            ("1.0 2.0", PackageAvailability::Indeterminate),
+        ];
+
+        for (version, expected) in cases {
+            let output = format!("nvidia-driver:\n  Candidate: {version}\n");
+
+            assert_eq!(
+                parse_apt_candidate_availability("nvidia-driver", &output),
+                expected,
+                "candidate version: {version:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn standard_nvidia_candidate_is_available() {
+        let output =
+            "nvidia-driver:\n  Installed: (none)\n  Candidate: 550.163.01-2\n  Version table:\n";
+        assert_eq!(
+            parse_apt_candidate_availability("nvidia-driver", output),
+            PackageAvailability::Available
+        );
+    }
+
+    #[test]
+    fn tesla_candidate_is_available() {
+        let output =
+            "nvidia-tesla-535-driver:\n  Installed: (none)\n  Candidate: 535.274.02-1~deb13u1\n";
+        assert_eq!(
+            parse_apt_candidate_availability("nvidia-tesla-535-driver", output),
+            PackageAvailability::Available
+        );
+    }
+
+    #[test]
+    fn explicit_missing_candidate_is_unavailable() {
+        assert_eq!(
+            parse_apt_candidate_availability("package", "package:\n  Candidate: (none)\n"),
+            PackageAvailability::Unavailable
+        );
+    }
+
+    #[test]
+    fn empty_output_is_indeterminate() {
+        assert_eq!(
+            parse_apt_candidate_availability("package", ""),
+            PackageAvailability::Indeterminate
+        );
+    }
+
+    #[test]
+    fn missing_candidate_field_is_indeterminate() {
+        assert_eq!(
+            parse_apt_candidate_availability("package", "package:\n  Installed: (none)\n"),
+            PackageAvailability::Indeterminate
+        );
+    }
+
+    #[test]
+    fn empty_candidate_value_is_indeterminate() {
+        assert_eq!(
+            parse_apt_candidate_availability("package", "package:\n  Candidate: \n"),
+            PackageAvailability::Indeterminate
+        );
+    }
+
+    #[test]
+    fn duplicate_candidate_fields_are_indeterminate() {
+        assert_eq!(
+            parse_apt_candidate_availability(
+                "package",
+                "package:\n  Candidate: 550.163.01-2\n  Candidate: (none)\n"
+            ),
+            PackageAvailability::Indeterminate
+        );
+    }
+
+    #[test]
+    fn candidate_with_multiple_tokens_is_indeterminate() {
+        assert_eq!(
+            parse_apt_candidate_availability("package", "package:\n  Candidate: invalid version\n"),
+            PackageAvailability::Indeterminate
+        );
+    }
+}
+
+#[cfg(test)]
+mod rootfs_apt_metadata_tests {
+    use super::rootfs_has_apt_metadata;
+    use std::fs;
+
+    #[test]
+    fn missing_metadata_is_rejected() {
+        let root = tempfile::tempdir().unwrap();
+        assert!(!rootfs_has_apt_metadata(root.path()));
+    }
+
+    #[test]
+    fn empty_package_lists_are_rejected() {
+        let root = tempfile::tempdir().unwrap();
+
+        let status = root.path().join("var/lib/dpkg/status");
+        fs::create_dir_all(status.parent().unwrap()).unwrap();
+        fs::write(status, "Package: example\n").unwrap();
+
+        fs::create_dir_all(root.path().join("var/lib/apt/lists")).unwrap();
+
+        assert!(!rootfs_has_apt_metadata(root.path()));
+    }
+
+    #[test]
+    fn compressed_package_index_is_recognized() {
+        let root = tempfile::tempdir().unwrap();
+
+        let status = root.path().join("var/lib/dpkg/status");
+        fs::create_dir_all(status.parent().unwrap()).unwrap();
+        fs::write(status, "Package: example\n").unwrap();
+
+        let lists = root.path().join("var/lib/apt/lists");
+        fs::create_dir_all(&lists).unwrap();
+        fs::write(
+            lists.join("example_dists_trixie_main_binary-amd64_Packages.lz4"),
+            b"index",
+        )
+        .unwrap();
+
+        assert!(rootfs_has_apt_metadata(root.path()));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn symlinked_rootfs_ancestor_is_rejected() {
+        use std::fs;
+        use std::os::unix::fs::symlink;
+
+        let directory = tempfile::tempdir().unwrap();
+        let actual_parent = directory.path().join("actual");
+        let rootfs = actual_parent.join("rootfs");
+
+        fs::create_dir_all(rootfs.join("var/lib/apt/lists")).unwrap();
+        fs::create_dir_all(rootfs.join("var/lib/dpkg")).unwrap();
+
+        fs::write(rootfs.join("var/lib/dpkg/status"), "").unwrap();
+        fs::write(
+            rootfs.join("var/lib/apt/lists/synthetic_Packages"),
+            "Package: nvidia-driver\\nVersion: 999.0-1\\n",
+        )
+        .unwrap();
+
+        let linked_parent = directory.path().join("linked");
+        symlink(&actual_parent, &linked_parent).unwrap();
+
+        let linked_rootfs = linked_parent.join("rootfs");
+
+        assert!(
+            !super::rootfs_has_apt_metadata(&linked_rootfs),
+            "APT metadata must reject symlinked rootfs ancestors"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn symlinked_apt_parent_directory_is_rejected() {
+        use std::fs;
+        use std::os::unix::fs::symlink;
+
+        let directory = tempfile::tempdir().unwrap();
+        let rootfs = directory.path();
+
+        fs::create_dir_all(rootfs.join("var/lib/dpkg")).unwrap();
+        fs::write(rootfs.join("var/lib/dpkg/status"), "").unwrap();
+
+        let outside = tempfile::tempdir().unwrap();
+        fs::create_dir_all(outside.path().join("lists")).unwrap();
+        fs::write(
+            outside.path().join("lists/synthetic_Packages"),
+            "Package: nvidia-driver\\nVersion: 999.0-1\\n",
+        )
+        .unwrap();
+
+        symlink(outside.path(), rootfs.join("var/lib/apt")).unwrap();
+
+        assert!(
+            !super::rootfs_has_apt_metadata(rootfs),
+            "APT metadata must reject symlinked intermediate directories"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn symlinked_apt_lists_directory_is_rejected() {
+        use std::fs;
+        use std::os::unix::fs::symlink;
+
+        let directory = tempfile::tempdir().unwrap();
+        let rootfs = directory.path();
+
+        fs::create_dir_all(rootfs.join("var/lib/apt")).unwrap();
+        fs::create_dir_all(rootfs.join("var/lib/dpkg")).unwrap();
+        fs::write(rootfs.join("var/lib/dpkg/status"), "").unwrap();
+
+        let outside = tempfile::tempdir().unwrap();
+        fs::write(
+            outside.path().join("synthetic_Packages"),
+            "Package: nvidia-driver\\nVersion: 999.0-1\\n",
+        )
+        .unwrap();
+
+        symlink(outside.path(), rootfs.join("var/lib/apt/lists")).unwrap();
+
+        assert!(!super::rootfs_has_apt_metadata(rootfs));
+    }
+
+    #[test]
+    fn symlinked_package_index_is_rejected() {
+        use std::os::unix::fs::symlink;
+
+        let root = tempfile::tempdir().unwrap();
+
+        let status = root.path().join("var/lib/dpkg/status");
+        fs::create_dir_all(status.parent().unwrap()).unwrap();
+        fs::write(status, "Package: example\n").unwrap();
+
+        let lists = root.path().join("var/lib/apt/lists");
+        fs::create_dir_all(&lists).unwrap();
+
+        let outside = root.path().join("outside-index");
+        fs::write(&outside, b"index").unwrap();
+
+        symlink(
+            &outside,
+            lists.join("example_dists_trixie_main_binary-amd64_Packages"),
+        )
+        .unwrap();
+
+        assert!(!rootfs_has_apt_metadata(root.path()));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn symlinked_status_file_is_rejected() {
+        use std::os::unix::fs::symlink;
+
+        let root = tempfile::tempdir().unwrap();
+
+        let status = root.path().join("var/lib/dpkg/status");
+        fs::create_dir_all(status.parent().unwrap()).unwrap();
+
+        let outside = root.path().join("outside-status");
+        fs::write(&outside, "Package: example\n").unwrap();
+        symlink(&outside, &status).unwrap();
+
+        let lists = root.path().join("var/lib/apt/lists");
+        fs::create_dir_all(&lists).unwrap();
+        fs::write(
+            lists.join("example_dists_trixie_main_binary-amd64_Packages"),
+            b"index",
+        )
+        .unwrap();
+
+        assert!(!rootfs_has_apt_metadata(root.path()));
+    }
+}
+
+#[cfg(test)]
+mod package_query_interface_tests {
+    use super::{PackageAvailability, PackageQueryEnvironment, query_package_availability};
+    use std::path::PathBuf;
+
+    #[test]
+    fn live_system_query_is_indeterminate() {
+        assert_eq!(
+            query_package_availability(&PackageQueryEnvironment::LiveSystem, "nvidia-driver",),
+            PackageAvailability::Indeterminate,
+        );
+    }
+
+    #[test]
+    fn explicit_rootfs_query_finds_synthetic_candidate_without_writes() {
+        use std::fs;
+
+        let directory = tempfile::tempdir().unwrap();
+        let rootfs = directory.path();
+
+        for relative in [
+            "etc/apt/apt.conf.d",
+            "etc/apt/sources.list.d",
+            "etc/apt/preferences.d",
+            "var/lib/apt/lists",
+            "var/lib/dpkg",
+        ] {
+            fs::create_dir_all(rootfs.join(relative)).unwrap();
+        }
+
+        fs::write(rootfs.join("var/lib/dpkg/status"), "").unwrap();
+        fs::write(
+            rootfs.join("etc/apt/sources.list"),
+            "deb [trusted=yes] http://example.invalid/debian trixie main\n",
+        )
+        .unwrap();
+
+        let index = rootfs.join(
+            "var/lib/apt/lists/example.invalid_debian_dists_trixie_main_binary-amd64_Packages",
+        );
+
+        let contents = concat!(
+            "Package: nvidia-driver\n",
+            "Version: 999.0-1\n",
+            "Architecture: amd64\n",
+            "Maintainer: DAIA Test <test@example.invalid>\n",
+            "Description: Synthetic package\n",
+        );
+
+        fs::write(&index, contents).unwrap();
+
+        assert_eq!(
+            query_package_availability(
+                &PackageQueryEnvironment::RootFilesystem(rootfs.to_path_buf()),
+                "nvidia-driver",
+            ),
+            PackageAvailability::Available,
+        );
+
+        assert_eq!(fs::read_to_string(&index).unwrap(), contents);
+        assert!(!rootfs.join("var/cache/apt/pkgcache.bin").exists());
+        assert!(!rootfs.join("var/cache/apt/srcpkgcache.bin").exists());
+    }
+
+    #[test]
+    fn missing_rootfs_query_is_indeterminate() {
+        assert_eq!(
+            query_package_availability(
+                &PackageQueryEnvironment::RootFilesystem(PathBuf::from(
+                    "/nonexistent-daia-package-query-rootfs"
+                ),),
+                "nvidia-driver",
+            ),
+            PackageAvailability::Indeterminate,
+        );
+    }
+}
+
+#[cfg(test)]
+mod package_query_environment_tests {
+    use super::PackageQueryEnvironment;
+    use std::path::PathBuf;
+
+    #[test]
+    fn live_system_is_distinct_from_explicit_rootfs() {
+        assert_ne!(
+            PackageQueryEnvironment::LiveSystem,
+            PackageQueryEnvironment::RootFilesystem(PathBuf::from("/"))
+        );
+    }
+
+    #[test]
+    fn explicit_rootfs_path_is_preserved() {
+        let path = PathBuf::from("/tmp/daia-test-rootfs");
+        let environment = PackageQueryEnvironment::RootFilesystem(path.clone());
+
+        assert_eq!(environment, PackageQueryEnvironment::RootFilesystem(path));
+    }
+
+    #[test]
+    fn different_rootfs_paths_are_distinct() {
+        assert_ne!(
+            PackageQueryEnvironment::RootFilesystem(PathBuf::from("/tmp/rootfs-a")),
+            PackageQueryEnvironment::RootFilesystem(PathBuf::from("/tmp/rootfs-b"))
+        );
+    }
+}
+
+#[cfg(test)]
+mod package_availability_tests {
+    use super::PackageAvailability;
+
+    #[test]
+    fn availability_states_are_distinct() {
+        assert_ne!(
+            PackageAvailability::Available,
+            PackageAvailability::Unavailable
+        );
+        assert_ne!(
+            PackageAvailability::Available,
+            PackageAvailability::Indeterminate
+        );
+        assert_ne!(
+            PackageAvailability::Unavailable,
+            PackageAvailability::Indeterminate
+        );
+    }
+
+    #[test]
+    fn indeterminate_is_not_available() {
+        assert_ne!(
+            PackageAvailability::Indeterminate,
+            PackageAvailability::Available
+        );
+    }
+
+    #[test]
+    fn availability_can_be_preserved_as_metadata() {
+        let states = [
+            PackageAvailability::Available,
+            PackageAvailability::Unavailable,
+            PackageAvailability::Indeterminate,
+        ];
+
+        assert_eq!(states[0], PackageAvailability::Available);
+        assert_eq!(states[1], PackageAvailability::Unavailable);
+        assert_eq!(states[2], PackageAvailability::Indeterminate);
     }
 }

@@ -600,6 +600,21 @@ fn run_model_add(selected_directory: Option<&str>) -> ExitCode {
     )
 }
 
+fn run_query_package(rootfs: &str, package: &str) -> ExitCode {
+    let environment = engine::PackageQueryEnvironment::RootFilesystem(PathBuf::from(rootfs));
+
+    let availability = engine::query_package_availability(&environment, package);
+
+    println!("{availability:?}");
+
+    match availability {
+        engine::PackageAvailability::Available | engine::PackageAvailability::Unavailable => {
+            ExitCode::SUCCESS
+        }
+        engine::PackageAvailability::Indeterminate => ExitCode::FAILURE,
+    }
+}
+
 fn run_verify_rootfs(capability: &str, rootfs: &str) -> ExitCode {
     if capability != "desktop" {
         eprintln!("Unsupported rootfs verification capability: {capability}");
@@ -664,6 +679,9 @@ fn run(arguments: &[String]) -> ExitCode {
             source_iso,
         ] if command == "iso-refresh" && operation == "package" => {
             run_iso_refresh_package(rootfs, payload, workspace, output_iso, source_iso)
+        }
+        [command, rootfs, package] if command == "query-package" => {
+            run_query_package(rootfs, package)
         }
         [command, capability, rootfs] if command == "verify-rootfs" => {
             run_verify_rootfs(capability, rootfs)
@@ -977,6 +995,7 @@ fn print_usage() {
     eprintln!(
         "    daia iso-refresh package <rootfs> <payload> <candidate-workspace> <candidate-iso> <source-iso>"
     );
+    eprintln!("    daia query-package <rootfs> <package>");
     eprintln!("    daia verify-rootfs desktop <rootfs>");
     eprintln!("    daia install");
     eprintln!("    daia realize-models");
@@ -1553,14 +1572,504 @@ fn configure_wizard_state(engine: &Engine, state: &mut WizardState) -> Result<()
     configure_wizard_external_content(engine, state, &content_inspector)
 }
 
-fn discover_wizard_hardware(engine: &Engine) -> Result<(usize, u64), String> {
+#[derive(Debug, PartialEq, Eq)]
+struct WizardGpu {
+    identifier: String,
+    vendor_id: String,
+    device_id: String,
+}
+
+impl WizardGpu {
+    fn is_nvidia(&self) -> bool {
+        facts::GpuFacts::new(&self.identifier, &self.vendor_id, &self.device_id).is_nvidia()
+    }
+}
+
+use engine::GpuDriverDecision;
+
+fn gpu_driver_decision(gpus: &[WizardGpu]) -> GpuDriverDecision {
+    let discovered: Vec<_> = gpus
+        .iter()
+        .map(|gpu| facts::GpuFacts::new(&gpu.identifier, &gpu.vendor_id, &gpu.device_id))
+        .collect();
+
+    engine::gpu_driver_decision(&discovered)
+}
+
+/// NVIDIA PCI ID databases used for driver-family evaluation.
+///
+/// These are read-only inputs. Their presence does not establish
+/// package availability or driver installability.
+#[derive(Debug)]
+struct NvidiaPciIdDatabases {
+    standard: String,
+    tesla_535: String,
+    legacy: String,
+}
+
+fn load_nvidia_pci_id_databases(
+    standard_path: &std::path::Path,
+    tesla_535_path: &std::path::Path,
+    legacy_path: &std::path::Path,
+) -> Result<NvidiaPciIdDatabases, String> {
+    fn read_database(path: &std::path::Path) -> Result<String, String> {
+        let contents = std::fs::read_to_string(path).map_err(|error| {
+            format!(
+                "Error reading NVIDIA PCI ID database {}: {error}",
+                path.display()
+            )
+        })?;
+
+        let mut entries = 0usize;
+
+        for (index, line) in contents.lines().enumerate() {
+            let entry = line.trim();
+
+            if entry.is_empty() {
+                continue;
+            }
+
+            if entry.len() != 8
+                || !entry.bytes().all(|byte| byte.is_ascii_hexdigit())
+                || !entry[..4].eq_ignore_ascii_case("10DE")
+            {
+                return Err(format!(
+                    "Invalid NVIDIA PCI ID database entry at {}:{}",
+                    path.display(),
+                    index + 1
+                ));
+            }
+
+            entries += 1;
+        }
+
+        if entries == 0 {
+            return Err(format!(
+                "NVIDIA PCI ID database is empty: {}",
+                path.display()
+            ));
+        }
+
+        Ok(contents)
+    }
+
+    Ok(NvidiaPciIdDatabases {
+        standard: read_database(standard_path)?,
+        tesla_535: read_database(tesla_535_path)?,
+        legacy: read_database(legacy_path)?,
+    })
+}
+
+/// Evaluates a discovered GPU against validated Debian NVIDIA databases.
+///
+/// This only identifies a driver family. It does not authorize installation.
+fn evaluate_wizard_gpu_compatibility(
+    gpu: &WizardGpu,
+    databases: &NvidiaPciIdDatabases,
+) -> engine::NvidiaDriverCompatibility {
+    let discovered = facts::GpuFacts::new(&gpu.identifier, &gpu.vendor_id, &gpu.device_id);
+
+    engine::evaluate_nvidia_driver_compatibility(
+        &discovered,
+        &databases.standard,
+        &databases.tesla_535,
+        &databases.legacy,
+    )
+}
+
+/// Compatibility result for one discovered GPU.
+///
+/// A classification does not authorize driver installation.
+#[derive(Debug, PartialEq, Eq)]
+struct WizardGpuCompatibility {
+    identifier: String,
+    compatibility: engine::NvidiaDriverCompatibility,
+}
+
+/// Evaluates every discovered GPU without changing their order.
+///
+/// Non-NVIDIA GPUs retain an Unknown compatibility classification.
+fn evaluate_wizard_gpus(
+    gpus: &[WizardGpu],
+    databases: &NvidiaPciIdDatabases,
+) -> Vec<WizardGpuCompatibility> {
+    gpus.iter()
+        .map(|gpu| WizardGpuCompatibility {
+            identifier: gpu.identifier.clone(),
+            compatibility: evaluate_wizard_gpu_compatibility(gpu, databases),
+        })
+        .collect()
+}
+
+/// Converts wizard GPU classifications into engine-owned records.
+///
+/// Preserves GPU identifiers, classifications, and discovery order.
+/// Classification does not authorize driver installation.
+fn wizard_gpu_compatibility_records(
+    evaluations: &[WizardGpuCompatibility],
+) -> Vec<engine::GpuCompatibilityRecord> {
+    evaluations
+        .iter()
+        .map(|evaluation| {
+            engine::GpuCompatibilityRecord::new(&evaluation.identifier, evaluation.compatibility)
+        })
+        .collect()
+}
+
+/// Loads validated NVIDIA PCI ID databases and classifies discovered GPUs.
+///
+/// Database errors remain errors rather than becoming Unknown classifications
+/// or empty records. Driver-family classification does not authorize installation.
+fn classify_wizard_gpu_records(
+    gpus: &[WizardGpu],
+    standard_path: &std::path::Path,
+    tesla_535_path: &std::path::Path,
+    legacy_path: &std::path::Path,
+) -> Result<Vec<engine::GpuCompatibilityRecord>, String> {
+    let databases = load_nvidia_pci_id_databases(standard_path, tesla_535_path, legacy_path)?;
+
+    let evaluations = evaluate_wizard_gpus(gpus, &databases);
+
+    Ok(wizard_gpu_compatibility_records(&evaluations))
+}
+
+/// Classifies discovered GPUs only when NVIDIA hardware is present.
+///
+/// Non-NVIDIA systems do not depend on NVIDIA PCI ID database files.
+/// NVIDIA database failures remain explicit errors, not Unknown results.
+/// Classification does not authorize driver installation.
+fn classify_wizard_gpu_records_if_nvidia(
+    gpus: &[WizardGpu],
+    standard_path: &std::path::Path,
+    tesla_535_path: &std::path::Path,
+    legacy_path: &std::path::Path,
+) -> Result<Vec<engine::GpuCompatibilityRecord>, String> {
+    if !gpus.iter().any(WizardGpu::is_nvidia) {
+        return Ok(Vec::new());
+    }
+
+    classify_wizard_gpu_records(gpus, standard_path, tesla_535_path, legacy_path)
+}
+
+/// Classifies discovered GPUs using Debian's installed NVIDIA PCI ID databases.
+///
+/// Advisory metadata only; this does not select or install GPU drivers.
+fn classify_installer_gpu_records(
+    gpus: &[WizardGpu],
+) -> Result<Vec<engine::GpuCompatibilityRecord>, String> {
+    let directory = std::path::Path::new("/usr/share/nvidia");
+
+    classify_wizard_gpu_records_if_nvidia(
+        gpus,
+        &directory.join("nvidia.ids"),
+        &directory.join("nvidia-tesla-535.ids"),
+        &directory.join("nvidia-legacy-390xx.ids"),
+    )
+}
+
+#[cfg(test)]
+mod wizard_nvidia_only_classification_tests {
+    use super::*;
+    use std::fs;
+
+    fn gpu(vendor: &str, device: &str) -> WizardGpu {
+        WizardGpu {
+            identifier: "0000:01:00.0".to_owned(),
+            vendor_id: format!("0x{vendor}"),
+            device_id: format!("0x{device}"),
+        }
+    }
+
+    fn databases(
+        directory: &std::path::Path,
+    ) -> (std::path::PathBuf, std::path::PathBuf, std::path::PathBuf) {
+        let standard = directory.join("standard.ids");
+        let tesla = directory.join("tesla.ids");
+        let legacy = directory.join("legacy.ids");
+
+        fs::write(&standard, "10DE1340\n").unwrap();
+        fs::write(&tesla, "10DE0FC0\n").unwrap();
+        fs::write(&legacy, "10DE06C0\n").unwrap();
+
+        (standard, tesla, legacy)
+    }
+
+    #[test]
+    fn empty_gpu_list_does_not_require_databases() {
+        let directory = tempfile::tempdir().unwrap();
+        let missing = directory.path().join("missing.ids");
+
+        let records =
+            classify_wizard_gpu_records_if_nvidia(&[], &missing, &missing, &missing).unwrap();
+
+        assert!(records.is_empty());
+    }
+
+    #[test]
+    fn intel_only_gpu_does_not_require_databases() {
+        let directory = tempfile::tempdir().unwrap();
+        let missing = directory.path().join("missing.ids");
+
+        let records = classify_wizard_gpu_records_if_nvidia(
+            &[gpu("8086", "1234")],
+            &missing,
+            &missing,
+            &missing,
+        )
+        .unwrap();
+
+        assert!(records.is_empty());
+    }
+
+    #[test]
+    fn nvidia_gpu_uses_validated_database() {
+        let directory = tempfile::tempdir().unwrap();
+        let (standard, tesla, legacy) = databases(directory.path());
+
+        let records = classify_wizard_gpu_records_if_nvidia(
+            &[gpu("10de", "1340")],
+            &standard,
+            &tesla,
+            &legacy,
+        )
+        .unwrap();
+
+        assert_eq!(records.len(), 1);
+        assert_eq!(
+            records[0].compatibility(),
+            engine::NvidiaDriverCompatibility::StandardDriver
+        );
+    }
+
+    #[test]
+    fn nvidia_gpu_rejects_missing_database() {
+        let directory = tempfile::tempdir().unwrap();
+        let (standard, tesla, legacy) = databases(directory.path());
+
+        fs::remove_file(&tesla).unwrap();
+
+        let result = classify_wizard_gpu_records_if_nvidia(
+            &[gpu("10de", "1340")],
+            &standard,
+            &tesla,
+            &legacy,
+        );
+
+        assert!(result.is_err());
+    }
+}
+
+#[cfg(test)]
+mod wizard_gpu_classification_boundary_tests {
+    use super::{WizardGpu, classify_wizard_gpu_records};
+    use engine::NvidiaDriverCompatibility;
+    use std::fs;
+    use std::path::{Path, PathBuf};
+
+    fn databases(directory: &Path) -> (PathBuf, PathBuf, PathBuf) {
+        let standard = directory.join("nvidia.ids");
+        let tesla = directory.join("nvidia-tesla-535.ids");
+        let legacy = directory.join("nvidia-legacy-390xx.ids");
+
+        fs::write(&standard, "10DE1340\n").unwrap();
+        fs::write(&tesla, "10DE0FC0\n").unwrap();
+        fs::write(&legacy, "10DE06C0\n").unwrap();
+
+        (standard, tesla, legacy)
+    }
+
+    fn gpu(identifier: &str, vendor: &str, device: &str) -> WizardGpu {
+        WizardGpu {
+            identifier: identifier.to_owned(),
+            vendor_id: format!("0x{vendor}"),
+            device_id: format!("0x{device}"),
+        }
+    }
+
+    #[test]
+    fn classifies_supported_nvidia_driver_family() {
+        let directory = tempfile::tempdir().unwrap();
+        let (standard, tesla, legacy) = databases(directory.path());
+
+        let records = classify_wizard_gpu_records(
+            &[gpu("0000:01:00.0", "10de", "1340")],
+            &standard,
+            &tesla,
+            &legacy,
+        )
+        .unwrap();
+
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].identifier(), "0000:01:00.0");
+        assert_eq!(
+            records[0].compatibility(),
+            NvidiaDriverCompatibility::StandardDriver
+        );
+    }
+
+    #[test]
+    fn preserves_mixed_gpu_order_and_driver_families() {
+        let directory = tempfile::tempdir().unwrap();
+        let (standard, tesla, legacy) = databases(directory.path());
+
+        let gpus = [
+            gpu("0000:00:02.0", "8086", "1234"),
+            gpu("0000:01:00.0", "10de", "0fc0"),
+            gpu("0000:02:00.0", "10de", "06c0"),
+            gpu("0000:03:00.0", "10de", "ffff"),
+        ];
+
+        let records = classify_wizard_gpu_records(&gpus, &standard, &tesla, &legacy).unwrap();
+
+        assert_eq!(records.len(), 4);
+
+        let expected = [
+            NvidiaDriverCompatibility::Unknown,
+            NvidiaDriverCompatibility::Tesla535Driver,
+            NvidiaDriverCompatibility::UnsupportedLegacy,
+            NvidiaDriverCompatibility::Unknown,
+        ];
+
+        for ((record, discovered), compatibility) in records.iter().zip(&gpus).zip(expected) {
+            assert_eq!(record.identifier(), discovered.identifier);
+            assert_eq!(record.compatibility(), compatibility);
+        }
+    }
+
+    #[test]
+    fn missing_database_returns_error_instead_of_records() {
+        let directory = tempfile::tempdir().unwrap();
+        let (standard, tesla, legacy) = databases(directory.path());
+
+        fs::remove_file(&tesla).unwrap();
+
+        let result = classify_wizard_gpu_records(
+            &[gpu("0000:01:00.0", "10de", "1340")],
+            &standard,
+            &tesla,
+            &legacy,
+        );
+
+        let error = result.unwrap_err();
+        assert!(error.contains("Error reading NVIDIA PCI ID database"));
+        assert!(error.contains("nvidia-tesla-535.ids"));
+    }
+
+    #[test]
+    fn malformed_database_returns_error_instead_of_unknown() {
+        let directory = tempfile::tempdir().unwrap();
+        let (standard, tesla, legacy) = databases(directory.path());
+
+        fs::write(&legacy, "INVALID\n").unwrap();
+
+        let result = classify_wizard_gpu_records(
+            &[gpu("0000:01:00.0", "10de", "1340")],
+            &standard,
+            &tesla,
+            &legacy,
+        );
+
+        let error = result.unwrap_err();
+        assert!(error.contains("Invalid NVIDIA PCI ID database entry"));
+        assert!(error.contains("nvidia-legacy-390xx.ids"));
+    }
+
+    #[test]
+    fn empty_gpu_list_still_validates_databases() {
+        let directory = tempfile::tempdir().unwrap();
+        let (standard, tesla, legacy) = databases(directory.path());
+
+        assert!(
+            classify_wizard_gpu_records(&[], &standard, &tesla, &legacy)
+                .unwrap()
+                .is_empty()
+        );
+
+        fs::remove_file(&standard).unwrap();
+
+        assert!(classify_wizard_gpu_records(&[], &standard, &tesla, &legacy).is_err());
+    }
+}
+
+#[cfg(test)]
+mod wizard_gpu_record_conversion_tests {
+    use super::{WizardGpuCompatibility, wizard_gpu_compatibility_records};
+    use engine::NvidiaDriverCompatibility;
+
+    fn evaluation(
+        identifier: &str,
+        compatibility: NvidiaDriverCompatibility,
+    ) -> WizardGpuCompatibility {
+        WizardGpuCompatibility {
+            identifier: identifier.to_owned(),
+            compatibility,
+        }
+    }
+
+    #[test]
+    fn empty_evaluations_produce_empty_records() {
+        assert!(wizard_gpu_compatibility_records(&[]).is_empty());
+    }
+
+    #[test]
+    fn preserves_distinct_nvidia_driver_families() {
+        let evaluations = vec![
+            evaluation("0000:01:00.0", NvidiaDriverCompatibility::StandardDriver),
+            evaluation("0000:02:00.0", NvidiaDriverCompatibility::Tesla535Driver),
+            evaluation("0000:03:00.0", NvidiaDriverCompatibility::UnsupportedLegacy),
+        ];
+
+        let records = wizard_gpu_compatibility_records(&evaluations);
+
+        assert_eq!(records.len(), 3);
+
+        for (record, expected) in records.iter().zip(&evaluations) {
+            assert_eq!(record.identifier(), expected.identifier);
+            assert_eq!(record.compatibility(), expected.compatibility);
+        }
+    }
+
+    #[test]
+    fn preserves_mixed_gpu_order_identifiers_and_unknown_classification() {
+        let evaluations = vec![
+            evaluation("0000:00:02.0", NvidiaDriverCompatibility::Unknown),
+            evaluation("0000:01:00.0", NvidiaDriverCompatibility::StandardDriver),
+            evaluation("0000:02:00.0", NvidiaDriverCompatibility::Unknown),
+        ];
+
+        let records = wizard_gpu_compatibility_records(&evaluations);
+
+        assert_eq!(records.len(), evaluations.len());
+
+        for (record, expected) in records.iter().zip(&evaluations) {
+            assert_eq!(record.identifier(), expected.identifier);
+            assert_eq!(record.compatibility(), expected.compatibility);
+        }
+    }
+}
+
+#[derive(Debug)]
+struct WizardHardware {
+    logical_processor_count: usize,
+    memory_bytes: u64,
+    gpus: Vec<WizardGpu>,
+}
+
+fn discover_wizard_hardware(engine: &Engine) -> Result<WizardHardware, String> {
     engine
         .discover_hardware()
-        .map(|hardware| {
-            (
-                hardware.cpu().logical_processor_count(),
-                hardware.memory().total_bytes(),
-            )
+        .map(|hardware| WizardHardware {
+            logical_processor_count: hardware.cpu().logical_processor_count(),
+            memory_bytes: hardware.memory().total_bytes(),
+            gpus: hardware
+                .gpus()
+                .iter()
+                .map(|gpu| WizardGpu {
+                    identifier: gpu.identifier().to_owned(),
+                    vendor_id: gpu.vendor_id().to_owned(),
+                    device_id: gpu.device_id().to_owned(),
+                })
+                .collect(),
         })
         .map_err(|error| format!("Error discovering system hardware: {error}"))
 }
@@ -1688,6 +2197,8 @@ fn prompt_administrator_password() -> Result<String, String> {
 fn prepare_wizard_appliance(
     engine: &Engine,
     config: &model::ApplianceConfiguration,
+    gpu_decision: GpuDriverDecision,
+    gpu_records: Vec<engine::GpuCompatibilityRecord>,
 ) -> Result<engine::PreparedApplianceInstallation, String> {
     let repositories = ContentRepositoryRepository::load_directory(&content_repository_directory())
         .map_err(|error| format!("Error loading content repositories: {error}"))?;
@@ -1715,14 +2226,20 @@ fn prepare_wizard_appliance(
         .discover_storage(&LinuxStorageInspector::new())
         .map_err(|error| format!("Error discovering storage: {error}"))?;
 
-    engine.prepare_appliance_configuration(
-        config,
-        profile,
-        content_repository,
-        &LocalFilesystemContentInspector::new(),
-        &storage,
-        model::ContentImportDestination::new("/var/lib/daia/content"),
-    )
+    engine
+        .prepare_appliance_configuration(
+            config,
+            profile,
+            content_repository,
+            &LocalFilesystemContentInspector::new(),
+            &storage,
+            model::ContentImportDestination::new("/var/lib/daia/content"),
+        )
+        .map(|prepared| {
+            prepared
+                .with_gpu_driver_decision(gpu_decision)
+                .with_gpu_compatibility_records(gpu_records)
+        })
 }
 
 fn installation_operation_name(operation: &InstallationOperation) -> String {
@@ -1980,7 +2497,7 @@ fn run_install() -> ExitCode {
         return ExitCode::FAILURE;
     }
 
-    let (logical_processor_count, memory_bytes) = match discover_wizard_hardware(&engine) {
+    let hardware = match discover_wizard_hardware(&engine) {
         Ok(hardware) => hardware,
         Err(error) => {
             eprintln!("{error}");
@@ -1988,8 +2505,12 @@ fn run_install() -> ExitCode {
         }
     };
 
-    if let Err(error) = review_wizard_state(&engine, &state, logical_processor_count, memory_bytes)
-    {
+    if let Err(error) = review_wizard_state(
+        &engine,
+        &state,
+        hardware.logical_processor_count,
+        hardware.memory_bytes,
+    ) {
         eprintln!("{error}");
         return ExitCode::FAILURE;
     }
@@ -2001,7 +2522,20 @@ fn run_install() -> ExitCode {
 
     let appliance_configuration = config.appliance_configuration();
 
-    let prepared = match prepare_wizard_appliance(&engine, &appliance_configuration) {
+    let gpu_records = match classify_installer_gpu_records(&hardware.gpus) {
+        Ok(records) => records,
+        Err(error) => {
+            eprintln!("{error}");
+            return ExitCode::FAILURE;
+        }
+    };
+
+    let prepared = match prepare_wizard_appliance(
+        &engine,
+        &appliance_configuration,
+        gpu_driver_decision(&hardware.gpus),
+        gpu_records,
+    ) {
         Ok(prepared) => prepared,
         Err(error) => {
             eprintln!("{error}");
@@ -2053,14 +2587,25 @@ fn run_install() -> ExitCode {
         }
     }
 }
-fn execute_confirmed_wizard(engine: &Engine, state: WizardState) -> Result<(), String> {
+fn execute_confirmed_wizard(
+    engine: &Engine,
+    state: WizardState,
+    gpus: &[WizardGpu],
+) -> Result<(), String> {
     let Some(config) = state.into_config() else {
         return Err("Error: wizard configuration is incomplete".to_owned());
     };
 
     let appliance_configuration = config.appliance_configuration();
 
-    let prepared = prepare_wizard_appliance(engine, &appliance_configuration)?;
+    let gpu_records = classify_installer_gpu_records(gpus)?;
+
+    let prepared = prepare_wizard_appliance(
+        engine,
+        &appliance_configuration,
+        gpu_driver_decision(gpus),
+        gpu_records,
+    )?;
 
     println!("Configuration confirmed.");
     println!();
@@ -2097,7 +2642,7 @@ fn run_wizard() -> ExitCode {
         return ExitCode::FAILURE;
     }
 
-    let (logical_processor_count, memory_bytes) = match discover_wizard_hardware(&engine) {
+    let hardware = match discover_wizard_hardware(&engine) {
         Ok(hardware) => hardware,
         Err(error) => {
             eprintln!("{error}");
@@ -2105,14 +2650,18 @@ fn run_wizard() -> ExitCode {
         }
     };
 
-    if let Err(error) = review_wizard_state(&engine, &state, logical_processor_count, memory_bytes)
-    {
+    if let Err(error) = review_wizard_state(
+        &engine,
+        &state,
+        hardware.logical_processor_count,
+        hardware.memory_bytes,
+    ) {
         eprintln!("{error}");
         return ExitCode::FAILURE;
     }
 
     match confirm_wizard_state("Continue with this configuration? [y/N]: ") {
-        Ok(true) => match execute_confirmed_wizard(&engine, state) {
+        Ok(true) => match execute_confirmed_wizard(&engine, state, &hardware.gpus) {
             Ok(()) => ExitCode::SUCCESS,
             Err(error) => {
                 eprintln!("{error}");
@@ -2570,14 +3119,119 @@ mod tests {
         );
     }
     #[test]
+    fn nvidia_gpu_requires_driver_evaluation() {
+        let gpus = vec![super::WizardGpu {
+            identifier: "0000:01:00.0".to_owned(),
+            vendor_id: "0x10de".to_owned(),
+            device_id: "0x2684".to_owned(),
+        }];
+
+        assert_eq!(
+            super::gpu_driver_decision(&gpus),
+            super::GpuDriverDecision::EvaluateNvidiaDriver
+        );
+    }
+
+    #[test]
+    fn non_nvidia_gpu_does_not_require_nvidia_driver() {
+        let gpus = vec![super::WizardGpu {
+            identifier: "0000:00:02.0".to_owned(),
+            vendor_id: "0x8086".to_owned(),
+            device_id: "0x1234".to_owned(),
+        }];
+
+        assert_eq!(
+            super::gpu_driver_decision(&gpus),
+            super::GpuDriverDecision::NoNvidiaDriverRequired
+        );
+    }
+
+    #[test]
+    fn empty_gpu_list_does_not_require_nvidia_driver() {
+        assert_eq!(
+            super::gpu_driver_decision(&[]),
+            super::GpuDriverDecision::NoNvidiaDriverRequired
+        );
+    }
+
+    #[test]
+    fn mixed_gpu_list_requires_nvidia_driver_evaluation() {
+        let gpus = vec![
+            super::WizardGpu {
+                identifier: "0000:00:02.0".to_owned(),
+                vendor_id: "0x8086".to_owned(),
+                device_id: "0x1234".to_owned(),
+            },
+            super::WizardGpu {
+                identifier: "0000:01:00.0".to_owned(),
+                vendor_id: "0x10de".to_owned(),
+                device_id: "0x2684".to_owned(),
+            },
+        ];
+
+        assert_eq!(
+            super::gpu_driver_decision(&gpus),
+            super::GpuDriverDecision::EvaluateNvidiaDriver
+        );
+    }
+
+    #[test]
+    fn identifies_nvidia_gpu_by_pci_vendor() {
+        let gpu = super::WizardGpu {
+            identifier: "0000:01:00.0".to_owned(),
+            vendor_id: "0x10de".to_owned(),
+            device_id: "0x2684".to_owned(),
+        };
+
+        assert!(gpu.is_nvidia());
+    }
+
+    #[test]
+    fn does_not_identify_other_gpu_vendors_as_nvidia() {
+        for vendor_id in ["0x8086", "0x1002", "0x1234"] {
+            let gpu = super::WizardGpu {
+                identifier: "0000:00:02.0".to_owned(),
+                vendor_id: vendor_id.to_owned(),
+                device_id: "0x0001".to_owned(),
+            };
+
+            assert!(!gpu.is_nvidia());
+        }
+    }
+
+    #[test]
+    fn recognizes_uppercase_nvidia_vendor_id() {
+        let gpu = super::WizardGpu {
+            identifier: "0000:01:00.0".to_owned(),
+            vendor_id: "0X10DE".to_owned(),
+            device_id: "0x2684".to_owned(),
+        };
+
+        assert!(gpu.is_nvidia());
+    }
+
+    #[test]
     fn discovers_wizard_hardware() {
         let engine = engine::Engine::from_registry(registry::Registry::new());
 
-        let (logical_processor_count, memory_bytes) = super::discover_wizard_hardware(&engine)
+        let hardware = super::discover_wizard_hardware(&engine)
             .expect("wizard hardware discovery should succeed");
 
-        assert!(logical_processor_count > 0);
-        assert!(memory_bytes > 0);
+        assert!(hardware.logical_processor_count > 0);
+        assert!(hardware.memory_bytes > 0);
+
+        let discovered = engine.discover_hardware().expect("hardware discovery");
+        let expected: Vec<_> = discovered
+            .gpus()
+            .iter()
+            .map(|gpu| super::WizardGpu {
+                identifier: gpu.identifier().to_owned(),
+                vendor_id: gpu.vendor_id().to_owned(),
+                device_id: gpu.device_id().to_owned(),
+            })
+            .collect();
+
+        assert_eq!(hardware.gpus, expected);
     }
 
     #[test]
@@ -3068,6 +3722,36 @@ mod tests {
         assert_eq!(result, ExitCode::FAILURE);
     }
     #[test]
+    fn rejects_incomplete_package_query_arguments() {
+        let arguments = vec![
+            "query-package".to_owned(),
+            "/nonexistent-daia-rootfs".to_owned(),
+        ];
+
+        assert_eq!(run(&arguments), ExitCode::FAILURE);
+    }
+
+    #[test]
+    fn package_query_with_missing_rootfs_is_indeterminate() {
+        let environment = engine::PackageQueryEnvironment::RootFilesystem(PathBuf::from(
+            "/nonexistent-daia-package-query-rootfs",
+        ));
+
+        assert_eq!(
+            engine::query_package_availability(&environment, "nvidia-driver"),
+            engine::PackageAvailability::Indeterminate
+        );
+    }
+
+    #[test]
+    fn package_query_with_missing_rootfs_returns_failure() {
+        assert_eq!(
+            super::run_query_package("/nonexistent-daia-package-query-rootfs", "nvidia-driver"),
+            ExitCode::FAILURE
+        );
+    }
+
+    #[test]
     fn rejects_unsupported_rootfs_verification_capability() {
         let arguments = vec![
             "verify-rootfs".to_owned(),
@@ -3142,5 +3826,309 @@ mod model_volume_output_tests {
     fn empty_model_report_produces_no_filenames() {
         let report = application::ModelDiscoveryReport::default();
         assert_eq!(super::format_model_filenames(&report), "");
+    }
+}
+
+#[cfg(test)]
+mod nvidia_database_loading_tests {
+    use super::load_nvidia_pci_id_databases;
+    use std::fs;
+    use tempfile::tempdir;
+
+    #[test]
+    fn loads_all_three_databases() {
+        let directory = tempdir().unwrap();
+        let standard = directory.path().join("standard.ids");
+        let tesla = directory.path().join("tesla.ids");
+        let legacy = directory.path().join("legacy.ids");
+
+        fs::write(&standard, "10DE1340\n").unwrap();
+        fs::write(&tesla, "10DE1341\n").unwrap();
+        fs::write(&legacy, "10DE1342\n").unwrap();
+
+        let databases = load_nvidia_pci_id_databases(&standard, &tesla, &legacy).unwrap();
+
+        assert_eq!(databases.standard, "10DE1340\n");
+        assert_eq!(databases.tesla_535, "10DE1341\n");
+        assert_eq!(databases.legacy, "10DE1342\n");
+    }
+
+    #[test]
+    fn rejects_missing_standard_database() {
+        let directory = tempdir().unwrap();
+        let missing = directory.path().join("missing.ids");
+        let tesla = directory.path().join("tesla.ids");
+        let legacy = directory.path().join("legacy.ids");
+
+        fs::write(&tesla, "10DE1341\n").unwrap();
+        fs::write(&legacy, "10DE1342\n").unwrap();
+
+        let error = load_nvidia_pci_id_databases(&missing, &tesla, &legacy).unwrap_err();
+
+        assert!(error.contains("missing.ids"));
+    }
+
+    #[test]
+    fn rejects_missing_tesla_database() {
+        let directory = tempdir().unwrap();
+        let standard = directory.path().join("standard.ids");
+        let missing = directory.path().join("missing-tesla.ids");
+        let legacy = directory.path().join("legacy.ids");
+
+        fs::write(&standard, "10DE1340\n").unwrap();
+        fs::write(&legacy, "10DE1342\n").unwrap();
+
+        let error = load_nvidia_pci_id_databases(&standard, &missing, &legacy).unwrap_err();
+
+        assert!(error.contains("missing-tesla.ids"));
+    }
+
+    #[test]
+    fn rejects_missing_legacy_database() {
+        let directory = tempdir().unwrap();
+        let standard = directory.path().join("standard.ids");
+        let tesla = directory.path().join("tesla.ids");
+        let missing = directory.path().join("missing-legacy.ids");
+
+        fs::write(&standard, "10DE1340\n").unwrap();
+        fs::write(&tesla, "10DE1341\n").unwrap();
+
+        let error = load_nvidia_pci_id_databases(&standard, &tesla, &missing).unwrap_err();
+
+        assert!(error.contains("missing-legacy.ids"));
+    }
+
+    #[test]
+    fn rejects_directory_instead_of_database_file() {
+        let directory = tempdir().unwrap();
+        let standard = directory.path().join("standard.ids");
+        let tesla = directory.path().join("tesla.ids");
+
+        fs::write(&standard, "10DE1340\n").unwrap();
+        fs::write(&tesla, "10DE1341\n").unwrap();
+
+        let error = load_nvidia_pci_id_databases(&standard, &tesla, directory.path()).unwrap_err();
+
+        assert!(error.contains("Error reading NVIDIA PCI ID database"));
+    }
+}
+
+#[cfg(test)]
+mod nvidia_database_validation_tests {
+    use super::load_nvidia_pci_id_databases;
+    use std::fs;
+    use tempfile::tempdir;
+
+    fn load_with_standard(contents: &str) -> Result<(), String> {
+        let directory = tempdir().unwrap();
+        let standard = directory.path().join("standard.ids");
+        let tesla = directory.path().join("tesla.ids");
+        let legacy = directory.path().join("legacy.ids");
+
+        fs::write(&standard, contents).unwrap();
+        fs::write(&tesla, "10DE1341\n").unwrap();
+        fs::write(&legacy, "10DE1342\n").unwrap();
+
+        load_nvidia_pci_id_databases(&standard, &tesla, &legacy).map(|_| ())
+    }
+
+    #[test]
+    fn rejects_empty_database() {
+        let error = load_with_standard("").unwrap_err();
+        assert!(error.contains("NVIDIA PCI ID database is empty"));
+    }
+
+    #[test]
+    fn rejects_whitespace_only_database() {
+        let error = load_with_standard(" \n\t\n").unwrap_err();
+        assert!(error.contains("NVIDIA PCI ID database is empty"));
+    }
+
+    #[test]
+    fn rejects_malformed_identifier() {
+        let error = load_with_standard("10DE1340\nINVALID\n").unwrap_err();
+        assert!(error.contains("Invalid NVIDIA PCI ID database entry"));
+        assert!(error.contains(":2"));
+    }
+
+    #[test]
+    fn rejects_non_nvidia_identifier() {
+        let error = load_with_standard("80861234\n").unwrap_err();
+        assert!(error.contains("Invalid NVIDIA PCI ID database entry"));
+    }
+
+    #[test]
+    fn accepts_valid_identifiers_with_whitespace() {
+        load_with_standard(" 10DE1340 \n\n\t10de1341\t\n").unwrap();
+    }
+}
+
+#[cfg(test)]
+mod wizard_gpu_compatibility_tests {
+    use super::{NvidiaPciIdDatabases, WizardGpu, evaluate_wizard_gpu_compatibility};
+    use engine::NvidiaDriverCompatibility;
+
+    fn gpu(vendor: &str, device: &str) -> WizardGpu {
+        WizardGpu {
+            identifier: "0000:01:00.0".to_owned(),
+            vendor_id: vendor.to_owned(),
+            device_id: device.to_owned(),
+        }
+    }
+
+    fn databases() -> NvidiaPciIdDatabases {
+        NvidiaPciIdDatabases {
+            standard: "10DE1340\n".to_owned(),
+            tesla_535: "10DE1341\n".to_owned(),
+            legacy: "10DE1342\n".to_owned(),
+        }
+    }
+
+    #[test]
+    fn identifies_standard_driver() {
+        assert_eq!(
+            evaluate_wizard_gpu_compatibility(&gpu("0x10de", "0x1340"), &databases(),),
+            NvidiaDriverCompatibility::StandardDriver,
+        );
+    }
+
+    #[test]
+    fn identifies_tesla_535_driver() {
+        assert_eq!(
+            evaluate_wizard_gpu_compatibility(&gpu("0x10de", "0x1341"), &databases(),),
+            NvidiaDriverCompatibility::Tesla535Driver,
+        );
+    }
+
+    #[test]
+    fn identifies_unsupported_legacy_driver() {
+        assert_eq!(
+            evaluate_wizard_gpu_compatibility(&gpu("0x10de", "0x1342"), &databases(),),
+            NvidiaDriverCompatibility::UnsupportedLegacy,
+        );
+    }
+
+    #[test]
+    fn unknown_nvidia_gpu_remains_unknown() {
+        assert_eq!(
+            evaluate_wizard_gpu_compatibility(&gpu("0x10de", "0xffff"), &databases(),),
+            NvidiaDriverCompatibility::Unknown,
+        );
+    }
+
+    #[test]
+    fn non_nvidia_gpu_remains_unknown() {
+        assert_eq!(
+            evaluate_wizard_gpu_compatibility(&gpu("0x8086", "0x1340"), &databases(),),
+            NvidiaDriverCompatibility::Unknown,
+        );
+    }
+}
+
+#[cfg(test)]
+mod wizard_multi_gpu_compatibility_tests {
+    use super::{NvidiaPciIdDatabases, WizardGpu, WizardGpuCompatibility, evaluate_wizard_gpus};
+    use engine::NvidiaDriverCompatibility;
+
+    fn gpu(identifier: &str, vendor: &str, device: &str) -> WizardGpu {
+        WizardGpu {
+            identifier: identifier.to_owned(),
+            vendor_id: vendor.to_owned(),
+            device_id: device.to_owned(),
+        }
+    }
+
+    fn databases() -> NvidiaPciIdDatabases {
+        NvidiaPciIdDatabases {
+            standard: "10DE1340\n".to_owned(),
+            tesla_535: "10DE1341\n".to_owned(),
+            legacy: "10DE1342\n".to_owned(),
+        }
+    }
+
+    fn result(
+        identifier: &str,
+        compatibility: NvidiaDriverCompatibility,
+    ) -> WizardGpuCompatibility {
+        WizardGpuCompatibility {
+            identifier: identifier.to_owned(),
+            compatibility,
+        }
+    }
+
+    #[test]
+    fn empty_gpu_list_produces_empty_results() {
+        assert!(evaluate_wizard_gpus(&[], &databases()).is_empty());
+    }
+
+    #[test]
+    fn mixed_intel_and_nvidia_gpus_are_classified_independently() {
+        let gpus = [
+            gpu("0000:00:02.0", "0x8086", "0x1234"),
+            gpu("0000:01:00.0", "0x10de", "0x1340"),
+        ];
+
+        assert_eq!(
+            evaluate_wizard_gpus(&gpus, &databases()),
+            vec![
+                result("0000:00:02.0", NvidiaDriverCompatibility::Unknown,),
+                result("0000:01:00.0", NvidiaDriverCompatibility::StandardDriver,),
+            ],
+        );
+    }
+
+    #[test]
+    fn multiple_nvidia_driver_families_remain_distinct() {
+        let gpus = [
+            gpu("0000:01:00.0", "0x10de", "0x1340"),
+            gpu("0000:02:00.0", "0x10de", "0x1341"),
+            gpu("0000:03:00.0", "0x10de", "0x1342"),
+        ];
+
+        assert_eq!(
+            evaluate_wizard_gpus(&gpus, &databases()),
+            vec![
+                result("0000:01:00.0", NvidiaDriverCompatibility::StandardDriver,),
+                result("0000:02:00.0", NvidiaDriverCompatibility::Tesla535Driver,),
+                result("0000:03:00.0", NvidiaDriverCompatibility::UnsupportedLegacy,),
+            ],
+        );
+    }
+
+    #[test]
+    fn unknown_nvidia_gpu_does_not_hide_supported_gpu() {
+        let gpus = [
+            gpu("0000:01:00.0", "0x10de", "0xffff"),
+            gpu("0000:02:00.0", "0x10de", "0x1340"),
+        ];
+
+        assert_eq!(
+            evaluate_wizard_gpus(&gpus, &databases()),
+            vec![
+                result("0000:01:00.0", NvidiaDriverCompatibility::Unknown,),
+                result("0000:02:00.0", NvidiaDriverCompatibility::StandardDriver,),
+            ],
+        );
+    }
+
+    #[test]
+    fn preserves_input_order_and_gpu_identifiers() {
+        let gpus = [
+            gpu("0000:05:00.0", "0x10de", "0x1341"),
+            gpu("0000:00:02.0", "0x8086", "0x1234"),
+            gpu("0000:03:00.0", "0x10de", "0x1340"),
+        ];
+
+        let results = evaluate_wizard_gpus(&gpus, &databases());
+
+        let identifiers: Vec<_> = results
+            .iter()
+            .map(|result| result.identifier.as_str())
+            .collect();
+
+        assert_eq!(
+            identifiers,
+            ["0000:05:00.0", "0000:00:02.0", "0000:03:00.0",],
+        );
     }
 }

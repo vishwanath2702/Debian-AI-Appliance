@@ -73,6 +73,35 @@ pub(super) fn verify_intel_8265_firmware(rootfs: &Path) -> io::Result<()> {
     ))
 }
 
+/// Verifies that NVIDIA compatibility databases are present in the live rootfs.
+///
+/// These are detection data only; no NVIDIA driver is installed here.
+pub(super) fn verify_nvidia_pci_id_databases(rootfs: &Path) -> io::Result<()> {
+    for name in [
+        "nvidia.ids",
+        "nvidia-tesla-535.ids",
+        "nvidia-legacy-390xx.ids",
+    ] {
+        let path = rootfs.join("usr/share/nvidia").join(name);
+
+        let metadata = fs::symlink_metadata(&path).map_err(|error| {
+            io::Error::other(format!(
+                "rootfs NVIDIA database verification failed: {}: {error}",
+                path.display()
+            ))
+        })?;
+
+        if !metadata.file_type().is_file() || metadata.len() == 0 {
+            return Err(io::Error::other(format!(
+                "rootfs NVIDIA database verification failed: {} is not a nonempty regular file",
+                path.display()
+            )));
+        }
+    }
+
+    Ok(())
+}
+
 pub(super) fn verify_setpriv(rootfs: &Path) -> io::Result<()> {
     use std::os::unix::fs::PermissionsExt;
 
@@ -111,6 +140,75 @@ mod tests {
         fs::create_dir_all(&dpkg).expect("create fixture");
         fs::write(dpkg.join("status"), status).expect("write status");
         root
+    }
+
+    fn create_nvidia_databases(root: &Path) {
+        let directory = root.join("usr/share/nvidia");
+        fs::create_dir_all(&directory).expect("create NVIDIA database directory");
+
+        for name in [
+            "nvidia.ids",
+            "nvidia-tesla-535.ids",
+            "nvidia-legacy-390xx.ids",
+        ] {
+            fs::write(directory.join(name), b"10DE1340\\n").expect("write NVIDIA database fixture");
+        }
+    }
+
+    #[test]
+    fn accepts_nonempty_nvidia_databases() {
+        let root = fixture("");
+        create_nvidia_databases(&root);
+
+        assert!(verify_nvidia_pci_id_databases(&root).is_ok());
+
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn rejects_missing_nvidia_database() {
+        let root = fixture("");
+        create_nvidia_databases(&root);
+
+        fs::remove_file(root.join("usr/share/nvidia/nvidia-tesla-535.ids"))
+            .expect("remove database fixture");
+
+        let error = verify_nvidia_pci_id_databases(&root).expect_err("missing database must fail");
+
+        assert!(error.to_string().contains("nvidia-tesla-535.ids"));
+
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn rejects_empty_nvidia_database() {
+        let root = fixture("");
+        create_nvidia_databases(&root);
+
+        fs::write(root.join("usr/share/nvidia/nvidia.ids"), b"").expect("empty database fixture");
+
+        let error = verify_nvidia_pci_id_databases(&root).expect_err("empty database must fail");
+
+        assert!(error.to_string().contains("nvidia.ids"));
+
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn rejects_symlinked_nvidia_database() {
+        let root = fixture("");
+        create_nvidia_databases(&root);
+
+        let path = root.join("usr/share/nvidia/nvidia-legacy-390xx.ids");
+        fs::remove_file(&path).expect("remove database fixture");
+        std::os::unix::fs::symlink("nvidia.ids", &path).expect("create database symlink");
+
+        let error =
+            verify_nvidia_pci_id_databases(&root).expect_err("symlinked database must fail");
+
+        assert!(error.to_string().contains("nvidia-legacy-390xx.ids"));
+
+        fs::remove_dir_all(root).expect("cleanup");
     }
 
     #[test]

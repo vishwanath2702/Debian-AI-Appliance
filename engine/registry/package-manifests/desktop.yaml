@@ -73,6 +73,10 @@ packages:
   - pciutils
   - usbutils
 
+  # NVIDIA PCI ID databases for hardware compatibility classification.
+  # Does not install NVIDIA GPU drivers.
+  - nvidia-detect
+
   # Desktop integration and networking
   - xdg-utils
   - network-manager

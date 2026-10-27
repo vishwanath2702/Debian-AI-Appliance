@@ -1733,6 +1733,8 @@ pub struct PreparedInstallation {
     storage: DiscoveredStorage,
     plans: Vec<Plan>,
     system_image: PathBuf,
+    gpu_driver_decision: crate::GpuDriverDecision,
+    gpu_compatibility_records: Vec<crate::GpuCompatibilityRecord>,
 }
 
 impl PreparedInstallation {
@@ -1749,8 +1751,42 @@ impl PreparedInstallation {
             storage,
             plans,
             system_image,
+            gpu_driver_decision: crate::GpuDriverDecision::NotEvaluated,
+            gpu_compatibility_records: Vec::new(),
         }
     }
+
+    /// Attaches the GPU driver-evaluation decision.
+    #[must_use]
+    pub fn with_gpu_driver_decision(mut self, decision: crate::GpuDriverDecision) -> Self {
+        self.gpu_driver_decision = decision;
+        self
+    }
+
+    /// Returns the GPU driver-evaluation decision.
+    #[must_use]
+    pub const fn gpu_driver_decision(&self) -> crate::GpuDriverDecision {
+        self.gpu_driver_decision
+    }
+
+    /// Attaches independently evaluated GPU driver-family records.
+    ///
+    /// These records do not authorize driver installation.
+    #[must_use]
+    pub fn with_gpu_compatibility_records(
+        mut self,
+        records: Vec<crate::GpuCompatibilityRecord>,
+    ) -> Self {
+        self.gpu_compatibility_records = records;
+        self
+    }
+
+    /// Returns the recorded GPU driver-family classifications.
+    #[must_use]
+    pub fn gpu_compatibility_records(&self) -> &[crate::GpuCompatibilityRecord] {
+        &self.gpu_compatibility_records
+    }
+
     /// Builds the ordered installation-operation plan.
     #[must_use]
     pub fn installation_plan(&self) -> InstallationPlan {
@@ -1868,6 +1904,27 @@ impl PreparedApplianceInstallation {
             localization: None,
             appliance_identity: None,
         }
+    }
+
+    /// Attaches the evaluated GPU driver decision to the installation.
+    ///
+    /// This does not install or select a GPU driver.
+    #[must_use]
+    pub fn with_gpu_driver_decision(mut self, decision: crate::GpuDriverDecision) -> Self {
+        self.installation = self.installation.with_gpu_driver_decision(decision);
+        self
+    }
+
+    /// Attaches independently evaluated GPU driver-family records.
+    ///
+    /// These records do not authorize driver installation.
+    #[must_use]
+    pub fn with_gpu_compatibility_records(
+        mut self,
+        records: Vec<crate::GpuCompatibilityRecord>,
+    ) -> Self {
+        self.installation = self.installation.with_gpu_compatibility_records(records);
+        self
     }
 
     /// Attaches confirmed localization selections.
@@ -4235,6 +4292,53 @@ mod tests {
     }
 
     #[test]
+    fn prepared_installation_defaults_to_unevaluated_gpu() {
+        let intent = InstallationIntent::new(
+            "desktop",
+            DiscoveredStorageId::new("serial:usb-disk"),
+            model::UserConfiguration::new("admin", "DAIA Administrator"),
+        );
+
+        let storage = DiscoveredStorage::new("serial:usb-disk", StorageKind::Removable, "/dev/sdb");
+
+        let prepared = PreparedInstallation::new(
+            intent,
+            storage,
+            Vec::new(),
+            PathBuf::from("/run/live/medium/live/filesystem.squashfs"),
+        );
+
+        assert_eq!(
+            prepared.gpu_driver_decision(),
+            crate::GpuDriverDecision::NotEvaluated
+        );
+    }
+
+    #[test]
+    fn prepared_installation_preserves_explicit_gpu_decision() {
+        let intent = InstallationIntent::new(
+            "desktop",
+            DiscoveredStorageId::new("serial:usb-disk"),
+            model::UserConfiguration::new("admin", "DAIA Administrator"),
+        );
+
+        let storage = DiscoveredStorage::new("serial:usb-disk", StorageKind::Removable, "/dev/sdb");
+
+        let prepared = PreparedInstallation::new(
+            intent,
+            storage,
+            Vec::new(),
+            PathBuf::from("/run/live/medium/live/filesystem.squashfs"),
+        )
+        .with_gpu_driver_decision(crate::GpuDriverDecision::EvaluateNvidiaDriver);
+
+        assert_eq!(
+            prepared.gpu_driver_decision(),
+            crate::GpuDriverDecision::EvaluateNvidiaDriver
+        );
+    }
+
+    #[test]
     fn installation_plan_carries_system_image() {
         let image = PathBuf::from("/run/live/medium/live/filesystem.squashfs");
 
@@ -5073,6 +5177,75 @@ mod tests {
                 "esp".to_owned(),
                 "on".to_owned(),
             ]]
+        );
+    }
+}
+
+#[cfg(test)]
+mod prepared_gpu_compatibility_tests {
+    use super::{DiscoveredStorage, DiscoveredStorageId, InstallationIntent, PreparedInstallation};
+    use crate::{GpuCompatibilityRecord, GpuDriverDecision, NvidiaDriverCompatibility};
+    use model::StorageKind;
+    use std::path::PathBuf;
+
+    fn prepared() -> PreparedInstallation {
+        let intent = InstallationIntent::new(
+            "desktop",
+            DiscoveredStorageId::new("serial:test-disk"),
+            model::UserConfiguration::new("admin", "DAIA Administrator"),
+        );
+
+        let storage =
+            DiscoveredStorage::new("serial:test-disk", StorageKind::Removable, "/dev/test-disk");
+
+        PreparedInstallation::new(
+            intent,
+            storage,
+            Vec::new(),
+            PathBuf::from("/test/filesystem.squashfs"),
+        )
+    }
+
+    #[test]
+    fn defaults_to_empty_gpu_compatibility_records() {
+        let installation = prepared();
+
+        assert!(installation.gpu_compatibility_records().is_empty());
+        assert_eq!(
+            installation.gpu_driver_decision(),
+            GpuDriverDecision::NotEvaluated,
+        );
+    }
+
+    #[test]
+    fn preserves_multiple_gpu_compatibility_records_in_order() {
+        let records = vec![
+            GpuCompatibilityRecord::new("0000:01:00.0", NvidiaDriverCompatibility::StandardDriver),
+            GpuCompatibilityRecord::new("0000:02:00.0", NvidiaDriverCompatibility::Tesla535Driver),
+        ];
+
+        let installation = prepared().with_gpu_compatibility_records(records.clone());
+
+        assert_eq!(installation.gpu_compatibility_records(), records);
+    }
+
+    #[test]
+    fn gpu_compatibility_records_do_not_change_driver_decision() {
+        let installation = prepared()
+            .with_gpu_driver_decision(GpuDriverDecision::EvaluateNvidiaDriver)
+            .with_gpu_compatibility_records(vec![GpuCompatibilityRecord::new(
+                "0000:01:00.0",
+                NvidiaDriverCompatibility::UnsupportedLegacy,
+            )]);
+
+        assert_eq!(
+            installation.gpu_driver_decision(),
+            GpuDriverDecision::EvaluateNvidiaDriver,
+        );
+
+        assert_eq!(
+            installation.gpu_compatibility_records()[0].compatibility(),
+            NvidiaDriverCompatibility::UnsupportedLegacy,
         );
     }
 }

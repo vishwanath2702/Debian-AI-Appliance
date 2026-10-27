@@ -219,6 +219,7 @@ packages:
                 "htop".to_owned(),
                 "pciutils".to_owned(),
                 "usbutils".to_owned(),
+                "nvidia-detect".to_owned(),
                 "xdg-utils".to_owned(),
                 "network-manager".to_owned(),
                 "network-manager-gnome".to_owned(),

@@ -128,6 +128,46 @@ impl GpuFacts {
     pub fn device_id(&self) -> &str {
         &self.device_id
     }
+
+    /// Matches this GPU against Debian-format NVIDIA PCI IDs.
+    ///
+    /// Each entry contains four vendor and four device hex digits.
+    /// Membership does not establish package availability.
+    #[must_use]
+    pub fn matches_nvidia_pci_id_database(&self, database: &str) -> bool {
+        fn pci_component(value: &str) -> Option<&str> {
+            let digits = value
+                .strip_prefix("0x")
+                .or_else(|| value.strip_prefix("0X"))?;
+
+            (digits.len() == 4 && digits.bytes().all(|byte| byte.is_ascii_hexdigit()))
+                .then_some(digits)
+        }
+
+        let Some(vendor) = pci_component(&self.vendor_id) else {
+            return false;
+        };
+        let Some(device) = pci_component(&self.device_id) else {
+            return false;
+        };
+
+        database.lines().any(|line| {
+            let entry = line.trim();
+
+            entry.len() == 8
+                && entry.bytes().all(|byte| byte.is_ascii_hexdigit())
+                && entry[..4].eq_ignore_ascii_case(vendor)
+                && entry[4..].eq_ignore_ascii_case(device)
+        })
+    }
+
+    /// Returns whether the GPU has NVIDIA's PCI vendor identifier.
+    ///
+    /// This identifies the vendor, not driver compatibility.
+    #[must_use]
+    pub fn is_nvidia(&self) -> bool {
+        self.vendor_id.eq_ignore_ascii_case("0x10de")
+    }
 }
 
 /// Hardware information discovered from the current system.
@@ -743,5 +783,90 @@ mod tests {
         let facts = discover_memory().expect("discover memory facts");
 
         assert!(facts.total_bytes() > 0);
+    }
+}
+
+#[cfg(test)]
+mod gpu_vendor_classification_tests {
+    use super::GpuFacts;
+
+    #[test]
+    fn recognizes_nvidia_pci_vendor() {
+        let gpu = GpuFacts::new("0000:01:00.0", "0x10de", "0x2684");
+        assert!(gpu.is_nvidia());
+    }
+
+    #[test]
+    fn recognizes_uppercase_nvidia_pci_vendor() {
+        let gpu = GpuFacts::new("0000:01:00.0", "0X10DE", "0x2684");
+        assert!(gpu.is_nvidia());
+    }
+
+    #[test]
+    fn rejects_other_gpu_vendors() {
+        for vendor in ["0x8086", "0x1002", "0x1234"] {
+            let gpu = GpuFacts::new("0000:00:02.0", vendor, "0x0001");
+            assert!(!gpu.is_nvidia());
+        }
+    }
+}
+
+#[cfg(test)]
+mod nvidia_pci_id_database_tests {
+    use super::GpuFacts;
+
+    #[test]
+    fn matches_exact_nvidia_pci_id() {
+        let gpu = GpuFacts::new("gpu0", "0x10de", "0x1340");
+        assert!(gpu.matches_nvidia_pci_id_database("10DE1340\n10DE1341\n"));
+    }
+
+    #[test]
+    fn matches_mixed_case_pci_identifiers() {
+        let gpu = GpuFacts::new("gpu0", "0X10DE", "0x1e37");
+        assert!(gpu.matches_nvidia_pci_id_database("10de1E37\n"));
+    }
+
+    #[test]
+    fn rejects_other_device_ids() {
+        let gpu = GpuFacts::new("gpu0", "0x10de", "0x1342");
+        assert!(!gpu.matches_nvidia_pci_id_database("10DE1340\n10DE1341\n"));
+    }
+
+    #[test]
+    fn rejects_other_vendor_ids() {
+        let gpu = GpuFacts::new("gpu0", "0x8086", "0x1340");
+        assert!(!gpu.matches_nvidia_pci_id_database("10DE1340\n"));
+    }
+
+    #[test]
+    fn rejects_partial_database_entries() {
+        let gpu = GpuFacts::new("gpu0", "0x10de", "0x1340");
+        assert!(!gpu.matches_nvidia_pci_id_database("10DE134\n10DE13400\n"));
+    }
+
+    #[test]
+    fn rejects_malformed_gpu_identifiers() {
+        for (vendor, device) in [
+            ("10de", "0x1340"),
+            ("0x10de", "1340"),
+            ("0x10de", "0x134"),
+            ("0x10de", "0xZZZZ"),
+        ] {
+            let gpu = GpuFacts::new("gpu0", vendor, device);
+            assert!(!gpu.matches_nvidia_pci_id_database("10DE1340\n"));
+        }
+    }
+
+    #[test]
+    fn rejects_malformed_database_entries() {
+        let gpu = GpuFacts::new("gpu0", "0x10de", "0x1340");
+        assert!(!gpu.matches_nvidia_pci_id_database("10DE134Z\n10DE13400\n"));
+    }
+
+    #[test]
+    fn accepts_whitespace_around_database_entries() {
+        let gpu = GpuFacts::new("gpu0", "0x10de", "0x1340");
+        assert!(gpu.matches_nvidia_pci_id_database("  10DE1340  \n"));
     }
 }
