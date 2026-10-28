@@ -252,6 +252,139 @@ impl SystemContentImportFileSystem {
         }
     }
 }
+/// Copies bytes while reporting cumulative progress.
+fn copy_with_progress<R, W, F>(
+    reader: &mut R,
+    writer: &mut W,
+    mut progress: F,
+) -> std::io::Result<u64>
+where
+    R: std::io::Read,
+    W: std::io::Write,
+    F: FnMut(u64),
+{
+    let mut buffer = [0_u8; 64 * 1024];
+    let mut copied = 0_u64;
+
+    loop {
+        let count = match reader.read(&mut buffer) {
+            Ok(0) => return Ok(copied),
+            Ok(count) => count,
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(error) => return Err(error),
+        };
+
+        writer.write_all(&buffer[..count])?;
+        copied += count as u64;
+        progress(copied);
+    }
+}
+
+#[cfg(test)]
+mod content_copy_progress_tests {
+    use super::copy_with_progress;
+    use std::io::{self, Cursor, Write};
+
+    #[test]
+    fn empty_copy_reports_zero_bytes() {
+        let mut input = Cursor::new(Vec::<u8>::new());
+        let mut output = Vec::new();
+        let mut updates = Vec::new();
+
+        let copied = copy_with_progress(&mut input, &mut output, |bytes| updates.push(bytes))
+            .expect("copy empty content");
+
+        assert_eq!(copied, 0);
+        assert!(output.is_empty());
+        assert!(updates.is_empty());
+    }
+
+    #[test]
+    fn copy_reports_cumulative_bytes_across_chunks() {
+        let data = vec![0x5a; 150_000];
+        let mut input = Cursor::new(data.clone());
+        let mut output = Vec::new();
+        let mut updates = Vec::new();
+
+        let copied = copy_with_progress(&mut input, &mut output, |bytes| updates.push(bytes))
+            .expect("copy content");
+
+        assert_eq!(copied, data.len() as u64);
+        assert_eq!(output, data);
+        assert_eq!(updates, vec![65_536, 131_072, 150_000]);
+    }
+
+    struct FailingWriter {
+        accepted: usize,
+    }
+
+    impl Write for FailingWriter {
+        fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+            if self.accepted >= 4 {
+                return Err(io::Error::other("simulated write failure"));
+            }
+
+            let count = bytes.len().min(4 - self.accepted);
+            self.accepted += count;
+            Ok(count)
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn failed_write_does_not_report_unfinished_chunk() {
+        let mut input = Cursor::new(vec![0x5a; 16]);
+        let mut output = FailingWriter { accepted: 0 };
+        let mut updates = Vec::new();
+
+        let result = copy_with_progress(&mut input, &mut output, |bytes| updates.push(bytes));
+
+        assert!(result.is_err());
+        assert_eq!(output.accepted, 4);
+        assert!(updates.is_empty());
+    }
+}
+
+#[cfg(test)]
+mod content_filesystem_progress_tests {
+    use super::SystemContentImportFileSystem;
+    use model::{ContentImportDestination, ContentSourceId, ExternalContentItem};
+
+    #[test]
+    fn filesystem_copy_reports_real_cumulative_bytes() {
+        let workspace = tempfile::tempdir().expect("temporary workspace");
+        let source = workspace.path().join("progress-test.gguf");
+        let destination = workspace.path().join("imported");
+
+        let bytes = vec![0x5a; 150_000];
+        std::fs::write(&source, &bytes).expect("write source");
+
+        let item = ExternalContentItem::new(ContentSourceId::new("progress-test"), source);
+
+        let destination_intent =
+            ContentImportDestination::new(destination.to_str().expect("destination UTF-8"));
+
+        let mut filesystem = SystemContentImportFileSystem::new();
+        let mut updates = Vec::new();
+
+        let imported = filesystem
+            .copy_item_with_progress(&item, &destination_intent, &mut |copied| {
+                updates.push(copied)
+            })
+            .expect("copy content with progress");
+
+        assert_eq!(
+            std::fs::read(imported.path()).expect("read imported content"),
+            bytes
+        );
+
+        assert_eq!(updates, vec![65_536, 131_072, 150_000]);
+    }
+}
+
 #[cfg(target_os = "linux")]
 fn open_content_import_directory(path: &std::path::Path) -> std::io::Result<std::os::fd::OwnedFd> {
     use rustix::fs::{Mode, OFlags};
@@ -339,14 +472,20 @@ fn create_content_import_temporary_file(
     ))
 }
 
-impl ContentImportFileSystem for SystemContentImportFileSystem {
-    type Error = std::io::Error;
-
-    fn copy_item(
+impl SystemContentImportFileSystem {
+    /// Copies one content item and reports cumulative bytes transferred.
+    ///
+    /// The callback runs only after a complete write to the destination.
+    ///
+    /// # Errors
+    ///
+    /// Returns an I/O error if validation, copying, or publication fails.
+    pub fn copy_item_with_progress(
         &mut self,
         item: &ExternalContentItem,
         destination: &ContentImportDestination,
-    ) -> Result<ImportedContentItem, Self::Error> {
+        progress: &mut dyn FnMut(u64),
+    ) -> Result<ImportedContentItem, std::io::Error> {
         let file_name = item.path().file_name().ok_or_else(|| {
             std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
@@ -487,7 +626,7 @@ impl ContentImportFileSystem for SystemContentImportFileSystem {
                 create_content_import_temporary_file(&destination_directory_fd)?;
 
             let result = (|| -> std::io::Result<()> {
-                std::io::copy(&mut source_file, &mut temporary_file)?;
+                copy_with_progress(&mut source_file, &mut temporary_file, &mut *progress)?;
 
                 temporary_file.set_permissions(std::fs::Permissions::from_mode(0o644))?;
 
@@ -530,7 +669,9 @@ impl ContentImportFileSystem for SystemContentImportFileSystem {
 
             let mut destination_file = destination_options.open(&destination)?;
 
-            if let Err(error) = std::io::copy(&mut source_file, &mut destination_file) {
+            if let Err(error) =
+                copy_with_progress(&mut source_file, &mut destination_file, &mut *progress)
+            {
                 drop(destination_file);
                 let _ = std::fs::remove_file(&destination);
                 return Err(error);
@@ -546,6 +687,18 @@ impl ContentImportFileSystem for SystemContentImportFileSystem {
         Ok(ImportedContentItem::new(item.id().clone(), destination))
     }
 }
+
+impl ContentImportFileSystem for SystemContentImportFileSystem {
+    type Error = std::io::Error;
+
+    fn copy_item(
+        &mut self,
+        item: &ExternalContentItem,
+        destination: &ContentImportDestination,
+    ) -> Result<ImportedContentItem, Self::Error> {
+        self.copy_item_with_progress(item, destination, &mut |_| {})
+    }
+}
 /// Executes content import operations against the host system.
 #[derive(Clone, Debug)]
 pub struct SystemContentImportOperationExecutor<F> {
@@ -559,6 +712,25 @@ impl<F> SystemContentImportOperationExecutor<F> {
         Self { file_system }
     }
 }
+impl SystemContentImportOperationExecutor<SystemContentImportFileSystem> {
+    /// Executes a content import operation while reporting cumulative copied bytes.
+    ///
+    /// # Errors
+    ///
+    /// Returns an I/O error if the import operation fails.
+    pub fn execute_operation_with_progress(
+        &mut self,
+        operation: &ContentImportOperation,
+        progress: &mut dyn FnMut(u64),
+    ) -> Result<ImportedContentItem, std::io::Error> {
+        match operation {
+            ContentImportOperation::ImportItem { item, destination } => self
+                .file_system
+                .copy_item_with_progress(item, destination, progress),
+        }
+    }
+}
+
 impl<F> ContentImportOperationExecutor for SystemContentImportOperationExecutor<F>
 where
     F: ContentImportFileSystem,
@@ -1134,13 +1306,40 @@ impl Engine {
         model_realization_intents: &[model::ModelRealizationIntent],
         root: impl AsRef<std::path::Path>,
     ) -> Result<(), std::io::Error> {
+        self.apply_post_install_content_import_with_progress(
+            prepared,
+            model_realization_intents,
+            root,
+            &mut |_| {},
+        )
+    }
+
+    /// Applies a prepared content import while reporting cumulative copied bytes.
+    ///
+    /// The callback reports progress for each imported item.
+    /// Appliance state is persisted only after all imports succeed.
+    ///
+    /// # Errors
+    ///
+    /// Returns an I/O error if content import or state persistence fails.
+    pub fn apply_post_install_content_import_with_progress(
+        &self,
+        prepared: &PreparedContentImport,
+        model_realization_intents: &[model::ModelRealizationIntent],
+        root: impl AsRef<std::path::Path>,
+        progress: &mut dyn FnMut(u64),
+    ) -> Result<(), std::io::Error> {
         let root = root.as_ref();
 
         let mut executor = SystemContentImportOperationExecutor::new(
             SystemContentImportFileSystem::with_root(root),
         );
 
-        let imported_content = prepared.execute(&mut executor)?;
+        let mut imported_content = Vec::new();
+
+        for operation in prepared.operations() {
+            imported_content.push(executor.execute_operation_with_progress(&operation, progress)?);
+        }
 
         let mut appliance_state = state::ApplianceState::read_from_root(root)?;
         appliance_state.apply_content_imports(imported_content, model_realization_intents);
@@ -1932,6 +2131,88 @@ mod tests {
             realization.content().path(),
             root.join("var/lib/daia/content/model.gguf")
         );
+    }
+
+    #[test]
+    fn post_install_content_import_reports_progress_and_persists_state() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let source = directory.path().join("progress-model.gguf");
+        let root = directory.path().join("root");
+
+        let bytes = vec![0x5a; 150_000];
+        std::fs::write(&source, &bytes).expect("source model should be written");
+
+        let item =
+            ExternalContentItem::new(ContentSourceId::new("local-models-directory"), &source);
+
+        let engine = Engine::from_registry(desktop_registry());
+
+        let prepared = engine
+            .prepare_content_import(
+                ContentImportIntent::new(vec![item.id().clone()]),
+                vec![item.clone()],
+                ContentImportDestination::new("/var/lib/daia/content"),
+            )
+            .expect("content import should prepare");
+
+        let realization_intent = model::ModelRealizationIntent::new(
+            model::ModelRealizationId::new("progress-model"),
+            InferenceEngineId::ollama(),
+            item.id().clone(),
+        );
+
+        let existing_id = ExternalContentItemId::new("existing-repository:/models/existing.gguf");
+
+        let mut appliance_state = state::ApplianceState::new("desktop");
+        appliance_state.record_imported_content(ImportedContentItem::new(
+            existing_id.clone(),
+            "/var/lib/daia/content/existing.gguf",
+        ));
+        appliance_state
+            .write_to_root(&root)
+            .expect("initial appliance state should be written");
+
+        let mut updates = Vec::new();
+
+        engine
+            .apply_post_install_content_import_with_progress(
+                &prepared,
+                &[realization_intent],
+                &root,
+                &mut |copied| updates.push(copied),
+            )
+            .expect("progress-aware import should succeed");
+
+        assert_eq!(updates, vec![65_536, 131_072, 150_000]);
+
+        let imported_path = root.join("var/lib/daia/content/progress-model.gguf");
+        assert_eq!(
+            std::fs::read(&imported_path).expect("imported content should be readable"),
+            bytes
+        );
+
+        let appliance_state = state::ApplianceState::read_from_root(&root)
+            .expect("updated appliance state should be readable");
+
+        assert_eq!(appliance_state.imported_content().len(), 2);
+        assert!(
+            appliance_state
+                .imported_content()
+                .iter()
+                .any(|content| content.source_item_id() == &existing_id),
+            "existing imported content must be preserved"
+        );
+
+        assert_eq!(appliance_state.model_realizations().len(), 1);
+
+        let realization = &appliance_state.model_realizations()[0];
+        assert_eq!(
+            realization.id(),
+            &model::ModelRealizationId::new("progress-model")
+        );
+        assert_eq!(realization.engine(), &InferenceEngineId::ollama());
+        assert_eq!(realization.content().source_item_id(), item.id());
+        assert_eq!(realization.content().path(), imported_path);
     }
 
     #[test]

@@ -16,6 +16,7 @@ packages:
 
   # DAIA graphical model importer
   - kdialog
+  - qdbus-qt6
   - pkexec
   - ntfs-3g
 

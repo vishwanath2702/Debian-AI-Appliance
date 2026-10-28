@@ -149,6 +149,18 @@ fn run_restricted_model_list(device: &str) -> ExitCode {
     }
 }
 
+fn format_model_import_total_bytes(total: u64) -> String {
+    format!("DAIA_PROGRESS_TOTAL_BYTES={total}")
+}
+
+fn format_model_import_progress(copied: u64) -> String {
+    format!("DAIA_PROGRESS_BYTES={copied}")
+}
+
+fn format_model_import_registration_phase() -> &'static str {
+    "DAIA_PROGRESS_PHASE=registering"
+}
+
 #[allow(dead_code)]
 fn run_restricted_model_import(
     requested_device: &str,
@@ -197,13 +209,37 @@ fn run_restricted_model_import(
     let mut executor =
         engine::OllamaModelRealizationExecutor::new(engine::RestrictedOllamaRunner::default());
 
-    match application::import_and_realize_selected_model_on_volume_with(
+    let mut progress = |copied: u64| {
+        use std::io::Write;
+
+        println!("{}", format_model_import_progress(copied));
+        let _ = std::io::stdout().flush();
+    };
+
+    let mut total_size = |total: u64| {
+        use std::io::Write;
+
+        println!("{}", format_model_import_total_bytes(total));
+        let _ = std::io::stdout().flush();
+    };
+
+    let mut registering = || {
+        use std::io::Write;
+
+        println!("{}", format_model_import_registration_phase());
+        let _ = std::io::stdout().flush();
+    };
+
+    match application::import_and_realize_selected_model_on_volume_with_full_status(
         &mounter,
         &volume,
         Path::new(filename),
         model_name,
         Path::new("/"),
         &mut executor,
+        &mut progress,
+        &mut total_size,
+        &mut registering,
     ) {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
@@ -340,6 +376,42 @@ mod tests {
     use super::{
         validate_argument_count, validate_device_path, validate_gguf_filename, validate_model_name,
     };
+
+    #[test]
+    fn model_import_registration_protocol_reports_phase() {
+        assert_eq!(
+            super::format_model_import_registration_phase(),
+            "DAIA_PROGRESS_PHASE=registering"
+        );
+    }
+
+    #[test]
+    fn model_import_total_size_protocol_reports_exact_bytes() {
+        assert_eq!(
+            super::format_model_import_total_bytes(0),
+            "DAIA_PROGRESS_TOTAL_BYTES=0"
+        );
+        assert_eq!(
+            super::format_model_import_total_bytes(150_000),
+            "DAIA_PROGRESS_TOTAL_BYTES=150000"
+        );
+    }
+
+    #[test]
+    fn model_import_progress_protocol_reports_exact_bytes() {
+        assert_eq!(
+            super::format_model_import_progress(0),
+            "DAIA_PROGRESS_BYTES=0"
+        );
+        assert_eq!(
+            super::format_model_import_progress(65_536),
+            "DAIA_PROGRESS_BYTES=65536"
+        );
+        assert_eq!(
+            super::format_model_import_progress(150_000),
+            "DAIA_PROGRESS_BYTES=150000"
+        );
+    }
 
     #[test]
     fn privileged_directory_rejects_world_writable_destination() {

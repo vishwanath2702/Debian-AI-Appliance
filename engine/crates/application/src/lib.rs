@@ -107,8 +107,10 @@ pub use post_install_models::{
     apply_post_install_model_content_import, apply_post_install_model_import_with,
     discover_models_on_fresh_volume_with, discover_models_on_post_install_volume,
     discover_models_on_selected_volume_with, import_and_realize_selected_model_on_volume_with,
-    import_selected_model_on_volume_with, inspect_selected_model_on_volume_with,
-    realize_models_with, resume_model_realization_with,
+    import_and_realize_selected_model_on_volume_with_full_status,
+    import_and_realize_selected_model_on_volume_with_progress,
+    import_and_realize_selected_model_on_volume_with_status, import_selected_model_on_volume_with,
+    inspect_selected_model_on_volume_with, realize_models_with, resume_model_realization_with,
 };
 
 pub use post_install_models::discover_post_install_model_volumes;

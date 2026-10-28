@@ -353,6 +353,61 @@ pub fn import_selected_model_on_volume_with<M>(
 where
     M: inspector::ContentVolumeMounter,
 {
+    import_selected_model_on_volume_with_progress(
+        mounter,
+        volume,
+        filename,
+        model_name,
+        root,
+        &mut |_| {},
+    )
+}
+
+/// Imports a selected GGUF from a read-only volume with copy progress.
+///
+/// Progress reports cumulative bytes copied for the selected model.
+/// The source volume is unmounted before this function returns.
+///
+/// # Errors
+///
+/// Returns an error for invalid selection, import, state, or cleanup failures.
+pub fn import_selected_model_on_volume_with_progress<M>(
+    mounter: &M,
+    volume: &model::DiscoveredContentVolume,
+    filename: &std::path::Path,
+    model_name: &str,
+    root: &std::path::Path,
+    progress: &mut dyn FnMut(u64),
+) -> Result<(), String>
+where
+    M: inspector::ContentVolumeMounter,
+{
+    import_selected_model_on_volume_with_size(
+        mounter,
+        volume,
+        filename,
+        model_name,
+        root,
+        progress,
+        &mut |_| {},
+    )
+}
+
+/// Imports a selected GGUF while reporting validated total size and copied bytes.
+///
+/// The total-size callback runs after GGUF inspection and before copying.
+pub fn import_selected_model_on_volume_with_size<M>(
+    mounter: &M,
+    volume: &model::DiscoveredContentVolume,
+    filename: &std::path::Path,
+    model_name: &str,
+    root: &std::path::Path,
+    progress: &mut dyn FnMut(u64),
+    total_size: &mut dyn FnMut(u64),
+) -> Result<(), String>
+where
+    M: inspector::ContentVolumeMounter,
+{
     if model_name.trim().is_empty() {
         return Err("DAIA model name cannot be empty".to_owned());
     }
@@ -375,8 +430,10 @@ where
     with_model_content_volume(mounter, volume, |mountpoint| {
         let path = resolve_selected_model_path(mountpoint, filename)?;
 
-        inspector::inspect_gguf(&path)
+        let metadata = inspector::inspect_gguf(&path)
             .map_err(|error| format!("Error inspecting selected GGUF: {error}"))?;
+
+        total_size(metadata.size_bytes());
 
         let item = model::ExternalContentItem::new(
             model::ContentSourceId::new("post-install-model-volume"),
@@ -399,7 +456,13 @@ where
             item.id().clone(),
         );
 
-        apply_post_install_model_content_import(&engine, &prepared, &[realization_intent], root)
+        apply_post_install_model_content_import_with_progress(
+            &engine,
+            &prepared,
+            &[realization_intent],
+            root,
+            progress,
+        )
     })
 }
 
@@ -423,7 +486,115 @@ where
     E: engine::ModelRealizationExecutor,
     E::Error: std::fmt::Display,
 {
-    import_selected_model_on_volume_with(mounter, volume, filename, model_name, root)?;
+    import_and_realize_selected_model_on_volume_with_progress(
+        mounter,
+        volume,
+        filename,
+        model_name,
+        root,
+        executor,
+        &mut |_| {},
+    )
+}
+
+/// Imports a selected GGUF with byte progress, unmounts, then realizes it.
+///
+/// Progress represents bytes copied, not completion of Ollama registration.
+/// Realization begins only after successful source-volume cleanup.
+///
+/// # Errors
+///
+/// Returns an error for import, cleanup, state, or realization failures.
+pub fn import_and_realize_selected_model_on_volume_with_progress<M, E>(
+    mounter: &M,
+    volume: &model::DiscoveredContentVolume,
+    filename: &std::path::Path,
+    model_name: &str,
+    root: &std::path::Path,
+    executor: &mut E,
+    progress: &mut dyn FnMut(u64),
+) -> Result<(), String>
+where
+    M: inspector::ContentVolumeMounter,
+    E: engine::ModelRealizationExecutor,
+    E::Error: std::fmt::Display,
+{
+    import_and_realize_selected_model_on_volume_with_status(
+        mounter,
+        volume,
+        filename,
+        model_name,
+        root,
+        executor,
+        progress,
+        &mut || {},
+    )
+}
+
+/// Imports a selected GGUF and reports the start of Ollama registration.
+///
+/// The registration callback runs after successful source-volume cleanup
+/// and model-state validation, immediately before model realization.
+///
+/// # Errors
+///
+/// Returns an error for import, cleanup, state, or realization failures.
+pub fn import_and_realize_selected_model_on_volume_with_status<M, E>(
+    mounter: &M,
+    volume: &model::DiscoveredContentVolume,
+    filename: &std::path::Path,
+    model_name: &str,
+    root: &std::path::Path,
+    executor: &mut E,
+    progress: &mut dyn FnMut(u64),
+    registering: &mut dyn FnMut(),
+) -> Result<(), String>
+where
+    M: inspector::ContentVolumeMounter,
+    E: engine::ModelRealizationExecutor,
+    E::Error: std::fmt::Display,
+{
+    import_and_realize_selected_model_on_volume_with_full_status(
+        mounter,
+        volume,
+        filename,
+        model_name,
+        root,
+        executor,
+        progress,
+        &mut |_| {},
+        registering,
+    )
+}
+
+/// Imports and realizes a selected GGUF with total size, byte progress,
+/// and registration-phase callbacks.
+///
+/// Total size is reported after GGUF inspection, before copying.
+/// Registration begins only after successful source-volume cleanup.
+///
+/// # Errors
+///
+/// Returns an error for invalid selection, import, cleanup, or realization failures.
+pub fn import_and_realize_selected_model_on_volume_with_full_status<M, E>(
+    mounter: &M,
+    volume: &model::DiscoveredContentVolume,
+    filename: &std::path::Path,
+    model_name: &str,
+    root: &std::path::Path,
+    executor: &mut E,
+    progress: &mut dyn FnMut(u64),
+    total_size: &mut dyn FnMut(u64),
+    registering: &mut dyn FnMut(),
+) -> Result<(), String>
+where
+    M: inspector::ContentVolumeMounter,
+    E: engine::ModelRealizationExecutor,
+    E::Error: std::fmt::Display,
+{
+    import_selected_model_on_volume_with_size(
+        mounter, volume, filename, model_name, root, progress, total_size,
+    )?;
 
     let appliance_state = state::ApplianceState::read_from_root(root)
         .map_err(|error| format!("Error loading appliance state: {error}"))?;
@@ -441,6 +612,8 @@ where
             selected.len()
         ));
     }
+
+    registering();
 
     realize_models_with(&selected, executor)
         .map_err(|error| format!("Error realizing selected model: {error}"))
@@ -545,8 +718,36 @@ pub fn apply_post_install_model_content_import(
     model_realization_intents: &[model::ModelRealizationIntent],
     root: impl AsRef<std::path::Path>,
 ) -> Result<(), String> {
+    apply_post_install_model_content_import_with_progress(
+        engine,
+        prepared,
+        model_realization_intents,
+        root,
+        &mut |_| {},
+    )
+}
+
+/// Imports model content while reporting cumulative copied bytes.
+///
+/// Appliance state is persisted after successful copying.
+///
+/// # Errors
+///
+/// Returns an error if copying or appliance-state persistence fails.
+pub fn apply_post_install_model_content_import_with_progress(
+    engine: &engine::Engine,
+    prepared: &engine::PreparedContentImport,
+    model_realization_intents: &[model::ModelRealizationIntent],
+    root: impl AsRef<std::path::Path>,
+    progress: &mut dyn FnMut(u64),
+) -> Result<(), String> {
     engine
-        .apply_post_install_content_import(prepared, model_realization_intents, root)
+        .apply_post_install_content_import_with_progress(
+            prepared,
+            model_realization_intents,
+            root,
+            progress,
+        )
         .map_err(|error| format!("Error importing model content: {error}"))
 }
 
@@ -1328,11 +1529,13 @@ mod mounted_model_import_tests {
 
         fn execute(&mut self, realization: &model::ModelRealization) -> Result<(), Self::Error> {
             assert_eq!(realization.id().as_str(), "test-model");
-            assert_eq!(
-                *self.events.borrow(),
-                vec!["mount", "unmount"],
+            let events = self.events.borrow();
+            assert!(
+                events.as_slice() == ["mount", "unmount"]
+                    || events.as_slice() == ["mount", "unmount", "registering"],
                 "realization must happen after unmount"
             );
+            drop(events);
             self.events.borrow_mut().push("realize");
             Ok(())
         }
@@ -1399,13 +1602,17 @@ mod mounted_model_import_tests {
 
         let volume = model::DiscoveredContentVolume::new("/dev/mock1", "/dev/mock", "mock");
 
-        let result = super::import_and_realize_selected_model_on_volume_with(
+        let result = super::import_and_realize_selected_model_on_volume_with_status(
             &mounter,
             &volume,
             Path::new("model.gguf"),
             "test-model",
             &root,
             &mut executor,
+            &mut |_| {},
+            &mut || {
+                mounter.events.borrow_mut().push("registering");
+            },
         );
 
         assert!(result.is_err(), "unmount failure must propagate");
@@ -1543,6 +1750,163 @@ mod mounted_model_import_tests {
         assert_eq!(ids.len(), 2);
         assert!(ids.contains(&"existing-model"));
         assert!(ids.contains(&"test-model"));
+    }
+
+    #[test]
+    fn progress_is_reported_before_unmount_and_realization() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let mountpoint = directory.path().join("usb");
+        let root = directory.path().join("root");
+
+        std::fs::create_dir(&mountpoint).expect("create mock mountpoint");
+
+        let mut bytes = Vec::from(*b"GGUF");
+        bytes.extend_from_slice(&3_u32.to_le_bytes());
+        bytes.extend_from_slice(&0_u64.to_le_bytes());
+        bytes.extend_from_slice(&1_u64.to_le_bytes());
+
+        let key = b"general.architecture";
+        bytes.extend_from_slice(&(key.len() as u64).to_le_bytes());
+        bytes.extend_from_slice(key);
+        bytes.extend_from_slice(&8_u32.to_le_bytes());
+
+        let value = b"llama";
+        bytes.extend_from_slice(&(value.len() as u64).to_le_bytes());
+        bytes.extend_from_slice(value);
+
+        bytes.resize(150_000, 0);
+
+        std::fs::write(mountpoint.join("model.gguf"), &bytes).expect("write GGUF fixture");
+
+        state::ApplianceState::new("desktop")
+            .write_to_root(&root)
+            .expect("write initial appliance state");
+
+        let mounter = MockMounter {
+            mountpoint: &mountpoint,
+            root: &root,
+            expected_bytes: &bytes,
+            events: RefCell::new(Vec::new()),
+        };
+
+        let mut executor = OrderedExecutor {
+            events: &mounter.events,
+        };
+
+        let volume = model::DiscoveredContentVolume::new("/dev/mock1", "/dev/mock", "mock");
+
+        let mut updates = Vec::new();
+
+        super::import_and_realize_selected_model_on_volume_with_status(
+            &mounter,
+            &volume,
+            Path::new("model.gguf"),
+            "test-model",
+            &root,
+            &mut executor,
+            &mut |copied| {
+                assert_eq!(
+                    *mounter.events.borrow(),
+                    vec!["mount"],
+                    "copy progress must occur before unmount"
+                );
+                updates.push(copied);
+            },
+            &mut || {
+                assert_eq!(
+                    *mounter.events.borrow(),
+                    vec!["mount", "unmount"],
+                    "registration must begin after unmount"
+                );
+                mounter.events.borrow_mut().push("registering");
+            },
+        )
+        .expect("status-aware import and realization");
+
+        assert_eq!(updates, vec![65_536, 131_072, 150_000]);
+
+        assert_eq!(
+            *mounter.events.borrow(),
+            vec!["mount", "unmount", "registering", "realize"]
+        );
+
+        let persisted =
+            state::ApplianceState::read_from_root(&root).expect("read persisted appliance state");
+
+        assert!(
+            persisted
+                .model_realizations()
+                .iter()
+                .any(|realization| realization.id().as_str() == "test-model")
+        );
+    }
+
+    #[test]
+    fn validated_total_size_precedes_copy_progress() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let mountpoint = directory.path().join("usb");
+        let root = directory.path().join("root");
+
+        std::fs::create_dir(&mountpoint).expect("create mock mountpoint");
+
+        let mut bytes = Vec::from(*b"GGUF");
+        bytes.extend_from_slice(&3_u32.to_le_bytes());
+        bytes.extend_from_slice(&0_u64.to_le_bytes());
+        bytes.extend_from_slice(&1_u64.to_le_bytes());
+
+        let key = b"general.architecture";
+        bytes.extend_from_slice(&(key.len() as u64).to_le_bytes());
+        bytes.extend_from_slice(key);
+        bytes.extend_from_slice(&8_u32.to_le_bytes());
+
+        let value = b"llama";
+        bytes.extend_from_slice(&(value.len() as u64).to_le_bytes());
+        bytes.extend_from_slice(value);
+
+        bytes.resize(150_000, 0);
+
+        std::fs::write(mountpoint.join("model.gguf"), &bytes).expect("write GGUF fixture");
+
+        state::ApplianceState::new("desktop")
+            .write_to_root(&root)
+            .expect("write initial appliance state");
+
+        let mounter = MockMounter {
+            mountpoint: &mountpoint,
+            root: &root,
+            expected_bytes: &bytes,
+            events: RefCell::new(Vec::new()),
+        };
+
+        let volume = model::DiscoveredContentVolume::new("/dev/mock1", "/dev/mock", "mock");
+
+        let events = RefCell::new(Vec::<String>::new());
+
+        super::import_selected_model_on_volume_with_size(
+            &mounter,
+            &volume,
+            Path::new("model.gguf"),
+            "test-model",
+            &root,
+            &mut |copied| {
+                events.borrow_mut().push(format!("copied:{copied}"));
+            },
+            &mut |total| {
+                events.borrow_mut().push(format!("total:{total}"));
+            },
+        )
+        .expect("size-aware import");
+
+        assert_eq!(
+            *events.borrow(),
+            vec![
+                "total:150000",
+                "copied:65536",
+                "copied:131072",
+                "copied:150000",
+            ]
+        );
+        assert_eq!(*mounter.events.borrow(), vec!["mount", "unmount"]);
     }
 
     #[test]
