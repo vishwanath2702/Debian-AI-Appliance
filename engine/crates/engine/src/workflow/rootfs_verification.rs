@@ -45,6 +45,50 @@ pub(super) fn verify_installed_packages(rootfs: &Path, required: &[&str]) -> io:
     }
 }
 
+pub(super) fn verify_grub_modules(rootfs: &Path) -> io::Result<()> {
+    for (target, modules) in [
+        (
+            "i386-pc",
+            &[
+                "biosdisk.mod",
+                "ext2.mod",
+                "linux.mod",
+                "normal.mod",
+                "part_gpt.mod",
+            ][..],
+        ),
+        (
+            "x86_64-efi",
+            &[
+                "efi_gop.mod",
+                "ext2.mod",
+                "linux.mod",
+                "normal.mod",
+                "part_gpt.mod",
+            ][..],
+        ),
+    ] {
+        for module in modules {
+            let path = rootfs.join("usr/lib/grub").join(target).join(module);
+            let metadata = fs::symlink_metadata(&path).map_err(|error| {
+                io::Error::other(format!(
+                    "rootfs GRUB module verification failed: {}: {error}",
+                    path.display()
+                ))
+            })?;
+
+            if !metadata.file_type().is_file() || metadata.len() == 0 {
+                return Err(io::Error::other(format!(
+                    "rootfs GRUB module verification failed: {} is not a nonempty regular file",
+                    path.display()
+                )));
+            }
+        }
+    }
+
+    Ok(())
+}
+
 pub(super) fn verify_intel_8265_firmware(rootfs: &Path) -> io::Result<()> {
     for directory in ["usr/lib/firmware", "lib/firmware"] {
         let firmware_dir = rootfs.join(directory);
@@ -287,6 +331,88 @@ mod tests {
         fs::write(firmware.join("iwlwifi-8265-36.ucode"), b"").expect("empty firmware fixture");
 
         assert!(verify_intel_8265_firmware(&root).is_err());
+
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    fn create_grub_module_fixtures(root: &Path) {
+        for (target, modules) in [
+            (
+                "i386-pc",
+                &[
+                    "biosdisk.mod",
+                    "ext2.mod",
+                    "linux.mod",
+                    "normal.mod",
+                    "part_gpt.mod",
+                ][..],
+            ),
+            (
+                "x86_64-efi",
+                &[
+                    "efi_gop.mod",
+                    "ext2.mod",
+                    "linux.mod",
+                    "normal.mod",
+                    "part_gpt.mod",
+                ][..],
+            ),
+        ] {
+            let directory = root.join("usr/lib/grub").join(target);
+            fs::create_dir_all(&directory).expect("create GRUB directory");
+
+            for module in modules {
+                fs::write(directory.join(module), b"test module")
+                    .expect("write GRUB module fixture");
+            }
+        }
+    }
+
+    #[test]
+    fn accepts_bios_and_uefi_grub_modules() {
+        let root = fixture("");
+        create_grub_module_fixtures(&root);
+
+        assert!(verify_grub_modules(&root).is_ok());
+
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn rejects_missing_bios_grub_module() {
+        let root = fixture("");
+        create_grub_module_fixtures(&root);
+        fs::remove_file(root.join("usr/lib/grub/i386-pc/biosdisk.mod"))
+            .expect("remove BIOS module");
+
+        let error = verify_grub_modules(&root).expect_err("missing BIOS module must fail");
+        assert!(error.to_string().contains("biosdisk.mod"));
+
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn rejects_empty_uefi_grub_module() {
+        let root = fixture("");
+        create_grub_module_fixtures(&root);
+        fs::write(root.join("usr/lib/grub/x86_64-efi/normal.mod"), b"").expect("empty UEFI module");
+
+        let error = verify_grub_modules(&root).expect_err("empty UEFI module must fail");
+        assert!(error.to_string().contains("normal.mod"));
+
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn rejects_symlinked_grub_module() {
+        let root = fixture("");
+        create_grub_module_fixtures(&root);
+        let path = root.join("usr/lib/grub/i386-pc/normal.mod");
+        fs::remove_file(&path).expect("remove module");
+        std::os::unix::fs::symlink("linux.mod", &path).expect("create module symlink");
+
+        let error = verify_grub_modules(&root).expect_err("symlink must fail");
+        assert!(error.to_string().contains("normal.mod"));
 
         fs::remove_dir_all(root).expect("cleanup");
     }

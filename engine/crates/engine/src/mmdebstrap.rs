@@ -14,6 +14,7 @@ const BOOTSTRAP_PACKAGES: &[&str] = &[
     "ca-certificates",
     "gnupg",
     "grub-efi-amd64",
+    "grub-pc-bin",
     "efibootmgr",
     "zstd",
     "dosfstools",
@@ -311,7 +312,7 @@ mod tests {
                 OsStr::new("--mode=root"),
                 OsStr::new("--skip=check/empty"),
                 OsStr::new(
-                    "--include=ca-certificates,gnupg,grub-efi-amd64,efibootmgr,zstd,dosfstools,e2fsprogs,mmdebstrap,sudo,squashfs-tools"
+                    "--include=ca-certificates,gnupg,grub-efi-amd64,grub-pc-bin,efibootmgr,zstd,dosfstools,e2fsprogs,mmdebstrap,sudo,squashfs-tools"
                 ),
                 OsStr::new("--variant=minbase"),
                 OsStr::new("--architectures=amd64"),
@@ -337,7 +338,7 @@ mod tests {
                 OsStr::new("--mode=root"),
                 OsStr::new("--skip=check/empty"),
                 OsStr::new(
-                    "--include=ca-certificates,gnupg,grub-efi-amd64,efibootmgr,zstd,dosfstools,e2fsprogs,mmdebstrap,sudo,squashfs-tools"
+                    "--include=ca-certificates,gnupg,grub-efi-amd64,grub-pc-bin,efibootmgr,zstd,dosfstools,e2fsprogs,mmdebstrap,sudo,squashfs-tools"
                 ),
                 OsStr::new("--variant=minbase"),
                 OsStr::new("--architectures=amd64"),

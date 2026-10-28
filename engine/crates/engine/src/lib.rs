@@ -14,10 +14,11 @@ mod workflow;
 
 pub use installation::{
     DryRunInstallationExecutor, InstallationCommandRunner, InstallationExecutor,
-    InstallationOperation, InstallationOperationExecutor, InstallationPlan,
-    PreparedApplianceInstallation, PreparedInstallation, ProcessInstallationCommandRunner,
-    SystemInstallationOperationExecutor, default_installation_mounts,
-    default_installation_partitions, validate_installation_commands,
+    InstallationFirmwareMode, InstallationOperation, InstallationOperationExecutor,
+    InstallationPlan, PreparedApplianceInstallation, PreparedInstallation,
+    ProcessInstallationCommandRunner, SystemInstallationOperationExecutor,
+    default_installation_mounts, default_installation_partitions,
+    detect_installation_firmware_mode, validate_installation_commands,
 };
 
 use std::{
@@ -1495,8 +1496,29 @@ impl Engine {
     where
         E: InstallationOperationExecutor,
     {
+        self.execute_appliance_installation_for_firmware(
+            installation,
+            installation::detect_installation_firmware_mode(),
+            executor,
+        )
+    }
+
+    /// Executes the appliance installation for the explicitly selected firmware mode.
+    ///
+    /// # Errors
+    ///
+    /// Returns the first operation error after attempting remaining cleanup operations.
+    pub fn execute_appliance_installation_for_firmware<E>(
+        &self,
+        installation: &PreparedApplianceInstallation,
+        firmware: InstallationFirmwareMode,
+        executor: &mut E,
+    ) -> Result<(), E::Error>
+    where
+        E: InstallationOperationExecutor,
+    {
         installation
-            .installation_plan()
+            .installation_plan_for_firmware(firmware)
             .execute_with_cleanup(executor)
     }
 
@@ -1550,7 +1572,7 @@ mod tests {
         BootstrapConfig, BuildContext, BuildError, ContentImportFileSystem, ContentImportOperation,
         ContentImportOperationExecutor, ContentSource, DiscoveredContent,
         DryRunContentImportOperationExecutor, DryRunInstallationExecutor, Engine,
-        ImportedContentItem, InstallationExecutor, InstallationOperation,
+        ImportedContentItem, InstallationExecutor, InstallationFirmwareMode, InstallationOperation,
         InstallationOperationExecutor, InstallationPlan, PrepareContentImportError,
         PreparedApplianceInstallation, PreparedContentImport, PreparedInstallation, RootfsRunError,
         SystemContentImportFileSystem, SystemContentImportOperationExecutor,
@@ -2733,6 +2755,7 @@ mod tests {
             InstallationOperation::InstallBootloader {
                 root: "/target".into(),
                 device_path: "/dev/sdb".into(),
+                firmware: crate::installation::InstallationFirmwareMode::Uefi,
             },
             InstallationOperation::InstallSystemImage {
                 root: "/target".into(),
@@ -2768,6 +2791,7 @@ mod tests {
                 InstallationOperation::InstallBootloader {
                     root: "/target".into(),
                     device_path: "/dev/sdb".into(),
+                    firmware: crate::installation::InstallationFirmwareMode::Uefi,
                 },
                 InstallationOperation::CleanupTargetRuntime {
                     root: "/target".into(),
@@ -2820,6 +2844,7 @@ mod tests {
             InstallationOperation::InstallBootloader {
                 root: "/target".into(),
                 device_path: "/dev/sdb".into(),
+                firmware: crate::installation::InstallationFirmwareMode::Uefi,
             },
             InstallationOperation::CleanupTargetRuntime {
                 root: "/target".into(),
@@ -2849,6 +2874,7 @@ mod tests {
                 InstallationOperation::InstallBootloader {
                     root: "/target".into(),
                     device_path: "/dev/sdb".into(),
+                    firmware: crate::installation::InstallationFirmwareMode::Uefi,
                 },
                 InstallationOperation::CleanupTargetRuntime {
                     root: "/target".into(),
@@ -3257,10 +3283,12 @@ mod tests {
                 },
                 InstallationOperation::PrepareTargetRuntime {
                     root: "/target".into(),
+                    firmware: crate::installation::InstallationFirmwareMode::Uefi,
                 },
                 InstallationOperation::InstallBootloader {
                     root: "/target".into(),
                     device_path: "/dev/sdb".into(),
+                    firmware: crate::installation::InstallationFirmwareMode::Uefi,
                 },
                 InstallationOperation::CleanupTargetRuntime {
                     root: "/target".into(),
@@ -3544,6 +3572,91 @@ mod tests {
                 .any(|operation| matches!(operation, InstallationOperation::ImportContent { .. }))
         );
     }
+    #[test]
+    fn executes_appliance_installation_with_selected_firmware_mode() {
+        let engine = Engine::from_registry(desktop_registry());
+
+        let intent = InstallationIntent::new(
+            "desktop",
+            DiscoveredStorageId::new("serial:usb-disk"),
+            model::UserConfiguration::new("admin", "DAIA Administrator"),
+        );
+
+        let storage = DiscoveredStorage::new("serial:usb-disk", StorageKind::Removable, "/dev/sdb");
+
+        let installation = PreparedInstallation::new(
+            intent,
+            storage,
+            Vec::new(),
+            "/run/live/medium/live/filesystem.squashfs".into(),
+        );
+
+        let content = PreparedContentImport::new(
+            ContentImportIntent::new(Vec::new()),
+            Vec::new(),
+            ContentImportDestination::new("/var/lib/daia/content"),
+        );
+
+        let prepared = PreparedApplianceInstallation::new(installation, content, Vec::new());
+
+        for firmware in [
+            InstallationFirmwareMode::Bios,
+            InstallationFirmwareMode::Uefi,
+        ] {
+            let mut executor = RecordingOperationExecutor {
+                operations: Vec::new(),
+            };
+
+            engine
+                .execute_appliance_installation_for_firmware(&prepared, firmware, &mut executor)
+                .expect("firmware-aware appliance installation should execute");
+
+            let expected_partition_role = match firmware {
+                InstallationFirmwareMode::Bios => {
+                    crate::installation::InstallationPartitionRole::BiosBoot
+                }
+                InstallationFirmwareMode::Uefi => {
+                    crate::installation::InstallationPartitionRole::EfiSystem
+                }
+            };
+
+            assert!(executor.operations.iter().any(|operation| matches!(
+                operation,
+                InstallationOperation::PartitionDisk { partitions, .. }
+                    if partitions.iter().any(
+                        |partition| partition.role() == expected_partition_role
+                    )
+            )));
+
+            assert!(executor.operations.iter().any(|operation| matches!(
+                operation,
+                InstallationOperation::PrepareTargetRuntime {
+                    firmware: actual,
+                    ..
+                } if *actual == firmware
+            )));
+
+            assert!(executor.operations.iter().any(|operation| matches!(
+                operation,
+                InstallationOperation::InstallBootloader {
+                    firmware: actual,
+                    device_path,
+                    ..
+                } if *actual == firmware
+                    && device_path == &std::path::PathBuf::from("/dev/sdb")
+            )));
+
+            assert!(executor.operations.iter().any(|operation| matches!(
+                operation,
+                InstallationOperation::UnmountFilesystems { mounts }
+                    if mounts.iter().any(|mount| {
+                        mount.role()
+                            == crate::installation::InstallationPartitionRole::Root
+                    })
+            )));
+        }
+    }
+
     #[test]
     fn executes_prepared_appliance_installation_through_operation_executor() {
         let engine = Engine::from_registry(desktop_registry());

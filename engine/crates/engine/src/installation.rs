@@ -11,11 +11,77 @@ use crate::{SystemContentImportFileSystem, SystemContentImportOperationExecutor}
 
 const RUNTIME_PAYLOAD_DIRECTORY: &str = "/run/live/medium/daia";
 
+/// Firmware boot mode used for an installed DAIA system.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum InstallationFirmwareMode {
+    /// UEFI firmware boot.
+    Uefi,
+    /// Legacy BIOS firmware boot.
+    Bios,
+}
+
+/// Detects the firmware mode from the running Linux environment.
+#[must_use]
+pub fn detect_installation_firmware_mode() -> InstallationFirmwareMode {
+    installation_firmware_mode_from_efi_directory(std::path::Path::new("/sys/firmware/efi"))
+}
+
+fn installation_firmware_mode_from_efi_directory(
+    efi_directory: &std::path::Path,
+) -> InstallationFirmwareMode {
+    if efi_directory.is_dir() {
+        InstallationFirmwareMode::Uefi
+    } else {
+        InstallationFirmwareMode::Bios
+    }
+}
+
+#[cfg(test)]
+mod firmware_detection_tests {
+    use super::{InstallationFirmwareMode, installation_firmware_mode_from_efi_directory};
+
+    #[test]
+    fn detects_uefi_from_existing_efi_directory() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+
+        assert_eq!(
+            installation_firmware_mode_from_efi_directory(directory.path()),
+            InstallationFirmwareMode::Uefi
+        );
+    }
+
+    #[test]
+    fn detects_bios_when_efi_directory_is_absent() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let missing = directory.path().join("efi");
+
+        assert_eq!(
+            installation_firmware_mode_from_efi_directory(&missing),
+            InstallationFirmwareMode::Bios
+        );
+    }
+
+    #[test]
+    fn detects_bios_when_efi_path_is_not_a_directory() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let file = directory.path().join("efi");
+        std::fs::write(&file, b"not a directory").expect("create test file");
+
+        assert_eq!(
+            installation_firmware_mode_from_efi_directory(&file),
+            InstallationFirmwareMode::Bios
+        );
+    }
+}
+
 /// Role of a partition in an installed DAIA system.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum InstallationPartitionRole {
     /// EFI System Partition used for UEFI boot.
     EfiSystem,
+
+    /// BIOS Boot Partition used for GRUB embedding on GPT disks.
+    BiosBoot,
 
     /// Root filesystem containing the installed appliance.
     Root,
@@ -65,10 +131,24 @@ impl InstallationPartition {
 /// Returns the default DAIA installation partition layout.
 #[must_use]
 pub fn default_installation_partitions() -> Vec<InstallationPartition> {
-    vec![
-        InstallationPartition::new(InstallationPartitionRole::EfiSystem, "fat32", Some(512)),
-        InstallationPartition::new(InstallationPartitionRole::Root, "ext4", None),
-    ]
+    installation_partitions_for_firmware(InstallationFirmwareMode::Uefi)
+}
+
+/// Returns the partition layout appropriate for the selected firmware mode.
+#[must_use]
+pub fn installation_partitions_for_firmware(
+    firmware: InstallationFirmwareMode,
+) -> Vec<InstallationPartition> {
+    match firmware {
+        InstallationFirmwareMode::Uefi => vec![
+            InstallationPartition::new(InstallationPartitionRole::EfiSystem, "fat32", Some(512)),
+            InstallationPartition::new(InstallationPartitionRole::Root, "ext4", None),
+        ],
+        InstallationFirmwareMode::Bios => vec![
+            InstallationPartition::new(InstallationPartitionRole::BiosBoot, "none", Some(2)),
+            InstallationPartition::new(InstallationPartitionRole::Root, "ext4", None),
+        ],
+    }
 }
 
 fn partition_device_path(device_path: &std::path::Path, partition_number: usize) -> PathBuf {
@@ -201,7 +281,7 @@ fn installed_mount_point(mount: &InstallationMount) -> io::Result<PathBuf> {
 
 fn installation_fstab(
     root_uuid: &str,
-    efi_uuid: &str,
+    efi_uuid: Option<&str>,
     mounts: &[InstallationMount],
 ) -> io::Result<String> {
     let root_mount = mounts
@@ -209,20 +289,36 @@ fn installation_fstab(
         .find(|mount| mount.role() == InstallationPartitionRole::Root)
         .ok_or_else(|| io::Error::other("root mount is missing"))?;
 
+    let root_mount_point = installed_mount_point(root_mount)?;
+
+    let mut fstab = format!(
+        "UUID={root_uuid}\t{}\text4\tdefaults\t0\t1\n",
+        root_mount_point.display(),
+    );
+
     let efi_mount = mounts
         .iter()
-        .find(|mount| mount.role() == InstallationPartitionRole::EfiSystem)
-        .ok_or_else(|| io::Error::other("EFI mount is missing"))?;
+        .find(|mount| mount.role() == InstallationPartitionRole::EfiSystem);
 
-    let root_mount_point = installed_mount_point(root_mount)?;
-    let efi_mount_point = installed_mount_point(efi_mount)?;
+    match (efi_uuid, efi_mount) {
+        (Some(efi_uuid), Some(efi_mount)) => {
+            let efi_mount_point = installed_mount_point(efi_mount)?;
 
-    Ok(format!(
-        "UUID={root_uuid}\t{}\text4\tdefaults\t0\t1\n\
-         UUID={efi_uuid}\t{}\tvfat\tumask=0077\t0\t2\n",
-        root_mount_point.display(),
-        efi_mount_point.display(),
-    ))
+            fstab.push_str(&format!(
+                "UUID={efi_uuid}\t{}\tvfat\tumask=0077\t0\t2\n",
+                efi_mount_point.display(),
+            ));
+        }
+        (None, None) => {}
+        (Some(_), None) => {
+            return Err(io::Error::other("EFI mount is missing"));
+        }
+        (None, Some(_)) => {
+            return Err(io::Error::other("EFI UUID is missing"));
+        }
+    }
+
+    Ok(fstab)
 }
 
 /// Describes one filesystem mount required by an installation.
@@ -256,10 +352,22 @@ impl InstallationMount {
 /// Returns the default DAIA installation mount layout.
 #[must_use]
 pub fn default_installation_mounts() -> Vec<InstallationMount> {
-    vec![
-        InstallationMount::new(InstallationPartitionRole::Root, "/target"),
-        InstallationMount::new(InstallationPartitionRole::EfiSystem, "/target/boot/efi"),
-    ]
+    installation_mounts_for_firmware(InstallationFirmwareMode::Uefi)
+}
+
+pub fn installation_mounts_for_firmware(
+    firmware: InstallationFirmwareMode,
+) -> Vec<InstallationMount> {
+    match firmware {
+        InstallationFirmwareMode::Uefi => vec![
+            InstallationMount::new(InstallationPartitionRole::Root, "/target"),
+            InstallationMount::new(InstallationPartitionRole::EfiSystem, "/target/boot/efi"),
+        ],
+        InstallationFirmwareMode::Bios => vec![InstallationMount::new(
+            InstallationPartitionRole::Root,
+            "/target",
+        )],
+    }
 }
 
 /// A non-executed operation required to prepare an installation target.
@@ -359,9 +467,16 @@ pub enum InstallationOperation {
     EnableFirstBoot { root: PathBuf },
 
     /// Prepares runtime filesystems required by commands executed inside the target root.
-    PrepareTargetRuntime { root: PathBuf },
+    PrepareTargetRuntime {
+        root: PathBuf,
+        firmware: InstallationFirmwareMode,
+    },
     /// Install the bootloader into the installed system.
-    InstallBootloader { root: PathBuf, device_path: PathBuf },
+    InstallBootloader {
+        root: PathBuf,
+        device_path: PathBuf,
+        firmware: InstallationFirmwareMode,
+    },
     /// Cleans up temporary runtime filesystems mounted inside the target root.
     CleanupTargetRuntime { root: PathBuf },
     /// Unmounts the installed filesystems after installation is complete.
@@ -1041,15 +1156,36 @@ where
                 partitions,
             } => {
                 self.validate_disk(storage_id, device_path)?;
-                let efi_partition = partitions
-                    .iter()
-                    .find(|partition| partition.role() == InstallationPartitionRole::EfiSystem)
-                    .ok_or_else(|| io::Error::other("EFI partition is missing"))?;
 
                 let root_partition = partitions
                     .iter()
                     .find(|partition| partition.role() == InstallationPartitionRole::Root)
                     .ok_or_else(|| io::Error::other("root partition is missing"))?;
+
+                let efi_partition = partitions
+                    .iter()
+                    .find(|partition| partition.role() == InstallationPartitionRole::EfiSystem);
+
+                let bios_partition = partitions
+                    .iter()
+                    .find(|partition| partition.role() == InstallationPartitionRole::BiosBoot);
+
+                if efi_partition.is_some() == bios_partition.is_some() {
+                    return Err(io::Error::other(
+                        "installation requires exactly one firmware boot partition",
+                    ));
+                }
+
+                if partitions.len() != 2
+                    || partitions[1].role() != InstallationPartitionRole::Root
+                    || root_partition.filesystem() != "ext4"
+                    || root_partition.size_mib().is_some()
+                {
+                    return Err(io::Error::other(
+                        "unsupported installation partition layout",
+                    ));
+                }
+
                 let mut command = Command::new("parted");
 
                 command
@@ -1058,34 +1194,65 @@ where
                     .arg("mklabel")
                     .arg("gpt");
 
-                let efi_size_mib = efi_partition
-                    .size_mib()
-                    .ok_or_else(|| io::Error::other("EFI partition size is missing"))?;
-                if efi_size_mib == 0 {
-                    return Err(io::Error::other(
-                        "EFI partition size must be greater than zero",
-                    ));
+                match (efi_partition, bios_partition) {
+                    (Some(efi), None) => {
+                        if partitions[0].role() != InstallationPartitionRole::EfiSystem {
+                            return Err(io::Error::other(
+                                "EFI partition must precede root partition",
+                            ));
+                        }
+
+                        let size = efi
+                            .size_mib()
+                            .ok_or_else(|| io::Error::other("EFI partition size is missing"))?;
+
+                        if size == 0 {
+                            return Err(io::Error::other(
+                                "EFI partition size must be greater than zero",
+                            ));
+                        }
+
+                        command
+                            .arg("mkpart")
+                            .arg("ESP")
+                            .arg(efi.filesystem())
+                            .arg("1MiB")
+                            .arg(format!("{}MiB", size + 1))
+                            .arg("mkpart")
+                            .arg("primary")
+                            .arg(root_partition.filesystem())
+                            .arg(format!("{}MiB", size + 1))
+                            .arg("100%")
+                            .arg("set")
+                            .arg("1")
+                            .arg("esp")
+                            .arg("on");
+                    }
+                    (None, Some(bios)) => {
+                        if partitions[0].role() != InstallationPartitionRole::BiosBoot
+                            || bios.filesystem() != "none"
+                            || bios.size_mib() != Some(2)
+                        {
+                            return Err(io::Error::other("unsupported BIOS boot partition layout"));
+                        }
+
+                        command
+                            .arg("mkpart")
+                            .arg("primary")
+                            .arg("1MiB")
+                            .arg("3MiB")
+                            .arg("set")
+                            .arg("1")
+                            .arg("bios_grub")
+                            .arg("on")
+                            .arg("mkpart")
+                            .arg("primary")
+                            .arg(root_partition.filesystem())
+                            .arg("3MiB")
+                            .arg("100%");
+                    }
+                    _ => unreachable!("firmware partition exclusivity validated"),
                 }
-
-                command
-                    .arg("mkpart")
-                    .arg("ESP")
-                    .arg(efi_partition.filesystem())
-                    .arg("1MiB")
-                    .arg(format!("{}MiB", efi_size_mib + 1));
-
-                let root_start_mib = efi_size_mib + 1;
-
-                command
-                    .arg("mkpart")
-                    .arg("primary")
-                    .arg(root_partition.filesystem())
-                    .arg(format!("{root_start_mib}MiB"))
-                    .arg("100%")
-                    .arg("set")
-                    .arg("1")
-                    .arg("esp")
-                    .arg("on");
 
                 self.runner.status(&mut command)
             }
@@ -1096,47 +1263,55 @@ where
             } => {
                 let efi_partition = partitions
                     .iter()
-                    .position(|partition| partition.role() == InstallationPartitionRole::EfiSystem)
-                    .ok_or_else(|| io::Error::other("EFI partition is missing"))?;
+                    .position(|partition| partition.role() == InstallationPartitionRole::EfiSystem);
 
-                let partition = &partitions[efi_partition];
+                let bios_partition = partitions
+                    .iter()
+                    .position(|partition| partition.role() == InstallationPartitionRole::BiosBoot);
 
-                if partition.filesystem() != "fat32" {
-                    return Err(io::Error::other(format!(
-                        "unsupported EFI filesystem: {}",
-                        partition.filesystem()
-                    )));
+                if efi_partition.is_some() == bios_partition.is_some() {
+                    return Err(io::Error::other(
+                        "installation requires exactly one firmware boot partition",
+                    ));
                 }
-
-                let partition_number = efi_partition + 1;
-                let partition_path = partition_device_path(device_path, partition_number);
-
-                let mut command = Command::new("mkfs.fat");
-
-                command.arg("-F").arg("32").arg(partition_path);
-
-                self.runner.status(&mut command)?;
 
                 let root_partition = partitions
                     .iter()
                     .position(|partition| partition.role() == InstallationPartitionRole::Root)
                     .ok_or_else(|| io::Error::other("root partition is missing"))?;
 
-                let partition_number = root_partition + 1;
-                let partition_path = partition_device_path(device_path, partition_number);
+                let root_filesystem = partitions[root_partition].filesystem();
 
-                let command_name = match partitions[root_partition].filesystem() {
-                    "ext4" => "mkfs.ext4",
-                    filesystem => {
+                if root_filesystem != "ext4" {
+                    return Err(io::Error::other(format!(
+                        "unsupported root filesystem: {root_filesystem}"
+                    )));
+                }
+
+                if let Some(efi_partition) = efi_partition {
+                    let partition = &partitions[efi_partition];
+
+                    if partition.filesystem() != "fat32" {
                         return Err(io::Error::other(format!(
-                            "unsupported root filesystem: {filesystem}"
+                            "unsupported EFI filesystem: {}",
+                            partition.filesystem()
                         )));
                     }
-                };
 
-                let mut command = Command::new(command_name);
+                    let partition_path = partition_device_path(device_path, efi_partition + 1);
 
-                command.arg("-F").arg(partition_path);
+                    let mut command = Command::new("mkfs.fat");
+
+                    command.arg("-F").arg("32").arg(partition_path);
+
+                    self.runner.status(&mut command)?;
+                }
+
+                let root_partition_path = partition_device_path(device_path, root_partition + 1);
+
+                let mut command = Command::new("mkfs.ext4");
+
+                command.arg("-F").arg(root_partition_path);
 
                 self.runner.status(&mut command)?;
 
@@ -1152,11 +1327,6 @@ where
                     .find(|mount| mount.role() == InstallationPartitionRole::Root)
                     .ok_or_else(|| io::Error::other("root mount is missing"))?;
 
-                let efi_mount = mounts
-                    .iter()
-                    .find(|mount| mount.role() == InstallationPartitionRole::EfiSystem)
-                    .ok_or_else(|| io::Error::other("EFI mount is missing"))?;
-
                 let root_partition_number = partitions
                     .iter()
                     .position(|partition| partition.role() == InstallationPartitionRole::Root)
@@ -1166,12 +1336,34 @@ where
                 let efi_partition_number = partitions
                     .iter()
                     .position(|partition| partition.role() == InstallationPartitionRole::EfiSystem)
-                    .map(|index| index + 1)
-                    .ok_or_else(|| io::Error::other("EFI partition is missing"))?;
+                    .map(|index| index + 1);
+
+                let bios_partition_number = partitions
+                    .iter()
+                    .position(|partition| partition.role() == InstallationPartitionRole::BiosBoot)
+                    .map(|index| index + 1);
+
+                if efi_partition_number.is_some() == bios_partition_number.is_some() {
+                    return Err(io::Error::other(
+                        "installation requires exactly one firmware boot partition",
+                    ));
+                }
+
+                let efi_mount = mounts
+                    .iter()
+                    .find(|mount| mount.role() == InstallationPartitionRole::EfiSystem);
+
+                if efi_partition_number.is_some() && efi_mount.is_none() {
+                    return Err(io::Error::other("EFI mount is missing"));
+                }
+
+                if bios_partition_number.is_some() && efi_mount.is_some() {
+                    return Err(io::Error::other(
+                        "BIOS installation must not include an EFI mount",
+                    ));
+                }
 
                 let root_partition_path = partition_device_path(device_path, root_partition_number);
-
-                let efi_partition_path = partition_device_path(device_path, efi_partition_number);
 
                 let mut command = Command::new("mkdir");
 
@@ -1187,17 +1379,24 @@ where
 
                 self.runner.status(&mut command)?;
 
-                let mut command = Command::new("mkdir");
+                if let (Some(efi_partition_number), Some(efi_mount)) =
+                    (efi_partition_number, efi_mount)
+                {
+                    let efi_partition_path =
+                        partition_device_path(device_path, efi_partition_number);
 
-                command.arg("-p").arg(efi_mount.mount_point());
+                    let mut command = Command::new("mkdir");
 
-                self.runner.status(&mut command)?;
+                    command.arg("-p").arg(efi_mount.mount_point());
 
-                let mut command = Command::new("mount");
+                    self.runner.status(&mut command)?;
 
-                command.arg(efi_partition_path).arg(efi_mount.mount_point());
+                    let mut command = Command::new("mount");
 
-                self.runner.status(&mut command)?;
+                    command.arg(efi_partition_path).arg(efi_mount.mount_point());
+
+                    self.runner.status(&mut command)?;
+                }
 
                 Ok(())
             }
@@ -1288,18 +1487,34 @@ where
                 let efi_partition_number = partitions
                     .iter()
                     .position(|partition| partition.role() == InstallationPartitionRole::EfiSystem)
-                    .map(|index| index + 1)
-                    .ok_or_else(|| io::Error::other("EFI partition is missing"))?;
+                    .map(|index| index + 1);
+
+                let bios_partition_number = partitions
+                    .iter()
+                    .position(|partition| partition.role() == InstallationPartitionRole::BiosBoot)
+                    .map(|index| index + 1);
+
+                if efi_partition_number.is_some() == bios_partition_number.is_some() {
+                    return Err(io::Error::other(
+                        "installation requires exactly one firmware boot partition",
+                    ));
+                }
 
                 let root_partition_path = partition_device_path(device_path, root_partition_number);
 
-                let efi_partition_path = partition_device_path(device_path, efi_partition_number);
-
                 let root_uuid = filesystem_uuid(&mut self.runner, &root_partition_path)?;
 
-                let efi_uuid = filesystem_uuid(&mut self.runner, &efi_partition_path)?;
+                let efi_uuid = match efi_partition_number {
+                    Some(efi_partition_number) => {
+                        let efi_partition_path =
+                            partition_device_path(device_path, efi_partition_number);
 
-                let fstab = installation_fstab(&root_uuid, &efi_uuid, mounts)?;
+                        Some(filesystem_uuid(&mut self.runner, &efi_partition_path)?)
+                    }
+                    None => None,
+                };
+
+                let fstab = installation_fstab(&root_uuid, efi_uuid.as_deref(), mounts)?;
 
                 self.file_writer
                     .write(std::path::Path::new("/target/etc/fstab"), fstab.as_bytes())
@@ -1491,7 +1706,7 @@ where
 
                 Ok(())
             }
-            InstallationOperation::PrepareTargetRuntime { root } => {
+            InstallationOperation::PrepareTargetRuntime { root, firmware } => {
                 let target_dev = root.join("dev");
 
                 let mut mkdir = Command::new("mkdir");
@@ -1501,6 +1716,18 @@ where
 
                 let mut mount = Command::new("mount");
                 mount.arg("--bind").arg("/dev").arg(&target_dev);
+
+                self.runner.status(&mut mount)?;
+
+                let target_dev_pts = root.join("dev/pts");
+
+                let mut mkdir = Command::new("mkdir");
+                mkdir.arg("-p").arg(&target_dev_pts);
+
+                self.runner.status(&mut mkdir)?;
+
+                let mut mount = Command::new("mount");
+                mount.arg("--bind").arg("/dev/pts").arg(&target_dev_pts);
 
                 self.runner.status(&mut mount)?;
 
@@ -1527,21 +1754,23 @@ where
 
                 self.runner.status(&mut mount)?;
 
-                // Mount EFI variables without recursively importing cgroup mounts.
-                let target_efivars = target_sys.join("firmware/efi/efivars");
+                if *firmware == InstallationFirmwareMode::Uefi {
+                    // Mount EFI variables without recursively importing cgroup mounts.
+                    let target_efivars = target_sys.join("firmware/efi/efivars");
 
-                let mut mkdir = Command::new("mkdir");
-                mkdir.arg("-p").arg(&target_efivars);
+                    let mut mkdir = Command::new("mkdir");
+                    mkdir.arg("-p").arg(&target_efivars);
 
-                self.runner.status(&mut mkdir)?;
+                    self.runner.status(&mut mkdir)?;
 
-                let mut mount = Command::new("mount");
-                mount
-                    .arg("--bind")
-                    .arg("/sys/firmware/efi/efivars")
-                    .arg(&target_efivars);
+                    let mut mount = Command::new("mount");
+                    mount
+                        .arg("--bind")
+                        .arg("/sys/firmware/efi/efivars")
+                        .arg(&target_efivars);
 
-                self.runner.status(&mut mount)?;
+                    self.runner.status(&mut mount)?;
+                }
                 let target_run = root.join("run");
 
                 let mut mkdir = Command::new("mkdir");
@@ -1554,31 +1783,49 @@ where
 
                 self.runner.status(&mut mount)
             }
-            InstallationOperation::InstallBootloader { root, .. } => {
-                let mut grub_install = command_in_root(
-                    root,
-                    "grub-install",
-                    &[
-                        "--target=x86_64-efi",
-                        "--efi-directory=/boot/efi",
-                        "--bootloader-id=DAIA",
-                        "--removable",
-                    ],
-                );
+            InstallationOperation::InstallBootloader {
+                root,
+                device_path,
+                firmware,
+            } => {
+                match firmware {
+                    InstallationFirmwareMode::Uefi => {
+                        let mut grub_install = command_in_root(
+                            root,
+                            "grub-install",
+                            &[
+                                "--target=x86_64-efi",
+                                "--efi-directory=/boot/efi",
+                                "--bootloader-id=DAIA",
+                                "--removable",
+                            ],
+                        );
 
-                self.runner.status(&mut grub_install)?;
+                        self.runner.status(&mut grub_install)?;
 
-                let mut registered_grub_install = command_in_root(
-                    root,
-                    "grub-install",
-                    &[
-                        "--target=x86_64-efi",
-                        "--efi-directory=/boot/efi",
-                        "--bootloader-id=DAIA",
-                    ],
-                );
+                        let mut registered_grub_install = command_in_root(
+                            root,
+                            "grub-install",
+                            &[
+                                "--target=x86_64-efi",
+                                "--efi-directory=/boot/efi",
+                                "--bootloader-id=DAIA",
+                            ],
+                        );
 
-                self.runner.status(&mut registered_grub_install)?;
+                        self.runner.status(&mut registered_grub_install)?;
+                    }
+                    InstallationFirmwareMode::Bios => {
+                        let device = device_path.to_string_lossy();
+                        let mut grub_install = command_in_root(
+                            root,
+                            "grub-install",
+                            &["--target=i386-pc", device.as_ref()],
+                        );
+
+                        self.runner.status(&mut grub_install)?;
+                    }
+                }
 
                 let mut update_grub = command_in_root(root, "update-grub", &[]);
 
@@ -1612,16 +1859,17 @@ where
             InstallationOperation::UnmountFilesystems { mounts } => {
                 let efi_mount = mounts
                     .iter()
-                    .find(|mount| mount.role() == InstallationPartitionRole::EfiSystem)
-                    .ok_or_else(|| io::Error::other("EFI mount is missing"))?;
+                    .find(|mount| mount.role() == InstallationPartitionRole::EfiSystem);
 
                 let mut first_error = None;
 
-                let mut unmount = Command::new("umount");
-                unmount.arg(efi_mount.mount_point());
+                if let Some(efi_mount) = efi_mount {
+                    let mut unmount = Command::new("umount");
+                    unmount.arg(efi_mount.mount_point());
 
-                if let Err(error) = self.runner.status(&mut unmount) {
-                    first_error = Some(error);
+                    if let Err(error) = self.runner.status(&mut unmount) {
+                        first_error = Some(error);
+                    }
                 }
 
                 if let Some(root_mount) = mounts
@@ -1658,7 +1906,8 @@ where
     type Error = io::Error;
 
     fn execute(&mut self, installation: &PreparedInstallation) -> Result<(), Self::Error> {
-        let plan = installation.installation_plan();
+        let firmware = detect_installation_firmware_mode();
+        let plan = installation.installation_plan_for_firmware(firmware);
 
         plan.execute_with_cleanup(self)
     }
@@ -1787,9 +2036,21 @@ impl PreparedInstallation {
         &self.gpu_compatibility_records
     }
 
-    /// Builds the ordered installation-operation plan.
+    /// Builds the existing UEFI installation-operation plan.
     #[must_use]
     pub fn installation_plan(&self) -> InstallationPlan {
+        self.installation_plan_for_firmware(InstallationFirmwareMode::Uefi)
+    }
+
+    /// Builds the installation plan for an explicitly selected firmware mode.
+    #[must_use]
+    pub fn installation_plan_for_firmware(
+        &self,
+        firmware: InstallationFirmwareMode,
+    ) -> InstallationPlan {
+        let partitions = installation_partitions_for_firmware(firmware);
+        let mounts = installation_mounts_for_firmware(firmware);
+
         InstallationPlan::new(vec![
             InstallationOperation::PrepareDisk {
                 storage_id: self.intent.storage_id().clone(),
@@ -1798,16 +2059,16 @@ impl PreparedInstallation {
             InstallationOperation::PartitionDisk {
                 storage_id: self.intent.storage_id().clone(),
                 device_path: self.storage.device_path().to_path_buf(),
-                partitions: default_installation_partitions(),
+                partitions: partitions.clone(),
             },
             InstallationOperation::CreateFilesystems {
                 device_path: self.storage.device_path().to_path_buf(),
-                partitions: default_installation_partitions(),
+                partitions: partitions.clone(),
             },
             InstallationOperation::MountFilesystems {
                 device_path: self.storage.device_path().to_path_buf(),
-                partitions: default_installation_partitions(),
-                mounts: default_installation_mounts(),
+                partitions: partitions.clone(),
+                mounts: mounts.clone(),
             },
             InstallationOperation::InstallSystemImage {
                 root: "/target".into(),
@@ -1822,8 +2083,8 @@ impl PreparedInstallation {
             },
             InstallationOperation::ConfigureFstab {
                 device_path: self.storage.device_path().to_path_buf(),
-                partitions: default_installation_partitions(),
-                mounts: default_installation_mounts(),
+                partitions: partitions.clone(),
+                mounts: mounts.clone(),
             },
             InstallationOperation::DeployRuntime {
                 root: "/target".into(),
@@ -1833,16 +2094,18 @@ impl PreparedInstallation {
             },
             InstallationOperation::PrepareTargetRuntime {
                 root: "/target".into(),
+                firmware,
             },
             InstallationOperation::InstallBootloader {
                 root: "/target".into(),
                 device_path: self.storage.device_path().to_path_buf(),
+                firmware,
             },
             InstallationOperation::CleanupTargetRuntime {
                 root: "/target".into(),
             },
             InstallationOperation::UnmountFilesystems {
-                mounts: default_installation_mounts(),
+                mounts: mounts.clone(),
             },
         ])
     }
@@ -1972,7 +2235,16 @@ impl PreparedApplianceInstallation {
 
     #[must_use]
     pub fn installation_plan(&self) -> InstallationPlan {
-        let installation_plan = self.installation.installation_plan();
+        self.installation_plan_for_firmware(InstallationFirmwareMode::Uefi)
+    }
+
+    /// Builds the complete appliance plan for the selected firmware mode.
+    #[must_use]
+    pub fn installation_plan_for_firmware(
+        &self,
+        firmware: InstallationFirmwareMode,
+    ) -> InstallationPlan {
+        let installation_plan = self.installation.installation_plan_for_firmware(firmware);
         let additional_operations = 1
             + usize::from(!self.content.intent().items().is_empty())
             + usize::from(self.localization.is_some())
@@ -2084,15 +2356,16 @@ impl InstallationOperationExecutor for DryRunInstallationExecutor {
 #[cfg(test)]
 mod tests {
     use super::{
-        InstallationCommandRunner, InstallationExecutor, InstallationFileWriter, InstallationMount,
-        InstallationOperation, InstallationOperationExecutor, InstallationPartition,
-        InstallationPartitionRole, InstallationPlan, PathBuf, PreparedInstallation,
-        ProcessInstallationCommandRunner, REQUIRED_INSTALLATION_COMMANDS,
-        RUNTIME_PAYLOAD_DIRECTORY, SystemInstallationOperationExecutor, command_in_root,
-        default_installation_mounts, default_installation_partitions, filesystem_uuid,
-        installation_command_exists, installation_command_exists_in_path,
-        installation_command_path_is_executable, installation_fstab, installed_mount_point,
-        partition_device_path, validate_installation_commands,
+        InstallationCommandRunner, InstallationExecutor, InstallationFileWriter,
+        InstallationFirmwareMode, InstallationMount, InstallationOperation,
+        InstallationOperationExecutor, InstallationPartition, InstallationPartitionRole,
+        InstallationPlan, PathBuf, PreparedInstallation, ProcessInstallationCommandRunner,
+        REQUIRED_INSTALLATION_COMMANDS, RUNTIME_PAYLOAD_DIRECTORY,
+        SystemInstallationOperationExecutor, command_in_root, default_installation_mounts,
+        default_installation_partitions, filesystem_uuid, installation_command_exists,
+        installation_command_exists_in_path, installation_command_path_is_executable,
+        installation_fstab, installed_mount_point, partition_device_path,
+        validate_installation_commands,
     };
     use model::{DiscoveredStorage, DiscoveredStorageId, InstallationIntent, StorageKind};
 
@@ -2929,6 +3202,7 @@ mod tests {
             !InstallationOperation::InstallBootloader {
                 root: "/target".into(),
                 device_path: "/dev/sdb".into(),
+                firmware: InstallationFirmwareMode::Uefi,
             }
             .is_cleanup()
         );
@@ -2976,6 +3250,26 @@ mod tests {
                 vec!["umount".to_owned(), "/target/boot/efi".to_owned()],
                 vec!["umount".to_owned(), "/target".to_owned()],
             ]
+        );
+    }
+
+    #[test]
+    fn system_executor_unmounts_bios_root_without_efi() {
+        let mut executor = SystemInstallationOperationExecutor::with_dependencies(
+            RecordingCommandRunner::default(),
+        );
+
+        let operation = InstallationOperation::UnmountFilesystems {
+            mounts: super::installation_mounts_for_firmware(InstallationFirmwareMode::Bios),
+        };
+
+        executor
+            .execute_operation(&operation)
+            .expect("BIOS root filesystem unmount should succeed");
+
+        assert_eq!(
+            executor.runner.commands,
+            vec![vec!["umount".to_owned(), "/target".to_owned()]]
         );
     }
 
@@ -3079,6 +3373,7 @@ mod tests {
         let plan = InstallationPlan::new(vec![
             InstallationOperation::PrepareTargetRuntime {
                 root: "/target".into(),
+                firmware: InstallationFirmwareMode::Uefi,
             },
             InstallationOperation::CleanupTargetRuntime {
                 root: "/target".into(),
@@ -3108,19 +3403,18 @@ mod tests {
                 vec![
                     "mkdir".to_owned(),
                     "-p".to_owned(),
-                    "/target/proc".to_owned(),
+                    "/target/dev/pts".to_owned(),
                 ],
                 vec![
                     "mount".to_owned(),
-                    "-t".to_owned(),
-                    "proc".to_owned(),
-                    "proc".to_owned(),
-                    "/target/proc".to_owned(),
+                    "--bind".to_owned(),
+                    "/dev/pts".to_owned(),
+                    "/target/dev/pts".to_owned(),
                 ],
                 vec![
                     "mkdir".to_owned(),
                     "-p".to_owned(),
-                    "/target/sys".to_owned(),
+                    "/target/proc".to_owned(),
                 ],
                 vec![
                     "umount".to_owned(),
@@ -3192,6 +3486,84 @@ mod tests {
     }
 
     #[test]
+    fn system_executor_prepares_bios_runtime_without_efi_variables() {
+        let mut executor = SystemInstallationOperationExecutor::with_dependencies(
+            RecordingCommandRunner::default(),
+        );
+
+        let operation = InstallationOperation::PrepareTargetRuntime {
+            root: "/target".into(),
+            firmware: InstallationFirmwareMode::Bios,
+        };
+
+        executor
+            .execute_operation(&operation)
+            .expect("BIOS runtime preparation should succeed");
+
+        assert_eq!(
+            executor.runner.commands,
+            vec![
+                vec![
+                    "mkdir".to_owned(),
+                    "-p".to_owned(),
+                    "/target/dev".to_owned()
+                ],
+                vec![
+                    "mount".to_owned(),
+                    "--bind".to_owned(),
+                    "/dev".to_owned(),
+                    "/target/dev".to_owned(),
+                ],
+                vec![
+                    "mkdir".to_owned(),
+                    "-p".to_owned(),
+                    "/target/dev/pts".to_owned(),
+                ],
+                vec![
+                    "mount".to_owned(),
+                    "--bind".to_owned(),
+                    "/dev/pts".to_owned(),
+                    "/target/dev/pts".to_owned(),
+                ],
+                vec![
+                    "mkdir".to_owned(),
+                    "-p".to_owned(),
+                    "/target/proc".to_owned()
+                ],
+                vec![
+                    "mount".to_owned(),
+                    "-t".to_owned(),
+                    "proc".to_owned(),
+                    "proc".to_owned(),
+                    "/target/proc".to_owned(),
+                ],
+                vec![
+                    "mkdir".to_owned(),
+                    "-p".to_owned(),
+                    "/target/sys".to_owned()
+                ],
+                vec![
+                    "mount".to_owned(),
+                    "--bind".to_owned(),
+                    "/sys".to_owned(),
+                    "/target/sys".to_owned(),
+                ],
+                vec![
+                    "mkdir".to_owned(),
+                    "-p".to_owned(),
+                    "/target/run".to_owned()
+                ],
+                vec![
+                    "mount".to_owned(),
+                    "--bind".to_owned(),
+                    "/run".to_owned(),
+                    "/target/run".to_owned(),
+                ],
+            ]
+        );
+    }
+
+    #[test]
     fn system_executor_prepares_target_runtime_mounts() {
         let mut executor = SystemInstallationOperationExecutor::with_dependencies(
             RecordingCommandRunner::default(),
@@ -3199,6 +3571,7 @@ mod tests {
 
         let operation = InstallationOperation::PrepareTargetRuntime {
             root: "/target".into(),
+            firmware: InstallationFirmwareMode::Uefi,
         };
 
         executor
@@ -3218,6 +3591,17 @@ mod tests {
                     "--bind".to_owned(),
                     "/dev".to_owned(),
                     "/target/dev".to_owned(),
+                ],
+                vec![
+                    "mkdir".to_owned(),
+                    "-p".to_owned(),
+                    "/target/dev/pts".to_owned(),
+                ],
+                vec![
+                    "mount".to_owned(),
+                    "--bind".to_owned(),
+                    "/dev/pts".to_owned(),
+                    "/target/dev/pts".to_owned(),
                 ],
                 vec![
                     "mkdir".to_owned(),
@@ -3280,6 +3664,7 @@ mod tests {
             InstallationOperation::InstallBootloader {
                 root: "/target".into(),
                 device_path: "/dev/sdb".into(),
+                firmware: InstallationFirmwareMode::Uefi,
             },
             InstallationOperation::CleanupTargetRuntime {
                 root: "/target".into(),
@@ -3335,6 +3720,43 @@ mod tests {
     }
 
     #[test]
+    fn system_executor_installs_bios_grub_on_selected_disk() {
+        let mut executor = SystemInstallationOperationExecutor::with_dependencies(
+            RecordingCommandRunner::default(),
+        );
+
+        let operation = InstallationOperation::InstallBootloader {
+            root: "/target".into(),
+            device_path: "/dev/sdb".into(),
+            firmware: InstallationFirmwareMode::Bios,
+        };
+
+        executor
+            .execute_operation(&operation)
+            .expect("BIOS GRUB installation should succeed");
+
+        assert_eq!(
+            executor.runner.commands,
+            vec![
+                vec![
+                    "sudo".to_owned(),
+                    "/usr/sbin/chroot".to_owned(),
+                    "/target".to_owned(),
+                    "grub-install".to_owned(),
+                    "--target=i386-pc".to_owned(),
+                    "/dev/sdb".to_owned(),
+                ],
+                vec![
+                    "sudo".to_owned(),
+                    "/usr/sbin/chroot".to_owned(),
+                    "/target".to_owned(),
+                    "update-grub".to_owned(),
+                ],
+            ]
+        );
+    }
+
+    #[test]
     fn system_executor_stops_bootloader_installation_when_grub_install_fails() {
         let mut executor =
             SystemInstallationOperationExecutor::with_dependencies(FailingAtCommandRunner {
@@ -3345,6 +3767,7 @@ mod tests {
         let operation = InstallationOperation::InstallBootloader {
             root: "/target".into(),
             device_path: "/dev/sdb".into(),
+            firmware: InstallationFirmwareMode::Uefi,
         };
 
         executor
@@ -3377,6 +3800,7 @@ mod tests {
         let operation = InstallationOperation::InstallBootloader {
             root: "/target".into(),
             device_path: "/dev/sdb".into(),
+            firmware: InstallationFirmwareMode::Uefi,
         };
 
         let error = executor
@@ -3422,6 +3846,7 @@ mod tests {
         let operation = InstallationOperation::InstallBootloader {
             root: "/target".into(),
             device_path: "/dev/sdb".into(),
+            firmware: InstallationFirmwareMode::Uefi,
         };
 
         let error = executor
@@ -3471,6 +3896,7 @@ mod tests {
         let operation = InstallationOperation::InstallBootloader {
             root: "/target".into(),
             device_path: "/dev/sdb".into(),
+            firmware: InstallationFirmwareMode::Uefi,
         };
 
         executor
@@ -3704,6 +4130,46 @@ mod tests {
             .expect_err("UUID lookup failure should fail fstab configuration");
 
         assert!(executor.file_writer.writes.is_empty());
+    }
+
+    #[test]
+    fn system_executor_configures_bios_fstab_without_efi_uuid() {
+        let mut executor = SystemInstallationOperationExecutor::with_all_dependencies(
+            RecordingCommandRunner::with_outputs(vec![b"root-uuid\n".to_vec()]),
+            RecordingInstallationFileWriter::default(),
+        );
+
+        let operation = InstallationOperation::ConfigureFstab {
+            device_path: "/dev/sdb".into(),
+            partitions: super::installation_partitions_for_firmware(
+                super::InstallationFirmwareMode::Bios,
+            ),
+            mounts: super::installation_mounts_for_firmware(super::InstallationFirmwareMode::Bios),
+        };
+
+        executor
+            .execute_operation(&operation)
+            .expect("BIOS fstab configuration should succeed");
+
+        assert_eq!(
+            executor.runner.commands,
+            vec![vec![
+                "blkid".to_owned(),
+                "-s".to_owned(),
+                "UUID".to_owned(),
+                "-o".to_owned(),
+                "value".to_owned(),
+                "/dev/sdb2".to_owned(),
+            ]]
+        );
+
+        assert_eq!(
+            executor.file_writer.writes,
+            vec![(
+                PathBuf::from("/target/etc/fstab"),
+                b"UUID=root-uuid\t/\text4\tdefaults\t0\t1\n".to_vec(),
+            )]
+        );
     }
 
     #[test]
@@ -4100,7 +4566,7 @@ mod tests {
             "/target",
         )];
 
-        let error = installation_fstab("root-uuid", "efi-uuid", &mounts)
+        let error = installation_fstab("root-uuid", Some("efi-uuid"), &mounts)
             .expect_err("missing EFI mount should fail");
 
         assert!(error.to_string().contains("EFI mount is missing"));
@@ -4128,9 +4594,23 @@ mod tests {
     }
 
     #[test]
+    fn installation_fstab_supports_bios_root_only() {
+        let mounts = super::installation_mounts_for_firmware(super::InstallationFirmwareMode::Bios);
+
+        let fstab =
+            installation_fstab("root-uuid", None, &mounts).expect("BIOS fstab should be generated");
+
+        assert_eq!(fstab, "UUID=root-uuid\t/\text4\tdefaults\t0\t1\n",);
+    }
+
+    #[test]
     fn installation_fstab_uses_filesystem_uuids() {
-        let fstab = installation_fstab("root-uuid", "efi-uuid", &default_installation_mounts())
-            .expect("fstab should be generated");
+        let fstab = installation_fstab(
+            "root-uuid",
+            Some("efi-uuid"),
+            &default_installation_mounts(),
+        )
+        .expect("fstab should be generated");
 
         assert_eq!(
             fstab,
@@ -4339,6 +4819,64 @@ mod tests {
     }
 
     #[test]
+    fn installation_plan_selects_bios_layout_and_bootloader() {
+        let intent = InstallationIntent::new(
+            "desktop",
+            DiscoveredStorageId::new("serial:usb-disk"),
+            model::UserConfiguration::new("admin", "DAIA Administrator"),
+        );
+        let storage = DiscoveredStorage::new("serial:usb-disk", StorageKind::Removable, "/dev/sdb");
+        let prepared = PreparedInstallation::new(
+            intent,
+            storage,
+            Vec::new(),
+            PathBuf::from("/run/live/medium/live/filesystem.squashfs"),
+        );
+
+        let plan = prepared.installation_plan_for_firmware(InstallationFirmwareMode::Bios);
+        let partitions =
+            super::installation_partitions_for_firmware(InstallationFirmwareMode::Bios);
+        let mounts = super::installation_mounts_for_firmware(InstallationFirmwareMode::Bios);
+
+        assert!(plan.operations().iter().any(|operation| matches!(
+            operation,
+            InstallationOperation::PartitionDisk {
+                partitions: actual,
+                ..
+            } if actual == &partitions
+        )));
+        assert!(plan.operations().iter().any(|operation| matches!(
+            operation,
+            InstallationOperation::MountFilesystems {
+                partitions: actual_partitions,
+                mounts: actual_mounts,
+                ..
+            } if actual_partitions == &partitions && actual_mounts == &mounts
+        )));
+        assert!(plan.operations().iter().any(|operation| matches!(
+            operation,
+            InstallationOperation::PrepareTargetRuntime {
+                firmware: InstallationFirmwareMode::Bios,
+                ..
+            }
+        )));
+        assert!(plan.operations().iter().any(|operation| matches!(
+            operation,
+            InstallationOperation::InstallBootloader {
+                firmware: InstallationFirmwareMode::Bios,
+                device_path,
+                ..
+            } if device_path == &PathBuf::from("/dev/sdb")
+        )));
+        assert!(plan.operations().iter().any(|operation| matches!(
+            operation,
+            InstallationOperation::UnmountFilesystems {
+                mounts: actual,
+            } if actual == &mounts
+        )));
+    }
+
+    #[test]
     fn installation_plan_carries_system_image() {
         let image = PathBuf::from("/run/live/medium/live/filesystem.squashfs");
 
@@ -4386,7 +4924,11 @@ mod tests {
             .execute_operation(&operation)
             .expect_err("missing EFI partition should fail");
 
-        assert!(error.to_string().contains("EFI partition is missing"));
+        assert!(
+            error
+                .to_string()
+                .contains("installation requires exactly one firmware boot partition")
+        );
         assert!(executor.runner.commands.is_empty());
     }
 
@@ -4514,6 +5056,37 @@ mod tests {
     }
 
     #[test]
+    fn system_executor_mounts_only_root_filesystem_for_bios() {
+        let mut executor = SystemInstallationOperationExecutor::with_dependencies(
+            RecordingCommandRunner::default(),
+        );
+
+        let operation = InstallationOperation::MountFilesystems {
+            device_path: "/dev/sdb".into(),
+            partitions: super::installation_partitions_for_firmware(
+                super::InstallationFirmwareMode::Bios,
+            ),
+            mounts: super::installation_mounts_for_firmware(super::InstallationFirmwareMode::Bios),
+        };
+
+        executor
+            .execute_operation(&operation)
+            .expect("BIOS root filesystem mount should succeed");
+
+        assert_eq!(
+            executor.runner.commands,
+            vec![
+                vec!["mkdir".to_owned(), "-p".to_owned(), "/target".to_owned(),],
+                vec![
+                    "mount".to_owned(),
+                    "/dev/sdb2".to_owned(),
+                    "/target".to_owned(),
+                ],
+            ]
+        );
+    }
+
+    #[test]
     fn system_executor_creates_mount_points_and_mounts_filesystems() {
         let mut executor = SystemInstallationOperationExecutor::with_dependencies(
             RecordingCommandRunner::default(),
@@ -4549,6 +5122,19 @@ mod tests {
                     "/target/boot/efi".to_owned(),
                 ],
             ]
+        );
+    }
+
+    #[test]
+    fn bios_installation_mounts_define_root_only() {
+        let mounts = super::installation_mounts_for_firmware(super::InstallationFirmwareMode::Bios);
+
+        assert_eq!(
+            mounts,
+            vec![InstallationMount::new(
+                InstallationPartitionRole::Root,
+                "/target",
+            )]
         );
     }
 
@@ -4633,7 +5219,11 @@ mod tests {
             .execute_operation(&operation)
             .expect_err("missing EFI partition should fail");
 
-        assert!(error.to_string().contains("EFI partition is missing"));
+        assert!(
+            error
+                .to_string()
+                .contains("installation requires exactly one firmware boot partition")
+        );
     }
 
     #[test]
@@ -4676,7 +5266,11 @@ mod tests {
             .execute_operation(&operation)
             .expect_err("missing EFI partition should fail");
 
-        assert!(error.to_string().contains("EFI partition is missing"));
+        assert!(
+            error
+                .to_string()
+                .contains("installation requires exactly one firmware boot partition")
+        );
     }
 
     #[test]
@@ -4793,6 +5387,33 @@ mod tests {
                     "/dev/sdb2".to_owned(),
                 ],
             ]
+        );
+    }
+
+    #[test]
+    fn system_executor_creates_only_root_filesystem_for_bios() {
+        let mut executor = SystemInstallationOperationExecutor::with_dependencies(
+            RecordingCommandRunner::default(),
+        );
+
+        let operation = InstallationOperation::CreateFilesystems {
+            device_path: "/dev/sdb".into(),
+            partitions: super::installation_partitions_for_firmware(
+                super::InstallationFirmwareMode::Bios,
+            ),
+        };
+
+        executor
+            .execute_operation(&operation)
+            .expect("BIOS filesystem creation should succeed");
+
+        assert_eq!(
+            executor.runner.commands,
+            vec![vec![
+                "mkfs.ext4".to_owned(),
+                "-F".to_owned(),
+                "/dev/sdb2".to_owned(),
+            ]]
         );
     }
 
@@ -5093,6 +5714,49 @@ mod tests {
     }
 
     #[test]
+    fn system_executor_sends_bios_grub_parted_command() {
+        let mut executor = SystemInstallationOperationExecutor::with_dependencies(
+            RecordingCommandRunner::default(),
+        );
+
+        let operation = InstallationOperation::PartitionDisk {
+            storage_id: DiscoveredStorageId::new("serial:test-disk"),
+            device_path: "/dev/sdb".into(),
+            partitions: super::installation_partitions_for_firmware(
+                super::InstallationFirmwareMode::Bios,
+            ),
+        };
+
+        executor
+            .execute_operation(&operation)
+            .expect("recording runner should accept BIOS partition command");
+
+        assert_eq!(
+            executor.runner.commands,
+            vec![vec![
+                "parted".to_owned(),
+                "--script".to_owned(),
+                "/dev/sdb".to_owned(),
+                "mklabel".to_owned(),
+                "gpt".to_owned(),
+                "mkpart".to_owned(),
+                "primary".to_owned(),
+                "1MiB".to_owned(),
+                "3MiB".to_owned(),
+                "set".to_owned(),
+                "1".to_owned(),
+                "bios_grub".to_owned(),
+                "on".to_owned(),
+                "mkpart".to_owned(),
+                "primary".to_owned(),
+                "ext4".to_owned(),
+                "3MiB".to_owned(),
+                "100%".to_owned(),
+            ]]
+        );
+    }
+
+    #[test]
     fn system_executor_sends_parted_command_for_partition_disk() {
         let mut executor = SystemInstallationOperationExecutor::with_dependencies(
             RecordingCommandRunner::default(),
@@ -5247,5 +5911,37 @@ mod prepared_gpu_compatibility_tests {
             installation.gpu_compatibility_records()[0].compatibility(),
             NvidiaDriverCompatibility::UnsupportedLegacy,
         );
+    }
+}
+
+#[cfg(test)]
+mod firmware_partition_layout_tests {
+    use super::{
+        InstallationFirmwareMode, InstallationPartitionRole, default_installation_partitions,
+        installation_partitions_for_firmware,
+    };
+
+    #[test]
+    fn bios_partition_layout_has_embedding_partition() {
+        let partitions = installation_partitions_for_firmware(InstallationFirmwareMode::Bios);
+
+        assert_eq!(partitions.len(), 2);
+        assert_eq!(partitions[0].role(), InstallationPartitionRole::BiosBoot);
+        assert_eq!(partitions[0].filesystem(), "none");
+        assert_eq!(partitions[0].size_mib(), Some(2));
+        assert_eq!(partitions[1].role(), InstallationPartitionRole::Root);
+        assert_eq!(partitions[1].filesystem(), "ext4");
+        assert_eq!(partitions[1].size_mib(), None);
+    }
+
+    #[test]
+    fn uefi_partition_layout_preserves_existing_default() {
+        let partitions = installation_partitions_for_firmware(InstallationFirmwareMode::Uefi);
+
+        assert_eq!(partitions, default_installation_partitions());
+        assert_eq!(partitions[0].role(), InstallationPartitionRole::EfiSystem);
+        assert_eq!(partitions[0].filesystem(), "fat32");
+        assert_eq!(partitions[0].size_mib(), Some(512));
+        assert_eq!(partitions[1].role(), InstallationPartitionRole::Root);
     }
 }

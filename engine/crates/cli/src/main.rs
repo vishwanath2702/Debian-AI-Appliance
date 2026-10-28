@@ -2293,7 +2293,7 @@ fn installation_operation_name(operation: &InstallationOperation) -> String {
             )
         }
 
-        InstallationOperation::PrepareTargetRuntime { root } => {
+        InstallationOperation::PrepareTargetRuntime { root, .. } => {
             format!("Prepare target runtime at {}", root.display())
         }
 
@@ -2544,7 +2544,8 @@ fn run_install() -> ExitCode {
     };
 
     let selected_storage = format_selected_storage(prepared.installation().storage());
-    let installation_plan = prepared.installation_plan();
+    let firmware = engine::detect_installation_firmware_mode();
+    let installation_plan = prepared.installation_plan_for_firmware(firmware);
 
     print_installation_plan(&installation_plan);
 

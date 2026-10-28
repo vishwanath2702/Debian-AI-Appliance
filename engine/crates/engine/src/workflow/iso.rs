@@ -10,8 +10,8 @@ use registry::PackageRepository;
 use std::fs;
 
 use super::rootfs_verification::{
-    verify_installed_packages, verify_intel_8265_firmware, verify_nvidia_pci_id_databases,
-    verify_setpriv,
+    verify_grub_modules, verify_installed_packages, verify_intel_8265_firmware,
+    verify_nvidia_pci_id_databases, verify_setpriv,
 };
 
 /// Coordinates creation of a bootable ISO appliance.
@@ -217,6 +217,14 @@ impl RootfsVerifier for SystemRootfsVerifier {
 
         verify_installed_packages(build_context.rootfs(), &required)
             .map_err(BuildError::Workspace)?;
+
+        verify_installed_packages(
+            build_context.rootfs(),
+            &["grub-efi-amd64-bin", "grub-pc-bin"],
+        )
+        .map_err(BuildError::Workspace)?;
+
+        verify_grub_modules(build_context.rootfs()).map_err(BuildError::Workspace)?;
 
         verify_intel_8265_firmware(build_context.rootfs()).map_err(BuildError::Workspace)?;
         verify_nvidia_pci_id_databases(build_context.rootfs()).map_err(BuildError::Workspace)?;
@@ -1063,11 +1071,46 @@ mod tests {
         );
     }
 
+    fn create_desktop_grub_module_fixtures(rootfs: &std::path::Path) {
+        for (target, modules) in [
+            (
+                "i386-pc",
+                &[
+                    "biosdisk.mod",
+                    "ext2.mod",
+                    "linux.mod",
+                    "normal.mod",
+                    "part_gpt.mod",
+                ][..],
+            ),
+            (
+                "x86_64-efi",
+                &[
+                    "efi_gop.mod",
+                    "ext2.mod",
+                    "linux.mod",
+                    "normal.mod",
+                    "part_gpt.mod",
+                ][..],
+            ),
+        ] {
+            let directory = rootfs.join("usr/lib/grub").join(target);
+            fs::create_dir_all(&directory).expect("create GRUB module directory");
+
+            for module in modules {
+                fs::write(directory.join(module), b"test module")
+                    .expect("write GRUB module fixture");
+            }
+        }
+    }
+
     #[test]
     fn desktop_verifier_accepts_installed_packages_and_firmware() {
         let temp = tempfile::tempdir().expect("temporary directory");
         let rootfs = temp.path().join("rootfs");
         let dpkg = rootfs.join("var/lib/dpkg");
+
+        create_desktop_grub_module_fixtures(&rootfs);
 
         let nvidia_directory = rootfs.join("usr/share/nvidia");
         fs::create_dir_all(&nvidia_directory).expect("create NVIDIA database directory");
@@ -1088,7 +1131,7 @@ mod tests {
 
         fs::write(
             dpkg.join("status"),
-            "Package: network-manager\nStatus: install ok installed\n\nPackage: firmware-iwlwifi\nStatus: install ok installed\n\n",
+            "Package: network-manager\nStatus: install ok installed\n\nPackage: firmware-iwlwifi\nStatus: install ok installed\n\nPackage: grub-efi-amd64-bin\nStatus: install ok installed\n\nPackage: grub-pc-bin\nStatus: install ok installed\n\n",
         )
         .expect("write package status");
 
@@ -1139,6 +1182,8 @@ mod tests {
         let rootfs = temp.path().join("rootfs");
         let dpkg = rootfs.join("var/lib/dpkg");
 
+        create_desktop_grub_module_fixtures(&rootfs);
+
         let nvidia_directory = rootfs.join("usr/share/nvidia");
         fs::create_dir_all(&nvidia_directory).expect("create NVIDIA database directory");
 
@@ -1161,7 +1206,7 @@ mod tests {
 
         fs::write(
             dpkg.join("status"),
-            "Package: network-manager\nStatus: install ok installed\n\nPackage: firmware-iwlwifi\nStatus: install ok installed\n\n",
+            "Package: network-manager\nStatus: install ok installed\n\nPackage: firmware-iwlwifi\nStatus: install ok installed\n\nPackage: grub-efi-amd64-bin\nStatus: install ok installed\n\nPackage: grub-pc-bin\nStatus: install ok installed\n\n",
         )
         .expect("write package status");
 
@@ -1213,6 +1258,8 @@ mod tests {
         let temp = tempfile::tempdir().expect("temporary directory");
         let rootfs = temp.path().join("rootfs");
         let dpkg = rootfs.join("var/lib/dpkg");
+
+        create_desktop_grub_module_fixtures(&rootfs);
         let firmware = rootfs.join("usr/lib/firmware");
         let setpriv = rootfs.join("usr/bin/setpriv");
 
@@ -1223,7 +1270,7 @@ mod tests {
 
         fs::write(
             dpkg.join("status"),
-            "Package: network-manager\nStatus: install ok installed\n\nPackage: firmware-iwlwifi\nStatus: install ok installed\n\n",
+            "Package: network-manager\nStatus: install ok installed\n\nPackage: firmware-iwlwifi\nStatus: install ok installed\n\nPackage: grub-efi-amd64-bin\nStatus: install ok installed\n\nPackage: grub-pc-bin\nStatus: install ok installed\n\n",
         )
         .expect("write package status");
 
@@ -1275,6 +1322,8 @@ mod tests {
         let rootfs = temp.path().join("rootfs");
         let dpkg = rootfs.join("var/lib/dpkg");
 
+        create_desktop_grub_module_fixtures(&rootfs);
+
         let nvidia_directory = rootfs.join("usr/share/nvidia");
         fs::create_dir_all(&nvidia_directory).expect("create NVIDIA database directory");
 
@@ -1294,7 +1343,7 @@ mod tests {
 
         fs::write(
             dpkg.join("status"),
-            "Package: network-manager\nStatus: install ok installed\n\nPackage: firmware-iwlwifi\nStatus: install ok installed\n\n",
+            "Package: network-manager\nStatus: install ok installed\n\nPackage: firmware-iwlwifi\nStatus: install ok installed\n\nPackage: grub-efi-amd64-bin\nStatus: install ok installed\n\nPackage: grub-pc-bin\nStatus: install ok installed\n\n",
         )
         .expect("write package status");
 
@@ -1330,6 +1379,51 @@ mod tests {
         assert!(
             format!("{error:?}").contains("/usr/bin/setpriv"),
             "verification error should identify missing setpriv: {error:?}"
+        );
+    }
+
+    #[test]
+    fn desktop_verifier_rejects_missing_bios_grub_package() {
+        let temp = tempfile::tempdir().expect("temporary directory");
+        let rootfs = temp.path().join("rootfs");
+        let dpkg = rootfs.join("var/lib/dpkg");
+
+        fs::create_dir_all(&dpkg).expect("create dpkg directory");
+        fs::write(
+            dpkg.join("status"),
+            "Package: network-manager\nStatus: install ok installed\n\nPackage: firmware-iwlwifi\nStatus: install ok installed\n\nPackage: grub-efi-amd64-bin\nStatus: install ok installed\n\n",
+        )
+        .expect("write package status");
+
+        let repository = PackageRepository::from_manifests(vec![PackageManifest::new(
+            "desktop",
+            vec!["network-manager".into(), "firmware-iwlwifi".into()],
+        )])
+        .expect("valid package repository");
+
+        let verifier = SystemRootfsVerifier {
+            package_repository: repository,
+        };
+
+        let (engine, capability, _, _) = workflow_inputs();
+        let plan = engine.plan(&capability).expect("desktop plan");
+
+        let context = BuildContext::new(
+            rootfs,
+            temp.path().join("source.iso"),
+            temp.path().join("work"),
+            temp.path().join("output.iso"),
+            temp.path().join("assets"),
+            BootstrapConfig::default(),
+        );
+
+        let error = verifier
+            .verify(&context, &plan)
+            .expect_err("missing BIOS GRUB package must fail verification");
+
+        assert!(
+            error.to_string().contains("grub-pc-bin"),
+            "error must identify missing BIOS GRUB package: {error:?}"
         );
     }
 
