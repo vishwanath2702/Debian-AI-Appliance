@@ -175,6 +175,7 @@ packages:
                 "xwayland".to_owned(),
                 "xdg-desktop-portal-kde".to_owned(),
                 "kdialog".to_owned(),
+                "qdbus-qt6".to_owned(),
                 "pkexec".to_owned(),
                 "ntfs-3g".to_owned(),
                 "konsole".to_owned(),
