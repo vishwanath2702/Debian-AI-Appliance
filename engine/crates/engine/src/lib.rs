@@ -7,6 +7,7 @@ pub mod benchmark_ollama;
 mod benchmark_ollama_runner;
 mod benchmark_ollama_transport;
 pub mod hardware_monitor;
+pub mod ollama_inventory;
 pub use benchmark::{BenchmarkExecutor, BenchmarkInferenceRunner};
 pub use benchmark_monitoring::{BenchmarkHardwareObservations, BenchmarkHardwareWorker};
 pub use benchmark_ollama_runner::OllamaBenchmarkRunner;

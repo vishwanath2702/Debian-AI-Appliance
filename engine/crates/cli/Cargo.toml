@@ -13,6 +13,7 @@ name = "daia-model-import"
 path = "src/model_import_main.rs"
 
 [dependencies]
+serde_json.workspace = true
 rustix = { version = "=1.1.4", features = ["fs", "process"] }
 application = { path = "../application" }
 engine = { path = "../engine" }

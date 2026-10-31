@@ -13,6 +13,7 @@ const MAX_HTTP_REQUEST_BODY_BYTES: usize = 1024 * 1024;
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(3);
 const IO_TIMEOUT: Duration = Duration::from_secs(2);
 const INFERENCE_DEADLINE: Duration = Duration::from_secs(300);
+const INVENTORY_DEADLINE: Duration = Duration::from_secs(10);
 
 /// Sends a non-streaming generate request to the local Ollama service.
 ///
@@ -34,6 +35,92 @@ pub fn post_generate_to_port(port: u16, body: &[u8]) -> Result<Vec<u8>, Benchmar
     }
     let address = SocketAddrV4::new(Ipv4Addr::LOCALHOST, port);
     post_to_address(address, body, INFERENCE_DEADLINE)
+}
+
+/// Reads the installed-model inventory from the local Ollama service.
+///
+/// # Errors
+///
+/// Returns an execution error on connection, deadline, framing, or HTTP failure.
+pub fn get_installed_models() -> Result<Vec<u8>, BenchmarkError> {
+    get_installed_models_from_port(OLLAMA_PORT)
+}
+
+/// Reads the installed-model inventory from a selected loopback port.
+///
+/// # Errors
+///
+/// Returns an execution error for an invalid port or transport failure.
+pub fn get_installed_models_from_port(port: u16) -> Result<Vec<u8>, BenchmarkError> {
+    if port == 0 {
+        return Err(BenchmarkError::InvalidConfiguration("ollama_port"));
+    }
+
+    let address = SocketAddrV4::new(Ipv4Addr::LOCALHOST, port);
+    let started = Instant::now();
+    let mut stream =
+        TcpStream::connect_timeout(&address.into(), INVENTORY_DEADLINE.min(CONNECT_TIMEOUT))
+            .map_err(|error| {
+                BenchmarkError::Execution(format!("Ollama connection failed: {error}"))
+            })?;
+
+    let request = b"GET /api/tags HTTP/1.1\r\nHost: 127.0.0.1:11434\r\nConnection: close\r\n\r\n";
+
+    write_with_deadline(
+        &mut stream,
+        request,
+        started,
+        INVENTORY_DEADLINE,
+        |socket, timeout| socket.set_write_timeout(Some(timeout)),
+    )?;
+
+    let mut response = Vec::new();
+    let mut buffer = [0_u8; 8192];
+
+    loop {
+        if started.elapsed() >= INVENTORY_DEADLINE {
+            return Err(BenchmarkError::Execution(
+                "Ollama inventory deadline exceeded".into(),
+            ));
+        }
+
+        let remaining = INVENTORY_DEADLINE.saturating_sub(started.elapsed());
+        stream
+            .set_read_timeout(Some(remaining.min(IO_TIMEOUT)))
+            .map_err(|error| BenchmarkError::Execution(error.to_string()))?;
+
+        match stream.read(&mut buffer) {
+            Ok(0) => break,
+            Ok(count) => {
+                if count > MAX_HTTP_RESPONSE_BYTES.saturating_sub(response.len()) {
+                    return Err(BenchmarkError::Execution(
+                        "Ollama HTTP response exceeds size limit".into(),
+                    ));
+                }
+                response.extend_from_slice(&buffer[..count]);
+
+                if let Some(expected) = http_response_total_length(&response)? {
+                    if response.len() >= expected {
+                        return parse_http_response(&response).map(ToOwned::to_owned);
+                    }
+                }
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(error)
+                if error.kind() == std::io::ErrorKind::TimedOut
+                    || error.kind() == std::io::ErrorKind::WouldBlock =>
+            {
+                continue;
+            }
+            Err(error) => {
+                return Err(BenchmarkError::Execution(format!(
+                    "Ollama inventory read failed: {error}"
+                )));
+            }
+        }
+    }
+
+    parse_http_response(&response).map(ToOwned::to_owned)
 }
 
 fn write_with_deadline<W: Write>(
@@ -188,6 +275,65 @@ mod tests {
     use super::*;
     use std::net::TcpListener;
     use std::thread;
+
+    fn serve_inventory_response(response: Vec<u8>) -> u16 {
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let port = listener.local_addr().unwrap().port();
+
+        thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_secs(2)))
+                .unwrap();
+
+            let mut request = [0_u8; 1024];
+            let count = stream.read(&mut request).unwrap();
+            assert!(request[..count].starts_with(b"GET /api/tags HTTP/1.1\r\n"));
+
+            stream.write_all(&response).unwrap();
+        });
+
+        port
+    }
+
+    #[test]
+    fn inventory_get_returns_installed_models() {
+        let body = br#"{"models":[{"name":"qwen2.5:7b","size":12345}]}"#;
+        let response = format!(
+            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+            body.len()
+        )
+        .into_bytes();
+
+        let mut response = response;
+        response.extend_from_slice(body);
+
+        let port = serve_inventory_response(response);
+        let received = get_installed_models_from_port(port).unwrap();
+
+        assert_eq!(received, body);
+    }
+
+    #[test]
+    fn inventory_get_rejects_non_success_status() {
+        let response = b"HTTP/1.1 503 Service Unavailable\r\nContent-Length: 0\r\n\r\n".to_vec();
+
+        let port = serve_inventory_response(response);
+        assert!(get_installed_models_from_port(port).is_err());
+    }
+
+    #[test]
+    fn inventory_get_rejects_invalid_content_length() {
+        let response = b"HTTP/1.1 200 OK\r\nContent-Length: invalid\r\n\r\n".to_vec();
+
+        let port = serve_inventory_response(response);
+        assert!(get_installed_models_from_port(port).is_err());
+    }
+
+    #[test]
+    fn inventory_get_rejects_zero_port() {
+        assert!(get_installed_models_from_port(0).is_err());
+    }
 
     #[test]
     fn writes_complete_request_with_partial_writes() {
