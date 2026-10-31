@@ -2,6 +2,14 @@
 
 use std::{io, process::Command};
 
+pub mod gpu_drm_routing;
+pub mod gpu_telemetry;
+pub mod intel_gpu_telemetry;
+pub mod nvidia_gpu_telemetry;
+pub mod nvidia_smi_backend;
+pub mod nvidia_smi_telemetry;
+pub mod telemetry;
+
 trait ServiceCommandRunner {
     fn output(&mut self, command: &mut Command) -> io::Result<Vec<u8>>;
 }

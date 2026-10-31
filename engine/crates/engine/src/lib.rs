@@ -1,6 +1,10 @@
 //! High-level orchestration for the DAIA engine.
 
 mod apt_query;
+pub mod hardware_monitor;
+pub use hardware_monitor::{
+    HardwareMonitor, HardwareSample, HardwareTelemetrySource, LinuxHardwareTelemetrySource,
+};
 mod bootstrap;
 mod bootstrapper;
 mod context;
