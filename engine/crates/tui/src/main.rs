@@ -17,8 +17,9 @@ use model::LocalizationConfiguration;
 use ratatui::{
     Terminal,
     backend::CrosstermBackend,
-    layout::{Constraint, Direction, Layout},
-    widgets::{Block, Borders, Paragraph},
+    layout::{Constraint, Direction, Layout, Rect},
+    style::{Color, Modifier, Style},
+    widgets::{Block, Borders, Paragraph, Wrap},
 };
 use std::io::{self, Stdout, stdout};
 
@@ -1251,7 +1252,169 @@ fn screen_title(screen: WizardScreen) -> &'static str {
     }
 }
 
+const DAIA_SIDEBAR_WIDTH: u16 = 26;
+const DAIA_MIN_TWO_COLUMN_WIDTH: u16 = 80;
+const DAIA_MIN_TWO_COLUMN_BODY_HEIGHT: u16 = 19;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum WizardLayout {
+    SingleColumn { content: Rect },
+    TwoColumn { sidebar: Rect, content: Rect },
+}
+
+fn calculate_wizard_layout(area: Rect) -> WizardLayout {
+    if area.width < DAIA_MIN_TWO_COLUMN_WIDTH || area.height < DAIA_MIN_TWO_COLUMN_BODY_HEIGHT {
+        return WizardLayout::SingleColumn { content: area };
+    }
+
+    let columns = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Length(DAIA_SIDEBAR_WIDTH), Constraint::Min(0)])
+        .split(area);
+
+    WizardLayout::TwoColumn {
+        sidebar: columns[0],
+        content: columns[1],
+    }
+}
+
+/// Keep a selected rendered row visible inside a vertical viewport.
+///
+/// `selected_start` and `selected_height` are measured in terminal rows
+/// after wrapping, not in source-text lines.
+fn scroll_offset_for_selection(
+    current_offset: usize,
+    selected_start: usize,
+    selected_height: usize,
+    content_height: usize,
+    viewport_height: usize,
+) -> usize {
+    if viewport_height == 0 || content_height == 0 {
+        return 0;
+    }
+
+    let max_offset = content_height.saturating_sub(viewport_height);
+    let mut offset = current_offset.min(max_offset);
+
+    if selected_height == 0 {
+        return offset;
+    }
+
+    let selected_start = selected_start.min(content_height.saturating_sub(1));
+    let selected_end = selected_start
+        .saturating_add(selected_height)
+        .min(content_height);
+
+    if selected_start < offset {
+        offset = selected_start;
+    } else if selected_end > offset.saturating_add(viewport_height) {
+        if selected_height > viewport_height {
+            offset = selected_start;
+        } else {
+            offset = selected_end.saturating_sub(viewport_height);
+        }
+    }
+
+    offset.min(max_offset)
+}
+
+/// Calculate the viewport offset from the focused logical line.
+///
+/// Ratatui measures the wrapped height, so long paths and descriptions
+/// are accounted for before choosing the visible viewport.
+fn focused_configuration_scroll(content: &str, width: u16, height: u16) -> u16 {
+    if width == 0 || height == 0 {
+        return 0;
+    }
+
+    let lines: Vec<&str> = content.split('\n').collect();
+
+    // The combined single-column layout also contains the selected
+    // navigation screen. The last marker belongs to the active field.
+    let Some(focused_index) = lines
+        .iter()
+        .rposition(|line| line.trim_start().starts_with("> "))
+    else {
+        return 0;
+    };
+
+    let wrapped_height = |value: &str| {
+        Paragraph::new(value)
+            .wrap(Wrap { trim: false })
+            .line_count(width)
+    };
+
+    let selected_start = if focused_index == 0 {
+        0
+    } else {
+        lines[..focused_index]
+            .iter()
+            .map(|line| wrapped_height(line))
+            .sum()
+    };
+
+    let selected_height = wrapped_height(lines[focused_index]);
+    let content_height = wrapped_height(content);
+
+    scroll_offset_for_selection(
+        0,
+        selected_start,
+        selected_height,
+        content_height,
+        usize::from(height),
+    )
+    .min(usize::from(u16::MAX)) as u16
+}
+
+fn style_wizard_detail(
+    content: &str,
+    navigation_lines: usize,
+    background: Color,
+    secondary: Color,
+) -> ratatui::text::Text<'static> {
+    let selected_style = Style::default()
+        .fg(Color::White)
+        .bg(Color::Rgb(24, 63, 104))
+        .add_modifier(Modifier::BOLD);
+
+    let navigation_style = Style::default()
+        .fg(Color::Rgb(139, 203, 255))
+        .bg(background)
+        .add_modifier(Modifier::BOLD);
+
+    let normal_style = Style::default().fg(secondary).bg(background);
+
+    let lines = content
+        .split('\n')
+        .enumerate()
+        .map(|(index, line)| {
+            let selected = line.trim_start().starts_with("> ");
+
+            let style = if selected && index < navigation_lines {
+                navigation_style
+            } else if selected {
+                selected_style
+            } else {
+                normal_style
+            };
+
+            ratatui::text::Line::styled(line.to_owned(), style)
+        })
+        .collect::<Vec<_>>();
+
+    ratatui::text::Text::from(lines)
+}
+
 fn render(frame: &mut ratatui::Frame<'_>, state: &TuiState) {
+    let background = Color::Rgb(11, 32, 57);
+    let primary = Color::Rgb(255, 255, 255);
+    let secondary = Color::Rgb(185, 208, 227);
+    let accent = Color::Rgb(139, 203, 255);
+    let border = Color::Rgb(52, 88, 120);
+
+    let base_style = Style::default().fg(primary).bg(background);
+    frame.render_widget(Block::default().style(base_style), frame.area());
+
     let areas = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
@@ -1262,7 +1425,13 @@ fn render(frame: &mut ratatui::Frame<'_>, state: &TuiState) {
         .split(frame.area());
 
     let title = Paragraph::new("Debian AI Appliance")
-        .block(Block::default().borders(Borders::ALL).title("DAIA"));
+        .style(Style::default().fg(accent).bg(background))
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(border))
+                .title("DAIA"),
+        );
 
     let profile = state.wizard.profile_name().unwrap_or("Not selected");
 
@@ -1827,11 +1996,58 @@ fn render(frame: &mut ratatui::Frame<'_>, state: &TuiState) {
         }
     };
 
-    let body = Paragraph::new(format!("{navigation}\n\n{detail}")).block(
-        Block::default()
-            .borders(Borders::ALL)
-            .title("Configuration"),
-    );
+    let welcome_text = if state.screen == WizardScreen::Welcome {
+        let selected = Style::default()
+            .fg(Color::White)
+            .bg(Color::Rgb(24, 63, 104))
+            .add_modifier(Modifier::BOLD);
+
+        let normal = Style::default().fg(secondary).bg(background);
+
+        let start_style = if state.welcome_action == WelcomeAction::Start {
+            selected
+        } else {
+            normal
+        };
+
+        let quit_style = if state.welcome_action == WelcomeAction::Quit {
+            selected
+        } else {
+            normal
+        };
+
+        ratatui::text::Text::from(vec![
+            ratatui::text::Line::from(""),
+            ratatui::text::Line::styled(
+                "  Welcome to Debian AI Appliance",
+                Style::default()
+                    .fg(accent)
+                    .bg(background)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            ratatui::text::Line::styled("  Your AI. Your Machine.", normal),
+            ratatui::text::Line::from(""),
+            ratatui::text::Line::styled("  Start Installation", start_style),
+            ratatui::text::Line::styled("  Quit", quit_style),
+        ])
+    } else {
+        style_wizard_detail(
+            &format!("{navigation}\n\n{detail}"),
+            screens.len(),
+            background,
+            secondary,
+        )
+    };
+
+    let body = Paragraph::new(welcome_text)
+        .style(base_style)
+        .wrap(Wrap { trim: false })
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(border))
+                .title("Configuration"),
+        );
 
     let controls = match state.screen {
         WizardScreen::Welcome => "↑ / ↓: Navigate    Enter: Select",
@@ -1852,10 +2068,66 @@ fn render(frame: &mut ratatui::Frame<'_>, state: &TuiState) {
         _ => "↑ / ↓: Navigate    Enter: Select    Esc: Back",
     };
 
-    let controls = Paragraph::new(controls).block(Block::default().borders(Borders::ALL));
+    let controls = Paragraph::new(controls)
+        .style(Style::default().fg(secondary).bg(background))
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(border)),
+        );
 
     frame.render_widget(title, areas[0]);
-    frame.render_widget(body, areas[1]);
+
+    if state.screen == WizardScreen::Welcome {
+        frame.render_widget(body, areas[1]);
+    } else {
+        match calculate_wizard_layout(areas[1]) {
+            WizardLayout::SingleColumn { content } => {
+                let combined = format!("{navigation}\n\n{detail}");
+                let offset = focused_configuration_scroll(
+                    &combined,
+                    content.width.saturating_sub(2),
+                    content.height.saturating_sub(2),
+                );
+
+                frame.render_widget(body.scroll((offset, 0)), content);
+            }
+            WizardLayout::TwoColumn { sidebar, content } => {
+                let navigation_text =
+                    style_wizard_detail(&navigation, screens.len(), background, secondary);
+
+                let sidebar_widget = Paragraph::new(navigation_text).style(base_style).block(
+                    Block::default()
+                        .borders(Borders::ALL)
+                        .border_style(Style::default().fg(border))
+                        .title("Navigation"),
+                );
+
+                let detail_text = style_wizard_detail(&detail, 0, background, secondary);
+
+                let offset = focused_configuration_scroll(
+                    &detail,
+                    content.width.saturating_sub(2),
+                    content.height.saturating_sub(2),
+                );
+
+                let content_widget = Paragraph::new(detail_text)
+                    .style(base_style)
+                    .wrap(Wrap { trim: false })
+                    .scroll((offset, 0))
+                    .block(
+                        Block::default()
+                            .borders(Borders::ALL)
+                            .border_style(Style::default().fg(border))
+                            .title("Configuration"),
+                    );
+
+                frame.render_widget(sidebar_widget, sidebar);
+                frame.render_widget(content_widget, content);
+            }
+        }
+    }
+
     frame.render_widget(controls, areas[2]);
 }
 
@@ -1875,7 +2147,14 @@ impl TerminalSession {
 
         let backend = CrosstermBackend::new(output);
         match Terminal::new(backend) {
-            Ok(terminal) => Ok(Self { terminal }),
+            Ok(mut terminal) => {
+                if let Err(error) = terminal.clear() {
+                    let _ = disable_raw_mode();
+                    let _ = execute!(terminal.backend_mut(), LeaveAlternateScreen);
+                    return Err(error);
+                }
+                Ok(Self { terminal })
+            }
             Err(error) => {
                 let _ = disable_raw_mode();
                 let mut output = stdout();
@@ -2158,6 +2437,630 @@ fn run() -> io::Result<()> {
 
 fn main() -> io::Result<()> {
     run()
+}
+
+#[cfg(test)]
+mod midnight_blue_rendering_tests {
+    use super::*;
+    use ratatui::{Terminal, backend::TestBackend};
+
+    fn rendered_text(terminal: &Terminal<TestBackend>, width: u16, height: u16) -> String {
+        let buffer = terminal.backend().buffer();
+
+        (0..height)
+            .map(|y| {
+                (0..width)
+                    .map(|x| buffer[(x, y)].symbol())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    fn render_scrolled_fixture(content: &str, terminal_width: u16, terminal_height: u16) -> String {
+        let mut terminal = Terminal::new(TestBackend::new(terminal_width, terminal_height))
+            .expect("test terminal");
+
+        terminal
+            .draw(|frame| {
+                let areas = Layout::default()
+                    .direction(Direction::Vertical)
+                    .constraints([
+                        Constraint::Length(3),
+                        Constraint::Min(1),
+                        Constraint::Length(3),
+                    ])
+                    .split(frame.area());
+
+                let content_area = match calculate_wizard_layout(areas[1]) {
+                    WizardLayout::SingleColumn { content } => content,
+                    WizardLayout::TwoColumn { content, .. } => content,
+                };
+
+                let width = content_area.width.saturating_sub(2);
+                let height = content_area.height.saturating_sub(2);
+
+                let offset = focused_configuration_scroll(content, width, height);
+
+                let paragraph = Paragraph::new(content)
+                    .wrap(Wrap { trim: false })
+                    .scroll((offset, 0))
+                    .block(
+                        Block::default()
+                            .borders(Borders::ALL)
+                            .title("Configuration"),
+                    );
+
+                frame.render_widget(paragraph, content_area);
+            })
+            .expect("render fixture");
+
+        rendered_text(&terminal, terminal_width, terminal_height)
+    }
+
+    #[test]
+    fn scroll_renders_bottom_selection_at_all_supported_sizes() {
+        for (width, height) in [(60, 20), (80, 25), (100, 30), (120, 35)] {
+            let content = (0..45)
+                .map(|index| {
+                    if index == 44 {
+                        "> FINAL_SELECTION_VISIBLE".to_owned()
+                    } else {
+                        format!("  Configuration item {index:02}")
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+
+            let rendered = render_scrolled_fixture(&content, width, height);
+
+            assert!(
+                rendered.contains("FINAL_SELECTION_VISIBLE"),
+                "focused bottom selection invisible at {width}x{height}"
+            );
+        }
+    }
+
+    #[test]
+    fn scroll_renders_selection_after_wrapped_model_paths() {
+        for (width, height) in [(60, 20), (80, 25), (100, 30), (120, 35)] {
+            let mut rows = vec!["Bundled Models".to_owned(), String::new()];
+
+            for index in 0..18 {
+                rows.push(format!(
+                    "  /media/daia/models/archive/{index:02}/\
+                     very-long-model-directory/\
+                     qwen2.5-instruct-q4_k_m.gguf"
+                ));
+            }
+
+            rows.push("> INSTALL_NOW_VISIBLE".to_owned());
+
+            let rendered = render_scrolled_fixture(&rows.join("\n"), width, height);
+
+            assert!(
+                rendered.contains("INSTALL_NOW_VISIBLE"),
+                "focused action invisible after model paths at {width}x{height}"
+            );
+        }
+    }
+
+    #[test]
+    fn scroll_renders_selection_after_wrapped_profile_descriptions() {
+        for (width, height) in [(60, 20), (80, 25), (100, 30), (120, 35)] {
+            let mut rows = vec!["Choose the appliance profile".to_owned(), String::new()];
+
+            for index in 0..12 {
+                rows.push(format!("  Appliance Profile {index}"));
+                rows.push(
+                    "    A desktop AI appliance with local inference, \
+                     model management, external content import, \
+                     and configurable services."
+                        .to_owned(),
+                );
+                rows.push(
+                    "    Capabilities: desktop, inference, \
+                     model-import, content-discovery"
+                        .to_owned(),
+                );
+                rows.push(String::new());
+            }
+
+            rows.push("> PROFILE_SELECTION_VISIBLE".to_owned());
+
+            let rendered = render_scrolled_fixture(&rows.join("\n"), width, height);
+
+            assert!(
+                rendered.contains("PROFILE_SELECTION_VISIBLE"),
+                "focused profile invisible at {width}x{height}"
+            );
+        }
+    }
+
+    #[test]
+    fn scroll_renders_continue_and_back_actions() {
+        for (width, height) in [(60, 20), (80, 25), (100, 30), (120, 35)] {
+            let summary = (0..35)
+                .map(|index| format!("  Review item {index:02}"))
+                .collect::<Vec<_>>()
+                .join("\n");
+
+            for action in [
+                "> CONTINUE_ACTION_VISIBLE\n  Back",
+                "  Continue\n> BACK_ACTION_VISIBLE",
+            ] {
+                let content = format!("Review Configuration\n\n{summary}\n\n{action}");
+
+                let rendered = render_scrolled_fixture(&content, width, height);
+
+                let expected = if action.starts_with('>') {
+                    "CONTINUE_ACTION_VISIBLE"
+                } else {
+                    "BACK_ACTION_VISIBLE"
+                };
+
+                assert!(
+                    rendered.contains(expected),
+                    "{expected} invisible at {width}x{height}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn focused_scroll_reveals_last_configuration_item() {
+        let content = (0..30)
+            .map(|index| {
+                let marker = if index == 29 { ">" } else { " " };
+                format!("{marker} Configuration item {index:02}")
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        let offset = focused_configuration_scroll(&content, 52, 17);
+        assert!(offset > 0);
+
+        let mut terminal = Terminal::new(TestBackend::new(80, 25)).expect("test terminal");
+
+        terminal
+            .draw(|frame| {
+                let paragraph = Paragraph::new(content.as_str())
+                    .wrap(Wrap { trim: false })
+                    .scroll((offset, 0))
+                    .block(
+                        Block::default()
+                            .borders(Borders::ALL)
+                            .title("Configuration"),
+                    );
+
+                frame.render_widget(paragraph, Rect::new(26, 3, 54, 19));
+            })
+            .expect("render scrolled configuration");
+
+        let rendered = rendered_text(&terminal, 80, 25);
+        assert!(rendered.contains("Configuration item 29"));
+    }
+
+    #[test]
+    fn focused_scroll_accounts_for_wrapped_paths() {
+        let path = "/media/daia/models/collection/very-long-directory-name/model.gguf";
+
+        let content = format!("Bundled Models\n\n{}\n> Selected model", path);
+
+        let offset = focused_configuration_scroll(&content, 20, 3);
+        assert!(offset > 0);
+    }
+
+    #[test]
+    fn focused_scroll_uses_detail_marker_after_navigation() {
+        let content = "> External Content\n  Storage\n\nDetails\n> Continue";
+
+        let offset = focused_configuration_scroll(content, 20, 3);
+        assert!(offset > 0);
+    }
+
+    #[test]
+    fn focused_scroll_handles_empty_viewports_and_no_selection() {
+        assert_eq!(focused_configuration_scroll("> Continue", 0, 10), 0);
+        assert_eq!(focused_configuration_scroll("> Continue", 20, 0), 0);
+        assert_eq!(focused_configuration_scroll("No focused item", 20, 5), 0);
+    }
+
+    #[test]
+    fn scroll_helper_keeps_visible_selection_stable() {
+        assert_eq!(scroll_offset_for_selection(4, 6, 2, 30, 10), 4);
+    }
+
+    #[test]
+    fn scroll_helper_moves_down_for_wrapped_selection() {
+        assert_eq!(scroll_offset_for_selection(0, 12, 4, 30, 10), 6);
+    }
+
+    #[test]
+    fn scroll_helper_moves_up_to_selected_row() {
+        assert_eq!(scroll_offset_for_selection(15, 5, 2, 30, 10), 5);
+    }
+
+    #[test]
+    fn scroll_helper_clamps_to_last_valid_viewport() {
+        assert_eq!(scroll_offset_for_selection(0, 28, 2, 30, 10), 20);
+    }
+
+    #[test]
+    fn scroll_helper_handles_selection_taller_than_viewport() {
+        assert_eq!(scroll_offset_for_selection(0, 12, 15, 40, 10), 12);
+    }
+
+    #[test]
+    fn scroll_helper_handles_empty_and_zero_height_viewports() {
+        assert_eq!(scroll_offset_for_selection(5, 10, 2, 0, 10), 0);
+
+        assert_eq!(scroll_offset_for_selection(5, 10, 2, 30, 0), 0);
+
+        assert_eq!(scroll_offset_for_selection(5, 10, 0, 30, 10), 5);
+    }
+
+    #[test]
+    fn scroll_helper_clamps_existing_offset() {
+        assert_eq!(scroll_offset_for_selection(100, 25, 1, 30, 10), 20);
+    }
+
+    #[test]
+    fn long_configuration_text_is_currently_clipped_vertically() {
+        let mut terminal = Terminal::new(TestBackend::new(80, 25)).expect("test terminal");
+
+        let background = Color::Rgb(11, 32, 57);
+        let secondary = Color::Rgb(185, 208, 227);
+
+        let long_text = (0..30)
+            .map(|index| format!("Configuration item {index:02}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        terminal
+            .draw(|frame| {
+                let area = Rect::new(26, 3, 54, 19);
+
+                let styled = style_wizard_detail(&long_text, 0, background, secondary);
+
+                let paragraph = Paragraph::new(styled).block(
+                    Block::default()
+                        .borders(Borders::ALL)
+                        .title("Configuration"),
+                );
+
+                frame.render_widget(paragraph, area);
+            })
+            .expect("render overflowing configuration");
+
+        let rendered = rendered_text(&terminal, 80, 25);
+
+        assert!(rendered.contains("Configuration item 00"));
+        assert!(rendered.contains("Configuration item 16"));
+
+        assert!(
+            !rendered.contains("Configuration item 29"),
+            "Current renderer should demonstrate vertical clipping"
+        );
+    }
+
+    #[test]
+    fn long_configuration_path_is_currently_clipped_horizontally() {
+        let mut terminal = Terminal::new(TestBackend::new(80, 25)).expect("test terminal");
+
+        let long_path = "/media/daia/models/collection/very-long-directory-name/model.gguf";
+
+        terminal
+            .draw(|frame| {
+                let area = Rect::new(26, 3, 54, 19);
+
+                let paragraph = Paragraph::new(long_path).block(
+                    Block::default()
+                        .borders(Borders::ALL)
+                        .title("Configuration"),
+                );
+
+                frame.render_widget(paragraph, area);
+            })
+            .expect("render long model path");
+
+        let rendered = rendered_text(&terminal, 80, 25);
+
+        assert!(rendered.contains("/media/daia/models"));
+
+        assert!(
+            !rendered.contains("model.gguf"),
+            "Current renderer should demonstrate horizontal clipping"
+        );
+    }
+
+    #[test]
+    fn wrapped_configuration_path_preserves_filename() {
+        let mut terminal = Terminal::new(TestBackend::new(80, 25)).expect("test terminal");
+
+        let path = "/media/daia/models/collection/very-long-directory-name/model.gguf";
+
+        terminal
+            .draw(|frame| {
+                let area = Rect::new(26, 3, 54, 19);
+
+                let paragraph = Paragraph::new(path).wrap(Wrap { trim: false }).block(
+                    Block::default()
+                        .borders(Borders::ALL)
+                        .title("Configuration"),
+                );
+
+                frame.render_widget(paragraph, area);
+            })
+            .expect("render wrapped model path");
+
+        let rendered = rendered_text(&terminal, 80, 25);
+
+        assert!(rendered.contains("/media/daia/models"));
+        assert!(rendered.contains("model.gguf"));
+    }
+
+    #[test]
+    fn responsive_renderer_uses_single_column_at_60_by_20() {
+        let mut terminal = Terminal::new(TestBackend::new(60, 20)).expect("test terminal");
+        let mut state = TuiState::new();
+        state.screen = WizardScreen::Localization;
+
+        terminal
+            .draw(|frame| render(frame, &state))
+            .expect("render narrow terminal");
+
+        let rendered = rendered_text(&terminal, 60, 20);
+
+        assert!(rendered.contains("Localization"));
+        assert!(!rendered.contains("Navigation"));
+    }
+
+    #[test]
+    fn responsive_renderer_uses_sidebar_at_80_by_25() {
+        let mut terminal = Terminal::new(TestBackend::new(80, 25)).expect("test terminal");
+        let mut state = TuiState::new();
+        state.screen = WizardScreen::Localization;
+
+        terminal
+            .draw(|frame| render(frame, &state))
+            .expect("render 80-column terminal");
+
+        let rendered = rendered_text(&terminal, 80, 25);
+
+        assert!(rendered.contains("Navigation"));
+        assert!(rendered.contains("Configuration"));
+        assert!(rendered.contains("Language"));
+    }
+
+    #[test]
+    fn responsive_renderer_uses_sidebar_at_100_by_30() {
+        let mut terminal = Terminal::new(TestBackend::new(100, 30)).expect("test terminal");
+        let mut state = TuiState::new();
+        state.screen = WizardScreen::Localization;
+
+        terminal
+            .draw(|frame| render(frame, &state))
+            .expect("render 100-column terminal");
+
+        let rendered = rendered_text(&terminal, 100, 30);
+
+        assert!(rendered.contains("Navigation"));
+        assert!(rendered.contains("Configuration"));
+        assert!(rendered.contains("Language"));
+    }
+
+    #[test]
+    fn responsive_renderer_uses_sidebar_at_120_by_35() {
+        let mut terminal = Terminal::new(TestBackend::new(120, 35)).expect("test terminal");
+        let mut state = TuiState::new();
+        state.screen = WizardScreen::Localization;
+
+        terminal
+            .draw(|frame| render(frame, &state))
+            .expect("render 120-column terminal");
+
+        let rendered = rendered_text(&terminal, 120, 35);
+
+        assert!(rendered.contains("Navigation"));
+        assert!(rendered.contains("Configuration"));
+        assert!(rendered.contains("Language"));
+    }
+
+    #[test]
+    fn responsive_layout_uses_single_column_on_narrow_terminal() {
+        let area = Rect::new(0, 0, 60, 14);
+
+        assert_eq!(
+            calculate_wizard_layout(area),
+            WizardLayout::SingleColumn { content: area }
+        );
+    }
+
+    #[test]
+    fn responsive_layout_uses_single_column_on_short_terminal() {
+        let area = Rect::new(0, 0, 120, 18);
+
+        assert_eq!(
+            calculate_wizard_layout(area),
+            WizardLayout::SingleColumn { content: area }
+        );
+    }
+
+    #[test]
+    fn responsive_layout_falls_back_below_minimum_body_height() {
+        let area = Rect::new(0, 3, 80, 18);
+
+        assert_eq!(
+            calculate_wizard_layout(area),
+            WizardLayout::SingleColumn { content: area }
+        );
+    }
+
+    #[test]
+    fn responsive_layout_uses_two_columns_at_80_by_25() {
+        let area = Rect::new(0, 3, 80, 19);
+
+        match calculate_wizard_layout(area) {
+            WizardLayout::TwoColumn { sidebar, content } => {
+                assert_eq!(sidebar, Rect::new(0, 3, 26, 19));
+                assert_eq!(content, Rect::new(26, 3, 54, 19));
+            }
+            other => panic!("expected two columns, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn responsive_layout_preserves_offset_and_width_at_100_by_30() {
+        let area = Rect::new(3, 4, 100, 30);
+
+        match calculate_wizard_layout(area) {
+            WizardLayout::TwoColumn { sidebar, content } => {
+                assert_eq!(sidebar, Rect::new(3, 4, 26, 30));
+                assert_eq!(content, Rect::new(29, 4, 74, 30));
+            }
+            other => panic!("expected two columns, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn responsive_layout_uses_two_columns_at_120_by_35() {
+        let area = Rect::new(0, 0, 120, 35);
+
+        match calculate_wizard_layout(area) {
+            WizardLayout::TwoColumn { sidebar, content } => {
+                assert_eq!(sidebar, Rect::new(0, 0, 26, 35));
+                assert_eq!(content, Rect::new(26, 0, 94, 35));
+            }
+            other => panic!("expected two columns, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn wizard_navigation_uses_accent_without_selection_background() {
+        let background = Color::Rgb(11, 32, 57);
+        let secondary = Color::Rgb(185, 208, 227);
+
+        let text = style_wizard_detail(
+            "  Welcome\n> Localization\n  Hardware Check\n\nLocalization\n\n> Language: English",
+            3,
+            background,
+            secondary,
+        );
+
+        assert_eq!(text.lines.len(), 7);
+
+        assert_eq!(text.lines[1].spans[0].content, "> Localization");
+        assert_eq!(text.lines[1].style.fg, Some(Color::Rgb(139, 203, 255)));
+        assert_eq!(text.lines[1].style.bg, Some(background));
+        assert!(text.lines[1].style.add_modifier.contains(Modifier::BOLD));
+
+        assert_eq!(text.lines[6].spans[0].content, "> Language: English");
+        assert_eq!(text.lines[6].style.fg, Some(Color::White));
+        assert_eq!(text.lines[6].style.bg, Some(Color::Rgb(24, 63, 104)));
+        assert!(text.lines[6].style.add_modifier.contains(Modifier::BOLD));
+
+        assert_eq!(text.lines[0].style.bg, Some(background));
+        assert_eq!(text.lines[2].style.fg, Some(secondary));
+    }
+
+    #[test]
+    fn wizard_detail_highlights_only_focused_rows() {
+        let text = style_wizard_detail(
+            "Localization\n\n> Language: en\n  Country: IN\n\n  > Back",
+            1,
+            Color::Rgb(11, 32, 57),
+            Color::Rgb(185, 208, 227),
+        );
+
+        let selected = Color::Rgb(24, 63, 104);
+        let background = Color::Rgb(11, 32, 57);
+
+        assert_eq!(text.lines.len(), 6);
+
+        assert_eq!(text.lines[0].spans[0].content, "Localization");
+        assert_eq!(text.lines[0].style.bg, Some(background));
+
+        assert_eq!(text.lines[2].spans[0].content, "> Language: en");
+        assert_eq!(text.lines[2].style.bg, Some(selected));
+
+        assert_eq!(text.lines[3].spans[0].content, "  Country: IN");
+        assert_eq!(text.lines[3].style.bg, Some(background));
+
+        assert_eq!(text.lines[5].spans[0].content, "  > Back");
+        assert_eq!(text.lines[5].style.bg, Some(selected));
+    }
+
+    #[test]
+    fn welcome_selection_highlight_follows_focus() {
+        let backend = TestBackend::new(100, 35);
+        let mut terminal = Terminal::new(backend).expect("test terminal");
+        let mut state = TuiState::new();
+
+        let selected_color = Color::Rgb(24, 63, 104);
+        let background_color = Color::Rgb(11, 32, 57);
+
+        terminal
+            .draw(|frame| render(frame, &state))
+            .expect("render Start selection");
+
+        let start_buffer = terminal.backend().buffer();
+
+        assert_eq!(start_buffer[(4, 8)].bg, selected_color);
+        assert_eq!(start_buffer[(4, 9)].bg, background_color);
+
+        state.welcome_action = WelcomeAction::Quit;
+
+        terminal
+            .draw(|frame| render(frame, &state))
+            .expect("render Quit selection");
+
+        let quit_buffer = terminal.backend().buffer();
+
+        assert_eq!(quit_buffer[(4, 8)].bg, background_color);
+        assert_eq!(quit_buffer[(4, 9)].bg, selected_color);
+    }
+
+    #[test]
+    fn midnight_blue_welcome_rendering_regression() {
+        let backend = TestBackend::new(100, 35);
+        let mut terminal = Terminal::new(backend).expect("test terminal");
+        let state = TuiState::new();
+
+        terminal
+            .draw(|frame| render(frame, &state))
+            .expect("render Welcome screen");
+
+        let buffer = terminal.backend().buffer();
+
+        assert_eq!(
+            buffer[(50, 20)].bg,
+            Color::Rgb(11, 32, 57),
+            "Welcome background should be Midnight Blue",
+        );
+
+        let header = (1..25).map(|x| &buffer[(x, 1)]).collect::<Vec<_>>();
+
+        assert!(
+            header.iter().any(|cell| {
+                cell.fg == Color::Rgb(139, 203, 255) && !cell.symbol().trim().is_empty()
+            }),
+            "Welcome header should contain cyan-accented text",
+        );
+
+        let rendered = (0..35)
+            .map(|y| {
+                (0..100)
+                    .map(|x| buffer[(x, y)].symbol())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert!(rendered.contains("Welcome to Debian AI Appliance"));
+        assert!(rendered.contains("Start Installation"));
+        assert!(rendered.contains("Quit"));
+    }
 }
 
 #[cfg(test)]
