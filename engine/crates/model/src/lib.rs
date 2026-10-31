@@ -1,5 +1,11 @@
 //! Core domain types shared across the DAIA engine.
 
+mod benchmark;
+pub use benchmark::{
+    BenchmarkConfiguration, BenchmarkError, BenchmarkRequest, BenchmarkResult, BenchmarkRun,
+    BenchmarkRunKind,
+};
+
 mod localization;
 pub use localization::LocalizationConfiguration;
 

@@ -1,7 +1,15 @@
 //! High-level orchestration for the DAIA engine.
 
 mod apt_query;
+mod benchmark;
+mod benchmark_monitoring;
+pub mod benchmark_ollama;
+mod benchmark_ollama_runner;
+mod benchmark_ollama_transport;
 pub mod hardware_monitor;
+pub use benchmark::{BenchmarkExecutor, BenchmarkInferenceRunner};
+pub use benchmark_monitoring::{BenchmarkHardwareObservations, BenchmarkHardwareWorker};
+pub use benchmark_ollama_runner::OllamaBenchmarkRunner;
 pub use hardware_monitor::{
     HardwareMonitor, HardwareSample, HardwareTelemetrySource, LinuxHardwareTelemetrySource,
 };
