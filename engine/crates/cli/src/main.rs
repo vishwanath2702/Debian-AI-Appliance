@@ -20,6 +20,7 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::process::ExitCode;
 mod appliance_profile_repository;
+mod model_benchmark;
 mod provider_registry;
 
 struct BuildOptions {
@@ -689,6 +690,9 @@ fn run(arguments: &[String]) -> ExitCode {
         [command] if command == "wizard" => run_wizard(),
         [command] if command == "install" => run_install(),
         [command] if command == "realize-models" => run_realize_models(),
+        [command, subcommand, model_name] if command == "model" && subcommand == "benchmark" => {
+            model_benchmark::run(model_name)
+        }
         [command, subcommand] if command == "model" && subcommand == "discover" => {
             run_model_volume_discovery()
         }
@@ -1000,6 +1004,7 @@ fn print_usage() {
     eprintln!("    daia install");
     eprintln!("    daia realize-models");
     eprintln!("    daia model discover");
+    eprintln!("    daia model benchmark <model-name>");
     eprintln!("    daia model list-volumes");
     eprintln!("    daia model list-models <device>");
     eprintln!("    daia model import-volume <device> <filename> <model-name>");
