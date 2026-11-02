@@ -102,6 +102,31 @@ ai_install() {
         return 1
     fi
 
+    # Provision the dedicated Model Exporter worker identity.
+    # This does not authorize export requests or start a worker.
+    local export_sysusers_source="${runtime_root}/sysusers.d/daia-export.conf"
+    local export_sysusers_destination="${sysusers_directory}/daia-export.conf"
+
+    if [[ ! -s "$export_sysusers_source" ]]; then
+        echo "Exporter system user definition is missing or empty: $export_sysusers_source" >&2
+        return 1
+    fi
+
+    if ! cp "$export_sysusers_source" "$export_sysusers_destination"; then
+        echo "Failed to install exporter system user definition: $export_sysusers_destination" >&2
+        return 1
+    fi
+
+    if ! chmod 0644 "$export_sysusers_destination"; then
+        echo "Failed to set exporter system user definition permissions: $export_sysusers_destination" >&2
+        return 1
+    fi
+
+    if ! systemd-sysusers "$export_sysusers_destination"; then
+        echo "Failed to create exporter system user from: $export_sysusers_destination" >&2
+        return 1
+    fi
+
     if [[ ! -s "$service_source" ]]; then
         echo "Ollama service definition is missing or empty: $service_source" >&2
         return 1
@@ -119,6 +144,69 @@ ai_install() {
 
     if ! chmod 0644 "$service_destination"; then
         echo "Failed to set Ollama service definition permissions: $service_destination" >&2
+        return 1
+    fi
+
+    # Install Model Exporter authorization and worker definitions.
+    # The worker and socket remain disabled until authorization is complete.
+    local export_policy_source="${runtime_root}/polkit-1/actions/org.daia.model-export.policy"
+    local export_policy_directory="${DAIA_POLKIT_ACTIONS_DIRECTORY:-/usr/share/polkit-1/actions}"
+    local export_policy_destination="${export_policy_directory}/org.daia.model-export.policy"
+    local export_worker_source="${runtime_root}/services/daia-model-export-worker.service"
+    local export_worker_destination="${systemd_system_directory}/daia-model-export-worker.service"
+    local export_socket_source="${runtime_root}/services/daia-model-export.socket"
+    local export_socket_destination="${systemd_system_directory}/daia-model-export.socket"
+
+    if [[ "$EUID" -ne 0 ]]; then
+        echo "Exporter configuration installation requires root" >&2
+        return 1
+    fi
+
+    if ! mkdir -p "$export_policy_directory"; then
+        echo "Failed to create exporter polkit actions directory" >&2
+        return 1
+    fi
+
+    local export_source
+    local export_destination
+
+    for export_source in \
+        "$export_policy_source" \
+        "$export_worker_source" \
+        "$export_socket_source"
+    do
+        if [[ ! -f "$export_source" || -L "$export_source" ]]; then
+            echo "Exporter configuration source is missing or unsafe: $export_source" >&2
+            return 1
+        fi
+    done
+
+    for export_destination in \
+        "$export_policy_destination" \
+        "$export_worker_destination" \
+        "$export_socket_destination"
+    do
+        if [[ -L "$export_destination" ]]; then
+            echo "Exporter configuration destination is a symlink: $export_destination" >&2
+            return 1
+        fi
+    done
+
+    if ! install -o root -g root -m 0644 \
+        "$export_policy_source" "$export_policy_destination"; then
+        echo "Failed to install exporter polkit policy" >&2
+        return 1
+    fi
+
+    if ! install -o root -g root -m 0644 \
+        "$export_worker_source" "$export_worker_destination"; then
+        echo "Failed to install exporter worker service" >&2
+        return 1
+    fi
+
+    if ! install -o root -g root -m 0644 \
+        "$export_socket_source" "$export_socket_destination"; then
+        echo "Failed to install exporter socket unit" >&2
         return 1
     fi
 
@@ -245,6 +333,130 @@ ai_verify() {
     fi
 
     _ai_verify_ollama_account || return 1
+    # The exporter worker must have its own nonroot identity.
+    local export_account
+    local ollama_account
+    local export_uid
+    local ollama_uid
+
+    if ! export_account="$(getent passwd daia-export)"; then
+        echo "Dedicated exporter account is missing: daia-export" >&2
+        return 1
+    fi
+
+    if ! ollama_account="$(getent passwd ollama)"; then
+        echo "Ollama account is missing while verifying exporter isolation" >&2
+        return 1
+    fi
+
+    export_uid="$(printf '%s\n' "$export_account" | cut -d: -f3)"
+    ollama_uid="$(printf '%s\n' "$ollama_account" | cut -d: -f3)"
+
+    if [[ ! "$export_uid" =~ ^[0-9]+$ ]] ||
+       [[ ! "$ollama_uid" =~ ^[0-9]+$ ]] ||
+       [[ "$export_uid" == "0" ]] ||
+       [[ "$export_uid" == "$ollama_uid" ]]
+    then
+        echo "Exporter worker UID is invalid or not isolated from Ollama" >&2
+        return 1
+    fi
+
+
+    # Verify installed exporter configuration without activating its units.
+    local export_runtime_root="${DAIA_RUNTIME_ROOT:-/opt/daia}"
+    local export_policy_directory="${DAIA_POLKIT_ACTIONS_DIRECTORY:-/usr/share/polkit-1/actions}"
+    local export_policy_source="${export_runtime_root}/polkit-1/actions/org.daia.model-export.policy"
+    local export_policy_destination="${export_policy_directory}/org.daia.model-export.policy"
+    local export_worker_source="${export_runtime_root}/services/daia-model-export-worker.service"
+    local export_worker_destination="${systemd_system_directory}/daia-model-export-worker.service"
+    local export_socket_source="${export_runtime_root}/services/daia-model-export.socket"
+    local export_socket_destination="${systemd_system_directory}/daia-model-export.socket"
+    local export_source
+    local export_destination
+    local export_metadata
+
+    for export_source in \
+        "$export_policy_source" \
+        "$export_worker_source" \
+        "$export_socket_source"
+    do
+        if [[ ! -f "$export_source" || -L "$export_source" ]]; then
+            echo "Exporter verification source missing or unsafe: $export_source" >&2
+            return 1
+        fi
+    done
+
+    for export_destination in \
+        "$export_policy_destination" \
+        "$export_worker_destination" \
+        "$export_socket_destination"
+    do
+        if [[ ! -f "$export_destination" || -L "$export_destination" ]]; then
+            echo "Exporter installed configuration missing or unsafe: $export_destination" >&2
+            return 1
+        fi
+
+        if ! export_metadata="$(stat -c '%u:%g:%a' -- "$export_destination")"; then
+            echo "Cannot inspect exporter configuration: $export_destination" >&2
+            return 1
+        fi
+
+        if [[ "$export_metadata" != "0:0:644" ]]; then
+            echo "Exporter configuration ownership or mode invalid: $export_destination" >&2
+            return 1
+        fi
+    done
+
+    if ! cmp -s -- "$export_policy_source" "$export_policy_destination" ||
+       ! cmp -s -- "$export_worker_source" "$export_worker_destination" ||
+       ! cmp -s -- "$export_socket_source" "$export_socket_destination"; then
+        echo "Installed exporter configuration differs from packaged source" >&2
+        return 1
+    fi
+
+    local export_unit
+    local export_unit_file_state
+    local export_active_state
+
+    for export_unit in \
+        daia-model-export-worker.service \
+        daia-model-export.socket
+    do
+        if ! export_unit_file_state="$(systemctl show "$export_unit" --property=UnitFileState --value)"; then
+            echo "Cannot inspect exporter unit-file state: $export_unit" >&2
+            return 1
+        fi
+
+        case "$export_unit_file_state" in
+            disabled|static)
+                ;;
+            *)
+                echo "Exporter unit-file state is unsafe: $export_unit ($export_unit_file_state)" >&2
+                return 1
+                ;;
+        esac
+
+        if ! export_active_state="$(systemctl show "$export_unit" --property=ActiveState --value)"; then
+            echo "Cannot inspect exporter active state: $export_unit" >&2
+            return 1
+        fi
+
+        if [[ "$export_active_state" != "inactive" ]]; then
+            echo "Exporter unit is not inactive: $export_unit ($export_active_state)" >&2
+            return 1
+        fi
+    done
+
+    local service_environment
+    if ! service_environment="$(systemctl show ollama.service --property=Environment --value)"; then
+        echo "Failed to inspect Ollama service environment" >&2
+        return 1
+    fi
+
+    if [[ " ${service_environment} " != *" OLLAMA_CONTEXT_LENGTH=8192 "* ]]; then
+        echo "Ollama service context length is not configured to 8192" >&2
+        return 1
+    fi
 
     if ! systemctl is-active --quiet ollama.service; then
         echo "Ollama service is not active: ollama.service" >&2

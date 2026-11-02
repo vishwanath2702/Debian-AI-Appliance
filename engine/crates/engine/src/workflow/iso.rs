@@ -89,10 +89,13 @@ impl LiveRootfsPreparer for SystemLiveRootfsPreparer {
             copy_file(model_import_binary, &destination)?;
         }
 
+        install_exporter_binaries(build_context)?;
+
         if let Some(payload) = build_context.daia_payload_directory() {
             for relative_path in [
                 "usr/bin/daia-model-importer",
-                "usr/share/applications/daia-model-importer.desktop",
+                "usr/bin/daia-model-manager",
+                "usr/share/applications/daia-model-manager.desktop",
             ] {
                 let source = payload.join(relative_path);
                 let destination = build_context.rootfs().join(relative_path);
@@ -235,7 +238,8 @@ impl RootfsVerifier for SystemRootfsVerifier {
 
             for relative_path in [
                 "usr/bin/daia-model-importer",
-                "usr/share/applications/daia-model-importer.desktop",
+                "usr/bin/daia-model-manager",
+                "usr/share/applications/daia-model-manager.desktop",
             ] {
                 let path = build_context.rootfs().join(relative_path);
                 if !path.is_file() {
@@ -246,17 +250,19 @@ impl RootfsVerifier for SystemRootfsVerifier {
                 }
             }
 
-            let launcher = build_context.rootfs().join("usr/bin/daia-model-importer");
-            let mode = fs::metadata(&launcher)
-                .map_err(BuildError::Workspace)?
-                .permissions()
-                .mode();
+            for executable in ["daia-model-importer", "daia-model-manager"] {
+                let launcher = build_context.rootfs().join("usr/bin").join(executable);
+                let mode = fs::metadata(&launcher)
+                    .map_err(BuildError::Workspace)?
+                    .permissions()
+                    .mode();
 
-            if mode & 0o111 == 0 {
-                return Err(BuildError::Workspace(std::io::Error::other(format!(
-                    "rootfs verification failed: graphical importer is not executable: {}",
-                    launcher.display()
-                ))));
+                if mode & 0o111 == 0 {
+                    return Err(BuildError::Workspace(std::io::Error::other(format!(
+                        "rootfs verification failed: graphical model tool is not executable: {}",
+                        launcher.display()
+                    ))));
+                }
             }
         }
 
@@ -472,6 +478,195 @@ fn write_file(path: &std::path::Path, contents: &str) -> Result<(), BuildError> 
         }
         Err(error) => Err(BuildError::Workspace(error)),
     }
+}
+
+fn install_exporter_binaries(build_context: &BuildContext) -> Result<(), BuildError> {
+    // Stage the exporter executables without activating either component.
+    // Authorization and worker isolation must be established separately.
+    for (binary, name) in [
+        (
+            build_context.daia_model_export_broker_binary(),
+            "daia-model-export-broker",
+        ),
+        (
+            build_context.daia_model_export_worker_binary(),
+            "daia-model-export-worker",
+        ),
+    ] {
+        if let Some(binary) = binary {
+            let libexec = build_context.rootfs().join("usr/libexec");
+            create_directory(&libexec)?;
+            let destination = libexec.join(name);
+            copy_file(binary, &destination)?;
+
+            use std::os::unix::fs::PermissionsExt;
+
+            enforce_exporter_root_ownership(&destination)?;
+
+            match fs::set_permissions(&destination, fs::Permissions::from_mode(0o755)) {
+                Ok(()) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
+                    let status = std::process::Command::new("sudo")
+                        .arg("chmod")
+                        .arg("0755")
+                        .arg("--")
+                        .arg(&destination)
+                        .status()
+                        .map_err(BuildError::Workspace)?;
+
+                    if !status.success() {
+                        return Err(BuildError::Workspace(std::io::Error::other(format!(
+                            "failed to set privileged exporter permissions: {}",
+                            destination.display()
+                        ))));
+                    }
+                }
+                Err(error) => return Err(BuildError::Workspace(error)),
+            }
+
+        }
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+fn verify_exporter_secure_executable(path: &std::path::Path) -> Result<(), BuildError> {
+    use rustix::fs::{Mode, OFlags};
+    use std::path::Component;
+
+    if !path.is_absolute() {
+        return Err(BuildError::Workspace(std::io::Error::other(
+            "exporter executable path must be absolute",
+        )));
+    }
+
+    let mut components = path.components().peekable();
+
+    if components.next() != Some(Component::RootDir) {
+        return Err(BuildError::Workspace(std::io::Error::other(
+            "invalid exporter executable root",
+        )));
+    }
+
+    let mut directory = rustix::fs::openat(
+        rustix::fs::CWD,
+        "/",
+        OFlags::RDONLY | OFlags::DIRECTORY | OFlags::CLOEXEC,
+        Mode::empty(),
+    )
+    .map_err(|error| BuildError::Workspace(error.into()))?;
+
+    let check_directory = |fd: &std::os::fd::OwnedFd| -> Result<(), BuildError> {
+        let metadata =
+            rustix::fs::fstat(fd).map_err(|error| BuildError::Workspace(error.into()))?;
+
+        if metadata.st_uid != 0 || metadata.st_gid != 0 || metadata.st_mode & 0o022 != 0 {
+            return Err(BuildError::Workspace(std::io::Error::other(
+                "untrusted exporter executable directory ancestry",
+            )));
+        }
+
+        Ok(())
+    };
+
+    check_directory(&directory)?;
+
+    while let Some(component) = components.next() {
+        let Component::Normal(name) = component else {
+            return Err(BuildError::Workspace(std::io::Error::other(
+                "invalid exporter executable path component",
+            )));
+        };
+
+        if components.peek().is_some() {
+            let next = rustix::fs::openat(
+                &directory,
+                name,
+                OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+                Mode::empty(),
+            )
+            .map_err(|error| BuildError::Workspace(error.into()))?;
+
+            check_directory(&next)?;
+            directory = next;
+        } else {
+            let executable = rustix::fs::openat(
+                &directory,
+                name,
+                OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::NONBLOCK | OFlags::CLOEXEC,
+                Mode::empty(),
+            )
+            .map_err(|error| BuildError::Workspace(error.into()))?;
+
+            let metadata = rustix::fs::fstat(&executable)
+                .map_err(|error| BuildError::Workspace(error.into()))?;
+
+            if rustix::fs::FileType::from_raw_mode(metadata.st_mode)
+                != rustix::fs::FileType::RegularFile
+                || metadata.st_uid != 0
+                || metadata.st_gid != 0
+                || metadata.st_mode & 0o022 != 0
+                || metadata.st_mode & 0o111 == 0
+            {
+                return Err(BuildError::Workspace(std::io::Error::other(
+                    "untrusted exporter executable",
+                )));
+            }
+
+            return Ok(());
+        }
+    }
+
+    Err(BuildError::Workspace(std::io::Error::other(
+        "missing exporter executable filename",
+    )))
+}
+
+fn verify_exporter_root_ownership(path: &std::path::Path) -> Result<(), BuildError> {
+    use std::os::unix::fs::MetadataExt;
+
+    let metadata = fs::symlink_metadata(path).map_err(BuildError::Workspace)?;
+
+    if !metadata.file_type().is_file() || metadata.uid() != 0 || metadata.gid() != 0 {
+        return Err(BuildError::Workspace(std::io::Error::other(format!(
+            "exporter binary must be a root-owned regular file: {}",
+            path.display()
+        ))));
+    }
+
+    Ok(())
+}
+
+fn enforce_exporter_root_ownership(path: &std::path::Path) -> Result<(), BuildError> {
+    use std::os::unix::fs::MetadataExt;
+
+    let metadata = fs::symlink_metadata(path).map_err(BuildError::Workspace)?;
+
+    if !metadata.file_type().is_file() {
+        return Err(BuildError::Workspace(std::io::Error::other(format!(
+            "exporter binary is not a regular file: {}",
+            path.display()
+        ))));
+    }
+
+    if metadata.uid() != 0 || metadata.gid() != 0 {
+        let status = std::process::Command::new("sudo")
+            .arg("chown")
+            .arg("0:0")
+            .arg("--")
+            .arg(path)
+            .status()
+            .map_err(BuildError::Workspace)?;
+
+        if !status.success() {
+            return Err(BuildError::Workspace(std::io::Error::other(format!(
+                "failed to establish exporter root ownership: {}",
+                path.display()
+            ))));
+        }
+    }
+
+    verify_exporter_root_ownership(path)
 }
 
 fn copy_file(source: &std::path::Path, destination: &std::path::Path) -> Result<(), BuildError> {
@@ -818,9 +1013,121 @@ mod tests {
         (result, log)
     }
 
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn secure_exporter_verifier_accepts_trusted_system_executable() {
+        use super::verify_exporter_secure_executable;
+        use std::os::unix::fs::MetadataExt;
+
+        let path = std::path::Path::new("/usr/bin/env");
+
+        let metadata = fs::symlink_metadata(path).expect("inspect system executable");
+
+        assert!(
+            metadata.file_type().is_file(),
+            "test requires a regular system executable"
+        );
+        assert_eq!(metadata.uid(), 0, "system executable must be root-owned");
+        assert_eq!(
+            metadata.gid(),
+            0,
+            "system executable must be root-group-owned"
+        );
+
+        verify_exporter_secure_executable(path)
+            .expect("trusted system executable must pass verification");
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn secure_exporter_verifier_rejects_system_symlinks() {
+        use super::verify_exporter_secure_executable;
+
+        let trusted = std::path::Path::new("/usr/bin/env");
+        let executable_link = std::path::Path::new("/usr/bin/sh");
+        let ancestor_link = std::path::Path::new("/bin/env");
+
+        assert!(
+            fs::symlink_metadata(trusted)
+                .expect("inspect trusted executable")
+                .file_type()
+                .is_file()
+        );
+
+        assert!(
+            fs::symlink_metadata(executable_link)
+                .expect("inspect executable symlink")
+                .file_type()
+                .is_symlink()
+        );
+
+        assert!(
+            fs::symlink_metadata("/bin")
+                .expect("inspect directory symlink")
+                .file_type()
+                .is_symlink()
+        );
+
+        verify_exporter_secure_executable(trusted).expect("trusted executable must pass");
+
+        assert!(
+            verify_exporter_secure_executable(executable_link).is_err(),
+            "executable symlink must be rejected"
+        );
+
+        assert!(
+            verify_exporter_secure_executable(ancestor_link).is_err(),
+            "directory ancestor symlink must be rejected"
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn secure_exporter_verifier_rejects_untrusted_paths() {
+        use super::verify_exporter_secure_executable;
+        use std::os::unix::fs::{PermissionsExt, symlink};
+
+        let temp = tempfile::tempdir().expect("create test directory");
+        let executable = temp.path().join("exporter");
+        fs::write(&executable, b"test executable").expect("write fixture");
+        fs::set_permissions(&executable, fs::Permissions::from_mode(0o755))
+            .expect("make fixture executable");
+
+        assert!(
+            verify_exporter_secure_executable(&executable).is_err(),
+            "unprivileged directory ancestry must be rejected"
+        );
+
+        let link = temp.path().join("exporter-link");
+        symlink(&executable, &link).expect("create symlink");
+        assert!(
+            verify_exporter_secure_executable(&link).is_err(),
+            "symlinked executable must be rejected"
+        );
+
+        let non_executable = temp.path().join("not-executable");
+        fs::write(&non_executable, b"fixture").expect("write non-executable");
+        assert!(
+            verify_exporter_secure_executable(&non_executable).is_err(),
+            "non-root-owned executable must be rejected"
+        );
+    }
+
     #[test]
     fn system_live_rootfs_preparer_can_be_created() {
         let _preparer = SystemLiveRootfsPreparer;
+    }
+
+    #[test]
+    fn rejects_unprivileged_exporter_binary() {
+        let temp = tempfile::tempdir().expect("temporary directory");
+        let binary = temp.path().join("exporter");
+        fs::write(&binary, b"test").expect("write exporter fixture");
+
+        assert!(
+            super::verify_exporter_root_ownership(&binary).is_err(),
+            "unprivileged exporter must be rejected"
+        );
     }
 
     #[test]
@@ -838,9 +1145,13 @@ mod tests {
         let daia_binary = temp.path().join("daia");
         let daia_tui_binary = temp.path().join("daia-tui");
         let model_import_binary = temp.path().join("daia-model-import");
+        let export_broker = temp.path().join("daia-model-export-broker");
+        let export_worker = temp.path().join("daia-model-export-worker");
         let payload = temp.path().join("payload");
         let importer = payload.join("usr/bin/daia-model-importer");
-        let desktop_entry = payload.join("usr/share/applications/daia-model-importer.desktop");
+        let manager = payload.join("usr/bin/daia-model-manager");
+        let manager_desktop_entry =
+            payload.join("usr/share/applications/daia-model-manager.desktop");
 
         fs::create_dir_all(&rootfs).expect("rootfs should be created");
 
@@ -868,11 +1179,28 @@ mod tests {
             .expect("DAIA TUI binary fixture should be written");
         fs::write(&model_import_binary, b"daia-model-import")
             .expect("model-import binary fixture should be written");
+        fs::write(&export_broker, b"export-broker")
+            .expect("export broker fixture should be written");
+        fs::write(&export_worker, b"export-worker")
+            .expect("export worker fixture should be written");
 
         fs::create_dir_all(importer.parent().unwrap())
             .expect("importer payload directory should be created");
-        fs::create_dir_all(desktop_entry.parent().unwrap())
+        fs::create_dir_all(manager_desktop_entry.parent().unwrap())
             .expect("desktop payload directory should be created");
+
+        fs::write(&manager, b"#!/usr/bin/env python3\\n")
+            .expect("manager fixture should be written");
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&manager, fs::Permissions::from_mode(0o755))
+                .expect("manager fixture should be executable");
+        }
+        fs::write(
+            &manager_desktop_entry,
+            b"[Desktop Entry]\\nExec=/usr/bin/daia-model-manager\\n",
+        )
+        .expect("manager desktop entry fixture should be written");
 
         fs::write(&importer, b"#!/bin/sh\\n").expect("importer fixture should be written");
         {
@@ -880,11 +1208,6 @@ mod tests {
             fs::set_permissions(&importer, fs::Permissions::from_mode(0o755))
                 .expect("importer fixture should be executable");
         }
-        fs::write(
-            &desktop_entry,
-            b"[Desktop Entry]\\nExec=/usr/bin/daia-model-importer\\n",
-        )
-        .expect("desktop entry fixture should be written");
 
         let getty_wants = rootfs.join("etc/systemd/system/getty.target.wants");
         fs::create_dir_all(&getty_wants).expect("getty wants directory should be created");
@@ -904,6 +1227,8 @@ mod tests {
         .with_daia_binary(&daia_binary)
         .with_daia_tui_binary(&daia_tui_binary)
         .with_daia_model_import_binary(&model_import_binary)
+        .with_daia_model_export_broker_binary(&export_broker)
+        .with_daia_model_export_worker_binary(&export_worker)
         .with_daia_payload_directory(&payload);
 
         let mut preparer = SystemLiveRootfsPreparer;
@@ -929,6 +1254,31 @@ mod tests {
         );
 
         assert_eq!(
+            fs::read(rootfs.join("usr/libexec/daia-model-export-broker"))
+                .expect("export broker should be installed"),
+            b"export-broker"
+        );
+        assert_eq!(
+            fs::read(rootfs.join("usr/libexec/daia-model-export-worker"))
+                .expect("export worker should be installed"),
+            b"export-worker"
+        );
+
+        {
+            use std::os::unix::fs::PermissionsExt;
+
+            for name in ["daia-model-export-broker", "daia-model-export-worker"] {
+                let path = rootfs.join("usr/libexec").join(name);
+                let mode = fs::metadata(&path)
+                    .expect("export executable metadata")
+                    .permissions()
+                    .mode()
+                    & 0o7777;
+                assert_eq!(mode, 0o755, "{name} must have mode 0755");
+            }
+        }
+
+        assert_eq!(
             fs::read(rootfs.join("usr/bin/daia-model-importer"))
                 .expect("graphical importer should be installed"),
             b"#!/bin/sh\\n"
@@ -943,10 +1293,25 @@ mod tests {
 
             assert_eq!(mode, 0o755, "graphical importer must be executable");
         }
+
         assert_eq!(
-            fs::read(rootfs.join("usr/share/applications/daia-model-importer.desktop"))
-                .expect("desktop entry should be installed"),
-            b"[Desktop Entry]\\nExec=/usr/bin/daia-model-importer\\n"
+            fs::read(rootfs.join("usr/bin/daia-model-manager"))
+                .expect("graphical manager should be installed"),
+            b"#!/usr/bin/env python3\\n"
+        );
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = fs::metadata(rootfs.join("usr/bin/daia-model-manager"))
+                .expect("installed manager metadata should be readable")
+                .permissions()
+                .mode()
+                & 0o777;
+            assert_eq!(mode, 0o755, "graphical manager must be executable");
+        }
+        assert_eq!(
+            fs::read(rootfs.join("usr/share/applications/daia-model-manager.desktop"))
+                .expect("manager desktop entry should be installed"),
+            b"[Desktop Entry]\\nExec=/usr/bin/daia-model-manager\\n"
         );
 
         let installer_service =

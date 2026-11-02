@@ -1,0 +1,13 @@
+[Unit]
+Description=DAIA Model Export Private Worker Socket
+Documentation=man:systemd.socket(5)
+
+[Socket]
+ListenSequentialPacket=/run/daia-model-export/worker.sock
+SocketUser=root
+SocketGroup=root
+SocketMode=0600
+DirectoryMode=0700
+Accept=no
+Service=daia-model-export-worker.service
+FileDescriptorName=daia-model-export.socket

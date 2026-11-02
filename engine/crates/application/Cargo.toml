@@ -10,6 +10,7 @@ registry = { path = "../registry" }
 engine = { path = "../engine" }
 inspector = { path = "../inspector" }
 state = { path = "../state" }
+serde_json = "1.0"
 
 [dev-dependencies]
 tempfile = "3"

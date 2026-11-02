@@ -16,6 +16,8 @@ pub struct BuildContext {
     daia_binary: Option<PathBuf>,
     daia_tui_binary: Option<PathBuf>,
     daia_model_import_binary: Option<PathBuf>,
+    daia_model_export_broker_binary: Option<PathBuf>,
+    daia_model_export_worker_binary: Option<PathBuf>,
     daia_payload_directory: Option<PathBuf>,
 }
 
@@ -40,6 +42,8 @@ impl BuildContext {
             daia_binary: None,
             daia_tui_binary: None,
             daia_model_import_binary: None,
+            daia_model_export_broker_binary: None,
+            daia_model_export_worker_binary: None,
             daia_payload_directory: None,
         }
     }
@@ -116,6 +120,32 @@ impl BuildContext {
     #[must_use]
     pub fn daia_model_import_binary(&self) -> Option<&Path> {
         self.daia_model_import_binary.as_deref()
+    }
+
+    /// Sets the Model Exporter authorization broker binary.
+    #[must_use]
+    pub fn with_daia_model_export_broker_binary(mut self, binary: impl Into<PathBuf>) -> Self {
+        self.daia_model_export_broker_binary = Some(binary.into());
+        self
+    }
+
+    /// Returns the Model Exporter authorization broker binary.
+    #[must_use]
+    pub fn daia_model_export_broker_binary(&self) -> Option<&Path> {
+        self.daia_model_export_broker_binary.as_deref()
+    }
+
+    /// Sets the isolated Model Exporter worker binary.
+    #[must_use]
+    pub fn with_daia_model_export_worker_binary(mut self, binary: impl Into<PathBuf>) -> Self {
+        self.daia_model_export_worker_binary = Some(binary.into());
+        self
+    }
+
+    /// Returns the isolated Model Exporter worker binary.
+    #[must_use]
+    pub fn daia_model_export_worker_binary(&self) -> Option<&Path> {
+        self.daia_model_export_worker_binary.as_deref()
     }
 
     /// Sets the DAIA installer payload directory to include in the ISO.

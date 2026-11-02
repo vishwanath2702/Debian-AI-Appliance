@@ -972,6 +972,21 @@ fn create_build_context(
         .into());
     }
 
+    let release_directory = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/release");
+
+    let model_export_broker_binary = release_directory.join("daia-model-export-broker");
+    let model_export_worker_binary = release_directory.join("daia-model-export-worker");
+
+    for binary in [&model_export_broker_binary, &model_export_worker_binary] {
+        if !binary.is_file() {
+            return Err(format!(
+                "DAIA Model Export release binary missing: {}",
+                binary.display()
+            )
+            .into());
+        }
+    }
+
     Ok(BuildContext::new(
         options.rootfs.clone(),
         options.source_iso.clone(),
@@ -983,6 +998,8 @@ fn create_build_context(
     .with_daia_binary(daia_binary)
     .with_daia_tui_binary(daia_tui_binary)
     .with_daia_model_import_binary(model_import_binary)
+    .with_daia_model_export_broker_binary(model_export_broker_binary)
+    .with_daia_model_export_worker_binary(model_export_worker_binary)
     .with_daia_payload_directory(options.daia_payload_directory.clone()))
 }
 
