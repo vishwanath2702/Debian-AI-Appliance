@@ -5,14 +5,17 @@ ConditionPathExists=/usr/libexec/daia-model-export-worker
 
 [Service]
 Type=exec
+DynamicUser=yes
 User=daia-export
-Group=daia-export
 ExecStart=/usr/libexec/daia-model-export-worker
 Sockets=daia-model-export.socket
 StandardInput=fd:daia-model-export.socket
 StandardOutput=journal
 StandardError=journal
 NoNewPrivileges=yes
+ProtectProc=invisible
+ProcSubset=pid
+RestrictAddressFamilies=AF_UNIX
 PrivateTmp=yes
 PrivateDevices=yes
 ProtectSystem=strict

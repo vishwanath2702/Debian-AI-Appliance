@@ -102,31 +102,6 @@ ai_install() {
         return 1
     fi
 
-    # Provision the dedicated Model Exporter worker identity.
-    # This does not authorize export requests or start a worker.
-    local export_sysusers_source="${runtime_root}/sysusers.d/daia-export.conf"
-    local export_sysusers_destination="${sysusers_directory}/daia-export.conf"
-
-    if [[ ! -s "$export_sysusers_source" ]]; then
-        echo "Exporter system user definition is missing or empty: $export_sysusers_source" >&2
-        return 1
-    fi
-
-    if ! cp "$export_sysusers_source" "$export_sysusers_destination"; then
-        echo "Failed to install exporter system user definition: $export_sysusers_destination" >&2
-        return 1
-    fi
-
-    if ! chmod 0644 "$export_sysusers_destination"; then
-        echo "Failed to set exporter system user definition permissions: $export_sysusers_destination" >&2
-        return 1
-    fi
-
-    if ! systemd-sysusers "$export_sysusers_destination"; then
-        echo "Failed to create exporter system user from: $export_sysusers_destination" >&2
-        return 1
-    fi
-
     if [[ ! -s "$service_source" ]]; then
         echo "Ollama service definition is missing or empty: $service_source" >&2
         return 1
@@ -159,6 +134,13 @@ ai_install() {
 
     if [[ "$EUID" -ne 0 ]]; then
         echo "Exporter configuration installation requires root" >&2
+        return 1
+    fi
+
+    # Do not allow DynamicUser to reuse a legacy permanent account.
+    # The exporter remains disabled until a safe migration is performed.
+    if getent passwd daia-export >/dev/null; then
+        echo "Legacy permanent exporter account prevents dynamic isolation" >&2
         return 1
     fi
 
@@ -333,34 +315,12 @@ ai_verify() {
     fi
 
     _ai_verify_ollama_account || return 1
-    # The exporter worker must have its own nonroot identity.
-    local export_account
-    local ollama_account
-    local export_uid
-    local ollama_uid
 
-    if ! export_account="$(getent passwd daia-export)"; then
-        echo "Dedicated exporter account is missing: daia-export" >&2
+    # DynamicUser must not silently reuse a legacy permanent account.
+    if getent passwd daia-export >/dev/null; then
+        echo "Legacy permanent exporter account prevents dynamic isolation" >&2
         return 1
     fi
-
-    if ! ollama_account="$(getent passwd ollama)"; then
-        echo "Ollama account is missing while verifying exporter isolation" >&2
-        return 1
-    fi
-
-    export_uid="$(printf '%s\n' "$export_account" | cut -d: -f3)"
-    ollama_uid="$(printf '%s\n' "$ollama_account" | cut -d: -f3)"
-
-    if [[ ! "$export_uid" =~ ^[0-9]+$ ]] ||
-       [[ ! "$ollama_uid" =~ ^[0-9]+$ ]] ||
-       [[ "$export_uid" == "0" ]] ||
-       [[ "$export_uid" == "$ollama_uid" ]]
-    then
-        echo "Exporter worker UID is invalid or not isolated from Ollama" >&2
-        return 1
-    fi
-
 
     # Verify installed exporter configuration without activating its units.
     local export_runtime_root="${DAIA_RUNTIME_ROOT:-/opt/daia}"

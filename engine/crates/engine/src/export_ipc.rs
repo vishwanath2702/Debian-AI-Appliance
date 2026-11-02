@@ -23,6 +23,25 @@ pub fn export_ipc_peer_credentials(
     rustix::net::sockopt::socket_peercred(socket).map_err(std::io::Error::from)
 }
 
+/// Verify that the connected IPC peer has kernel-reported root credentials.
+///
+/// Root identity is a prerequisite for the privileged export broker, not
+/// evidence of Polkit approval or authorization for a particular operation.
+#[cfg(target_os = "linux")]
+pub fn verify_export_root_peer(socket: &std::os::fd::OwnedFd) -> std::io::Result<()> {
+    use std::io::{Error, ErrorKind};
+
+    let credentials = export_ipc_peer_credentials(socket)?;
+    if credentials.uid.as_raw() != 0 || credentials.pid.as_raw_pid() == 0 {
+        return Err(Error::new(
+            ErrorKind::PermissionDenied,
+            "export IPC peer is not a privileged broker",
+        ));
+    }
+
+    Ok(())
+}
+
 /// Protocol version for the internal exporter IPC envelope.
 #[cfg(target_os = "linux")]
 const EXPORT_IPC_VERSION: u8 = 1;
@@ -257,6 +276,216 @@ pub fn validate_export_ipc_directory(
     Ok(())
 }
 
+/// Validate an already-opened private Model Exporter worker staging directory.
+///
+/// This checks descriptor metadata only. The caller must independently
+/// establish trusted ancestry, retain the descriptor, and ensure that
+/// untrusted processes cannot run under the worker's UID.
+/// This does not authorize an export or establish same-UID isolation.
+#[cfg(target_os = "linux")]
+pub fn validate_export_worker_staging_directory(
+    directory: std::os::fd::BorrowedFd<'_>,
+) -> std::io::Result<()> {
+    use std::io::{Error, ErrorKind};
+
+    let effective_uid = rustix::process::geteuid().as_raw();
+    if effective_uid == 0 {
+        return Err(Error::new(
+            ErrorKind::PermissionDenied,
+            "export worker staging must not run as root",
+        ));
+    }
+
+    validate_export_worker_staging_directory_owner(directory, effective_uid)
+}
+
+/// Check worker staging descriptor metadata against an independently supplied UID.
+///
+/// This internal helper does not authenticate the expected UID. Production
+/// callers must use `validate_export_worker_staging_directory`.
+#[cfg(target_os = "linux")]
+fn validate_export_worker_staging_directory_owner(
+    directory: std::os::fd::BorrowedFd<'_>,
+    expected_uid: u32,
+) -> std::io::Result<()> {
+    use std::io::{Error, ErrorKind};
+
+    let metadata = rustix::fs::fstat(directory)?;
+
+    if rustix::fs::FileType::from_raw_mode(metadata.st_mode) != rustix::fs::FileType::Directory
+        || metadata.st_uid != expected_uid
+        || metadata.st_mode & 0o7777 != 0o700
+    {
+        return Err(Error::new(
+            ErrorKind::PermissionDenied,
+            "export worker staging directory is not private and worker-owned",
+        ));
+    }
+
+    Ok(())
+}
+
+/// Open DAIA's fixed systemd DynamicUser private state directory.
+///
+/// This does not accept an arbitrary caller-selected directory. It walks
+/// the root-owned private hierarchy without following symlinks and then
+/// validates the opened directory against the actual worker UID.
+///
+/// The caller must separately verify that systemd supplied the expected
+/// STATE_DIRECTORY value and retain the returned descriptor.
+#[cfg(target_os = "linux")]
+pub fn open_systemd_export_worker_staging_directory() -> std::io::Result<std::os::fd::OwnedFd> {
+    use rustix::fs::{Mode, OFlags};
+    use std::os::fd::AsFd;
+
+    let root = rustix::fs::openat(
+        rustix::fs::CWD,
+        "/",
+        OFlags::RDONLY | OFlags::DIRECTORY | OFlags::CLOEXEC,
+        Mode::empty(),
+    )?;
+
+    validate_worker_staging_ancestor(root.as_fd())?;
+
+    open_worker_staging_from_trusted_root(
+        root,
+        &[
+            std::ffi::OsStr::new("var"),
+            std::ffi::OsStr::new("lib"),
+            std::ffi::OsStr::new("private"),
+            std::ffi::OsStr::new("daia-model-export"),
+        ],
+    )
+}
+
+/// Open the systemd-managed Model Exporter worker staging directory.
+///
+/// Every ancestor must be root-owned, root-group-owned, and not writable
+/// by group or others. The final directory must be owned by the actual
+/// non-root worker effective UID and have exact permissions 0700.
+///
+/// Traversal retains directory descriptors and refuses symlinks. The
+/// returned descriptor must remain open for subsequent operations.
+///
+/// This establishes pathname ancestry and final-directory metadata only.
+/// It does not authorize exports or protect against other processes
+/// independently running under the worker UID.
+#[cfg(target_os = "linux")]
+pub fn open_trusted_export_worker_staging_directory(
+    path: &std::path::Path,
+) -> std::io::Result<std::os::fd::OwnedFd> {
+    use rustix::fs::{Mode, OFlags};
+    use std::io::{Error, ErrorKind};
+    use std::os::fd::AsFd;
+    use std::path::Component;
+
+    if !path.is_absolute() {
+        return Err(Error::new(
+            ErrorKind::InvalidInput,
+            "worker staging directory path must be absolute",
+        ));
+    }
+
+    let mut components = path.components();
+
+    if components.next() != Some(Component::RootDir) {
+        return Err(Error::new(
+            ErrorKind::InvalidInput,
+            "invalid worker staging directory root",
+        ));
+    }
+
+    let names: Vec<_> = components
+        .map(|component| match component {
+            Component::Normal(name) => Ok(name),
+            _ => Err(Error::new(
+                ErrorKind::InvalidInput,
+                "invalid worker staging directory component",
+            )),
+        })
+        .collect::<std::io::Result<_>>()?;
+
+    if names.is_empty() {
+        return Err(Error::new(
+            ErrorKind::InvalidInput,
+            "worker staging directory cannot be filesystem root",
+        ));
+    }
+
+    let directory = rustix::fs::openat(
+        rustix::fs::CWD,
+        "/",
+        OFlags::RDONLY | OFlags::DIRECTORY | OFlags::CLOEXEC,
+        Mode::empty(),
+    )?;
+
+    validate_worker_staging_ancestor(directory.as_fd())?;
+    open_worker_staging_from_trusted_root(directory, &names)
+}
+
+/// Traverse worker staging components from an independently trusted root FD.
+///
+/// This helper validates every traversed ancestor. Its starting descriptor
+/// must already have been validated by the caller.
+#[cfg(target_os = "linux")]
+fn open_worker_staging_from_trusted_root(
+    mut directory: std::os::fd::OwnedFd,
+    names: &[&std::ffi::OsStr],
+) -> std::io::Result<std::os::fd::OwnedFd> {
+    use rustix::fs::{Mode, OFlags};
+    use std::io::{Error, ErrorKind};
+    use std::os::fd::AsFd;
+
+    if names.is_empty() {
+        return Err(Error::new(
+            ErrorKind::InvalidInput,
+            "worker staging traversal requires a final component",
+        ));
+    }
+
+    for name in &names[..names.len() - 1] {
+        let next = rustix::fs::openat(
+            &directory,
+            *name,
+            OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+            Mode::empty(),
+        )?;
+
+        validate_worker_staging_ancestor(next.as_fd())?;
+        directory = next;
+    }
+
+    let final_directory = rustix::fs::openat(
+        &directory,
+        names[names.len() - 1],
+        OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+        Mode::empty(),
+    )?;
+
+    validate_export_worker_staging_directory(final_directory.as_fd())?;
+    Ok(final_directory)
+}
+
+#[cfg(target_os = "linux")]
+fn validate_worker_staging_ancestor(directory: std::os::fd::BorrowedFd<'_>) -> std::io::Result<()> {
+    use std::io::{Error, ErrorKind};
+
+    let metadata = rustix::fs::fstat(directory)?;
+
+    if rustix::fs::FileType::from_raw_mode(metadata.st_mode) != rustix::fs::FileType::Directory
+        || metadata.st_uid != 0
+        || metadata.st_gid != 0
+        || metadata.st_mode & 0o022 != 0
+    {
+        return Err(Error::new(
+            ErrorKind::PermissionDenied,
+            "untrusted worker staging directory ancestor",
+        ));
+    }
+
+    Ok(())
+}
+
 /// Open and validate the private, root-owned exporter IPC directory.
 ///
 /// Traverses from the filesystem root using retained directory descriptors.
@@ -413,16 +642,28 @@ pub fn connect_export_ipc(path: &std::path::Path) -> std::io::Result<std::os::fd
     Ok(socket)
 }
 
+/// Validate an operation-bound descriptor handoff payload.
+///
+/// This checks protocol identity and exact operation intent. It does not
+/// authenticate the sender, authorize export, or secure file contents.
 #[cfg(target_os = "linux")]
-fn validate_export_descriptor_handoff(
+fn validate_operation_bound_handoff(
     payload: &[u8],
-    descriptor_count: usize,
-    truncated: bool,
+    expected_operation: &[u8],
 ) -> std::io::Result<()> {
-    if truncated || payload != [1, 1] || descriptor_count != 1 {
+    const PREFIX: &[u8] = b"DAIA-EXPORT-HANDOFF\0";
+    const VERSION: u32 = 1;
+
+    let mut expected = Vec::with_capacity(PREFIX.len() + 4 + 8 + expected_operation.len());
+    expected.extend_from_slice(PREFIX);
+    expected.extend_from_slice(&VERSION.to_be_bytes());
+    expected.extend_from_slice(&(expected_operation.len() as u64).to_be_bytes());
+    expected.extend_from_slice(expected_operation);
+
+    if payload != expected {
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidData,
-            "invalid internal export descriptor handoff",
+            "export descriptor handoff operation mismatch",
         ));
     }
 
@@ -430,14 +671,365 @@ fn validate_export_descriptor_handoff(
 }
 
 #[cfg(target_os = "linux")]
-pub fn receive_export_descriptor_handoff(
+fn validate_export_descriptor_handoff(
+    payload: &[u8],
+    descriptor_count: usize,
+    truncated: bool,
+    expected_operation: &[u8],
+) -> std::io::Result<()> {
+    if truncated || descriptor_count != 1 {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "invalid internal export descriptor handoff",
+        ));
+    }
+
+    validate_operation_bound_handoff(payload, expected_operation)?;
+
+    Ok(())
+}
+
+/// Validate a distinct two-directory handoff without changing the
+/// existing single-regular-file descriptor protocol.
+///
+/// Descriptor order is source store followed by destination parent.
+/// This is structural validation only, not authentication or authorization.
+#[cfg(target_os = "linux")]
+fn validate_export_directory_handoff(
+    payload: &[u8],
+    descriptors: &[std::os::fd::BorrowedFd<'_>],
+    truncated: bool,
+    expected_operation: &[u8],
+) -> std::io::Result<()> {
+    use rustix::fs::{FileType, fstat};
+    use std::io::{Error, ErrorKind};
+
+    if truncated || descriptors.len() != 2 {
+        return Err(Error::new(
+            ErrorKind::InvalidData,
+            "export directory handoff requires exactly two descriptors",
+        ));
+    }
+
+    validate_operation_bound_handoff(payload, expected_operation)?;
+
+    for descriptor in descriptors {
+        let metadata = fstat(descriptor)?;
+        if FileType::from_raw_mode(metadata.st_mode) != FileType::Directory {
+            return Err(Error::new(
+                ErrorKind::InvalidData,
+                "export directory handoff contains a non-directory descriptor",
+            ));
+        }
+    }
+
+    Ok(())
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod directory_handoff_validation_tests {
+    use super::*;
+    use std::os::fd::AsFd;
+
+    const OPERATION: &[u8] = b"authorized-operation";
+
+    fn payload(operation: &[u8]) -> Vec<u8> {
+        let mut bytes = b"DAIA-EXPORT-HANDOFF\0".to_vec();
+        bytes.extend_from_slice(&1_u32.to_be_bytes());
+        bytes.extend_from_slice(&(operation.len() as u64).to_be_bytes());
+        bytes.extend_from_slice(operation);
+        bytes
+    }
+
+    #[test]
+    fn accepts_exactly_two_directories_for_matching_operation() {
+        let source = tempfile::tempdir().unwrap();
+        let destination = tempfile::tempdir().unwrap();
+        let source_fd = std::fs::File::open(source.path()).unwrap();
+        let destination_fd = std::fs::File::open(destination.path()).unwrap();
+        let descriptors = [source_fd.as_fd(), destination_fd.as_fd()];
+
+        validate_export_directory_handoff(&payload(OPERATION), &descriptors, false, OPERATION)
+            .unwrap();
+    }
+
+    #[test]
+    fn rejects_wrong_count_truncation_and_operation() {
+        let source = tempfile::tempdir().unwrap();
+        let destination = tempfile::tempdir().unwrap();
+        let source_fd = std::fs::File::open(source.path()).unwrap();
+        let destination_fd = std::fs::File::open(destination.path()).unwrap();
+        let descriptors = [source_fd.as_fd(), destination_fd.as_fd()];
+
+        assert!(
+            validate_export_directory_handoff(
+                &payload(OPERATION),
+                &descriptors[..1],
+                false,
+                OPERATION,
+            )
+            .is_err()
+        );
+
+        assert!(
+            validate_export_directory_handoff(&payload(OPERATION), &descriptors, true, OPERATION,)
+                .is_err()
+        );
+
+        assert!(
+            validate_export_directory_handoff(
+                &payload(b"different-operation"),
+                &descriptors,
+                false,
+                OPERATION,
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn rejects_regular_file_in_either_directory_position() {
+        let directory = tempfile::tempdir().unwrap();
+        let directory_fd = std::fs::File::open(directory.path()).unwrap();
+        let regular_file = tempfile::tempfile().unwrap();
+
+        for descriptors in [
+            [regular_file.as_fd(), directory_fd.as_fd()],
+            [directory_fd.as_fd(), regular_file.as_fd()],
+        ] {
+            assert!(
+                validate_export_directory_handoff(
+                    &payload(OPERATION),
+                    &descriptors,
+                    false,
+                    OPERATION,
+                )
+                .is_err()
+            );
+        }
+    }
+}
+
+/// Receive exactly two directory descriptors, ordered source then destination.
+///
+/// The caller must independently authenticate the sender and authorize the
+/// exact operation. This function performs structural validation only.
+#[cfg(target_os = "linux")]
+pub fn receive_export_directory_handoff(
     socket: std::os::fd::BorrowedFd<'_>,
+    expected_operation: &[u8],
+) -> std::io::Result<(std::os::fd::OwnedFd, std::os::fd::OwnedFd)> {
+    use rustix::io::IoSliceMut;
+    use rustix::net::{RecvAncillaryBuffer, RecvAncillaryMessage, RecvFlags, ReturnFlags, recvmsg};
+    use std::mem::MaybeUninit;
+    use std::os::fd::AsFd;
+
+    const MAX_HANDOFF_BYTES: usize = 1024 * 1024;
+    let mut payload = vec![0_u8; MAX_HANDOFF_BYTES + 1];
+    let mut space = [MaybeUninit::uninit(); rustix::cmsg_space!(ScmRights(3))];
+    let mut control = RecvAncillaryBuffer::new(&mut space);
+
+    let message = recvmsg(
+        socket,
+        &mut [IoSliceMut::new(&mut payload)],
+        &mut control,
+        RecvFlags::CMSG_CLOEXEC,
+    )?;
+
+    let truncated = message
+        .flags
+        .intersects(ReturnFlags::TRUNC | ReturnFlags::CTRUNC)
+        || message.bytes > MAX_HANDOFF_BYTES;
+
+    let received_bytes = message.bytes.min(payload.len());
+    let mut descriptors = Vec::new();
+    let mut unexpected_ancillary = false;
+
+    for ancillary in control.drain() {
+        match ancillary {
+            RecvAncillaryMessage::ScmRights(received) => {
+                descriptors.extend(received);
+            }
+            _ => unexpected_ancillary = true,
+        }
+    }
+
+    if unexpected_ancillary {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "unexpected export directory handoff ancillary data",
+        ));
+    }
+
+    let borrowed: Vec<_> = descriptors.iter().map(|fd| fd.as_fd()).collect();
+    validate_export_directory_handoff(
+        &payload[..received_bytes],
+        &borrowed,
+        truncated,
+        expected_operation,
+    )?;
+
+    let destination = descriptors.pop().expect("validated destination descriptor");
+    let source = descriptors.pop().expect("validated source descriptor");
+    Ok((source, destination))
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod privileged_peer_identity_tests {
+    use super::*;
+    use std::io::ErrorKind;
+
+    #[test]
+    fn root_peer_check_matches_kernel_credentials() {
+        let (first, second) = create_export_ipc_pair().unwrap();
+
+        let credentials = export_ipc_peer_credentials(&first).unwrap();
+        let result = verify_export_root_peer(&first);
+
+        assert_ne!(credentials.pid.as_raw_pid(), 0);
+
+        if credentials.uid.as_raw() == 0 {
+            assert!(result.is_ok());
+        } else {
+            assert_eq!(result.unwrap_err().kind(), ErrorKind::PermissionDenied);
+        }
+
+        let other_credentials = export_ipc_peer_credentials(&second).unwrap();
+        assert_eq!(credentials.uid, other_credentials.uid);
+    }
+
+    #[test]
+    fn unprivileged_test_process_cannot_claim_root_peer() {
+        if rustix::process::geteuid().as_raw() == 0 {
+            return;
+        }
+
+        let (first, _second) = create_export_ipc_pair().unwrap();
+
+        assert_eq!(
+            verify_export_root_peer(&first).unwrap_err().kind(),
+            ErrorKind::PermissionDenied
+        );
+    }
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod directory_descriptor_transfer_tests {
+    use super::*;
+    use rustix::io::IoSlice;
+    use rustix::net::{SendAncillaryBuffer, SendAncillaryMessage, SendFlags, sendmsg};
+    use std::mem::MaybeUninit;
+    use std::os::fd::{AsFd, BorrowedFd};
+
+    const OPERATION: &[u8] = b"directory-transfer-test";
+
+    fn payload(operation: &[u8]) -> Vec<u8> {
+        let mut bytes = b"DAIA-EXPORT-HANDOFF\0".to_vec();
+        bytes.extend_from_slice(&1_u32.to_be_bytes());
+        bytes.extend_from_slice(&(operation.len() as u64).to_be_bytes());
+        bytes.extend_from_slice(operation);
+        bytes
+    }
+
+    fn send_directories(
+        sender: &std::os::fd::OwnedFd,
+        operation: &[u8],
+        descriptors: &[BorrowedFd<'_>],
+    ) {
+        let packet = payload(operation);
+        let mut space = [MaybeUninit::uninit(); rustix::cmsg_space!(ScmRights(3))];
+        let mut control = SendAncillaryBuffer::new(&mut space);
+
+        if !descriptors.is_empty() {
+            assert!(control.push(SendAncillaryMessage::ScmRights(descriptors,)));
+        }
+
+        assert_eq!(
+            sendmsg(
+                sender,
+                &[IoSlice::new(&packet)],
+                &mut control,
+                SendFlags::empty(),
+            )
+            .unwrap(),
+            packet.len()
+        );
+    }
+
+    #[test]
+    fn transfers_source_and_destination_in_order() {
+        let source = tempfile::tempdir().unwrap();
+        let destination = tempfile::tempdir().unwrap();
+
+        let source_fd = std::fs::File::open(source.path()).unwrap();
+        let destination_fd = std::fs::File::open(destination.path()).unwrap();
+
+        let (sender, receiver) = create_export_ipc_pair().unwrap();
+
+        send_directories(
+            &sender,
+            OPERATION,
+            &[source_fd.as_fd(), destination_fd.as_fd()],
+        );
+
+        let (received_source, received_destination) =
+            receive_export_directory_handoff(receiver.as_fd(), OPERATION).unwrap();
+
+        let original_source = rustix::fs::fstat(&source_fd).unwrap();
+        let original_destination = rustix::fs::fstat(&destination_fd).unwrap();
+
+        let transferred_source = rustix::fs::fstat(&received_source).unwrap();
+        let transferred_destination = rustix::fs::fstat(&received_destination).unwrap();
+
+        assert_eq!(transferred_source.st_ino, original_source.st_ino);
+        assert_eq!(transferred_source.st_dev, original_source.st_dev);
+        assert_eq!(transferred_destination.st_ino, original_destination.st_ino);
+        assert_eq!(transferred_destination.st_dev, original_destination.st_dev);
+    }
+
+    #[test]
+    fn rejects_substituted_operation() {
+        let source = tempfile::tempdir().unwrap();
+        let destination = tempfile::tempdir().unwrap();
+
+        let source_fd = std::fs::File::open(source.path()).unwrap();
+        let destination_fd = std::fs::File::open(destination.path()).unwrap();
+
+        let (sender, receiver) = create_export_ipc_pair().unwrap();
+
+        send_directories(
+            &sender,
+            b"substituted-operation",
+            &[source_fd.as_fd(), destination_fd.as_fd()],
+        );
+
+        assert!(receive_export_directory_handoff(receiver.as_fd(), OPERATION,).is_err());
+    }
+
+    #[test]
+    fn rejects_missing_directory_descriptor() {
+        let source = tempfile::tempdir().unwrap();
+        let source_fd = std::fs::File::open(source.path()).unwrap();
+
+        let (sender, receiver) = create_export_ipc_pair().unwrap();
+
+        send_directories(&sender, OPERATION, &[source_fd.as_fd()]);
+
+        assert!(receive_export_directory_handoff(receiver.as_fd(), OPERATION,).is_err());
+    }
+}
+
+#[cfg(target_os = "linux")]
+pub(crate) fn receive_export_descriptor_handoff(
+    socket: std::os::fd::BorrowedFd<'_>,
+    expected_operation: &[u8],
 ) -> std::io::Result<std::os::fd::OwnedFd> {
     use rustix::io::IoSliceMut;
     use rustix::net::{RecvAncillaryBuffer, RecvAncillaryMessage, RecvFlags, ReturnFlags, recvmsg};
     use std::mem::MaybeUninit;
 
-    let mut payload = [0u8; 3];
+    const MAX_HANDOFF_BYTES: usize = 1024 * 1024;
+    let mut payload = vec![0u8; MAX_HANDOFF_BYTES + 1];
     let mut space = [MaybeUninit::uninit(); rustix::cmsg_space!(ScmRights(2))];
     let mut control = RecvAncillaryBuffer::new(&mut space);
 
@@ -475,7 +1067,8 @@ pub fn receive_export_descriptor_handoff(
     validate_export_descriptor_handoff(
         &payload[..bytes.min(payload.len())],
         descriptors.len(),
-        truncated,
+        truncated || bytes > MAX_HANDOFF_BYTES,
+        expected_operation,
     )?;
 
     let descriptor = descriptors.pop().expect("validated descriptor count");
@@ -492,8 +1085,67 @@ pub fn receive_export_descriptor_handoff(
 }
 
 #[cfg(all(test, target_os = "linux"))]
+mod operation_bound_handoff_tests {
+    use super::*;
+
+    fn payload(operation: &[u8]) -> Vec<u8> {
+        let mut bytes = b"DAIA-EXPORT-HANDOFF\0".to_vec();
+        bytes.extend_from_slice(&1_u32.to_be_bytes());
+        bytes.extend_from_slice(&(operation.len() as u64).to_be_bytes());
+        bytes.extend_from_slice(operation);
+        bytes
+    }
+
+    #[test]
+    fn accepts_exact_operation_binding() {
+        let operation = b"operation-one";
+        assert!(validate_operation_bound_handoff(&payload(operation), operation,).is_ok());
+    }
+
+    #[test]
+    fn rejects_substituted_operation() {
+        assert!(
+            validate_operation_bound_handoff(&payload(b"operation-two"), b"operation-one",)
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn rejects_modified_version_and_trailing_bytes() {
+        let operation = b"operation-one";
+        let mut modified = payload(operation);
+        modified[b"DAIA-EXPORT-HANDOFF\0".len() + 3] = 2;
+        assert!(validate_operation_bound_handoff(&modified, operation).is_err());
+
+        let mut trailing = payload(operation);
+        trailing.push(0);
+        assert!(validate_operation_bound_handoff(&trailing, operation).is_err());
+    }
+
+    #[test]
+    fn rejects_truncated_and_empty_handoffs() {
+        let operation = b"operation-one";
+        let mut truncated = payload(operation);
+        truncated.pop();
+
+        assert!(validate_operation_bound_handoff(&truncated, operation).is_err());
+        assert!(validate_operation_bound_handoff(&[], operation).is_err());
+    }
+}
+
+#[cfg(all(test, target_os = "linux"))]
 mod tests {
     use super::*;
+
+    const TEST_OPERATION: &[u8] = b"test-operation";
+
+    fn handoff_payload(operation: &[u8]) -> Vec<u8> {
+        let mut bytes = b"DAIA-EXPORT-HANDOFF\0".to_vec();
+        bytes.extend_from_slice(&1_u32.to_be_bytes());
+        bytes.extend_from_slice(&(operation.len() as u64).to_be_bytes());
+        bytes.extend_from_slice(operation);
+        bytes
+    }
 
     #[test]
     fn descriptor_receiver_rejects_directory_descriptor() {
@@ -515,15 +1167,16 @@ mod tests {
         assert_eq!(
             sendmsg(
                 &sender,
-                &[IoSlice::new(&[1, 1])],
+                &[IoSlice::new(&handoff_payload(TEST_OPERATION))],
                 &mut control,
                 SendFlags::empty(),
             )
             .unwrap(),
-            2
+            handoff_payload(TEST_OPERATION).len()
         );
 
-        let error = receive_export_descriptor_handoff(receiver.as_fd()).unwrap_err();
+        let error =
+            receive_export_descriptor_handoff(receiver.as_fd(), TEST_OPERATION).unwrap_err();
 
         assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
     }
@@ -565,9 +1218,9 @@ mod tests {
         file.seek(SeekFrom::Start(0)).unwrap();
 
         let (sender, receiver) = create_export_ipc_pair().unwrap();
-        send_packet(&sender, &[1, 1], &[file.as_fd()]);
+        send_packet(&sender, &handoff_payload(TEST_OPERATION), &[file.as_fd()]);
 
-        let owned = receive_export_descriptor_handoff(receiver.as_fd()).unwrap();
+        let owned = receive_export_descriptor_handoff(receiver.as_fd(), TEST_OPERATION).unwrap();
 
         let mut received = std::fs::File::from(owned);
         let mut contents = String::new();
@@ -575,25 +1228,64 @@ mod tests {
         assert_eq!(contents, "verified-handoff");
 
         let (sender, receiver) = create_export_ipc_pair().unwrap();
-        send_packet(&sender, &[1, 1], &[]);
-        assert!(receive_export_descriptor_handoff(receiver.as_fd()).is_err());
+        send_packet(&sender, &handoff_payload(TEST_OPERATION), &[]);
+        assert!(receive_export_descriptor_handoff(receiver.as_fd(), TEST_OPERATION).is_err());
 
         let (sender, receiver) = create_export_ipc_pair().unwrap();
-        send_packet(&sender, &[1, 1], &[file.as_fd(), file.as_fd()]);
-        assert!(receive_export_descriptor_handoff(receiver.as_fd()).is_err());
+        send_packet(
+            &sender,
+            &handoff_payload(TEST_OPERATION),
+            &[file.as_fd(), file.as_fd()],
+        );
+        assert!(receive_export_descriptor_handoff(receiver.as_fd(), TEST_OPERATION).is_err());
 
         let (sender, receiver) = create_export_ipc_pair().unwrap();
         send_packet(&sender, &[1, 0], &[file.as_fd()]);
-        assert!(receive_export_descriptor_handoff(receiver.as_fd()).is_err());
+        assert!(receive_export_descriptor_handoff(receiver.as_fd(), TEST_OPERATION).is_err());
 
         let (sender, receiver) = create_export_ipc_pair().unwrap();
         send_packet(&sender, &[1, 1, 0, 0], &[file.as_fd()]);
-        assert!(receive_export_descriptor_handoff(receiver.as_fd()).is_err());
+        assert!(receive_export_descriptor_handoff(receiver.as_fd(), TEST_OPERATION).is_err());
+    }
+
+    #[test]
+    fn descriptor_receiver_rejects_legacy_and_substituted_operation() {
+        use rustix::fd::AsFd;
+        use rustix::io::IoSlice;
+        use rustix::net::{SendAncillaryBuffer, SendAncillaryMessage, SendFlags, sendmsg};
+        use std::mem::MaybeUninit;
+
+        let file = tempfile::tempfile().unwrap();
+
+        for payload in [b"\x01\x01".to_vec(), handoff_payload(b"another-operation")] {
+            let (sender, receiver) = create_export_ipc_pair().unwrap();
+            let descriptors = [file.as_fd()];
+            let mut space = [MaybeUninit::uninit(); rustix::cmsg_space!(ScmRights(1))];
+            let mut control = SendAncillaryBuffer::new(&mut space);
+            assert!(control.push(SendAncillaryMessage::ScmRights(&descriptors)));
+            sendmsg(
+                &sender,
+                &[IoSlice::new(&payload)],
+                &mut control,
+                SendFlags::empty(),
+            )
+            .unwrap();
+
+            assert!(receive_export_descriptor_handoff(receiver.as_fd(), TEST_OPERATION,).is_err());
+        }
     }
 
     #[test]
     fn descriptor_handoff_validation_is_fail_closed() {
-        assert!(validate_export_descriptor_handoff(&[1, 1], 1, false).is_ok());
+        assert!(
+            validate_export_descriptor_handoff(
+                &handoff_payload(TEST_OPERATION),
+                1,
+                false,
+                TEST_OPERATION
+            )
+            .is_ok()
+        );
 
         for (payload, count, truncated) in [
             (&[1, 1][..], 0, false),
@@ -605,7 +1297,8 @@ mod tests {
             (&[1, 1, 0][..], 1, false),
         ] {
             assert!(
-                validate_export_descriptor_handoff(payload, count, truncated).is_err(),
+                validate_export_descriptor_handoff(payload, count, truncated, TEST_OPERATION)
+                    .is_err(),
                 "unexpectedly accepted malformed handoff"
             );
         }
@@ -882,6 +1575,150 @@ mod tests {
         let uid = file.metadata().expect("file metadata").uid();
 
         assert!(validate_export_ipc_directory(&file, uid).is_err());
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn worker_staging_accepts_private_directory_for_nonroot_worker() {
+        use std::os::fd::AsFd;
+        use std::os::unix::fs::PermissionsExt;
+
+        if rustix::process::geteuid().as_raw() == 0 {
+            return;
+        }
+
+        let directory = tempfile::tempdir().unwrap();
+        std::fs::set_permissions(directory.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+        let opened = std::fs::File::open(directory.path()).unwrap();
+
+        super::validate_export_worker_staging_directory(opened.as_fd()).unwrap();
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn worker_staging_rejects_wrong_owner_or_root_worker() {
+        use std::os::fd::AsFd;
+        use std::os::unix::fs::MetadataExt;
+
+        let directory = tempfile::tempdir().unwrap();
+        let opened = std::fs::File::open(directory.path()).unwrap();
+        let actual_uid = opened.metadata().unwrap().uid();
+        let wrong_uid = actual_uid.wrapping_add(1);
+
+        assert_eq!(
+            super::validate_export_worker_staging_directory_owner(opened.as_fd(), wrong_uid,)
+                .unwrap_err()
+                .kind(),
+            std::io::ErrorKind::PermissionDenied
+        );
+
+        if rustix::process::geteuid().as_raw() == 0 {
+            assert_eq!(
+                super::validate_export_worker_staging_directory(opened.as_fd())
+                    .unwrap_err()
+                    .kind(),
+                std::io::ErrorKind::PermissionDenied
+            );
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn worker_staging_rejects_insecure_permissions() {
+        use std::os::fd::AsFd;
+        use std::os::unix::fs::PermissionsExt;
+
+        let directory = tempfile::tempdir().unwrap();
+        std::fs::set_permissions(directory.path(), std::fs::Permissions::from_mode(0o750)).unwrap();
+        let opened = std::fs::File::open(directory.path()).unwrap();
+
+        assert!(super::validate_export_worker_staging_directory(opened.as_fd()).is_err());
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn worker_staging_rejects_regular_file() {
+        use std::os::fd::AsFd;
+
+        let file = tempfile::tempfile().unwrap();
+
+        assert!(super::validate_export_worker_staging_directory(file.as_fd()).is_err());
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn trusted_worker_staging_rejects_relative_path() {
+        assert!(
+            super::open_trusted_export_worker_staging_directory(std::path::Path::new(
+                "relative/staging"
+            ))
+            .is_err()
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn trusted_worker_staging_rejects_filesystem_root() {
+        assert!(
+            super::open_trusted_export_worker_staging_directory(std::path::Path::new("/")).is_err()
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn trusted_worker_staging_rejects_untrusted_ancestor() {
+        let directory = tempfile::tempdir().unwrap();
+        let staging = directory.path().join("staging");
+        std::fs::create_dir(&staging).unwrap();
+
+        assert!(super::open_trusted_export_worker_staging_directory(&staging).is_err());
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn trusted_worker_staging_rejects_symlinked_final_directory() {
+        use std::os::unix::fs::symlink;
+
+        let directory = tempfile::tempdir().unwrap();
+        let actual = directory.path().join("actual");
+        let linked = directory.path().join("linked");
+
+        std::fs::create_dir(&actual).unwrap();
+        symlink(&actual, &linked).unwrap();
+
+        assert!(super::open_trusted_export_worker_staging_directory(&linked).is_err());
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn trusted_worker_staging_rejects_symlinked_intermediate_directory() {
+        use std::os::unix::fs::symlink;
+
+        let directory = tempfile::tempdir().unwrap();
+        let actual = directory.path().join("actual");
+        let linked = directory.path().join("linked");
+
+        std::fs::create_dir(&actual).unwrap();
+        std::fs::create_dir(actual.join("staging")).unwrap();
+        symlink(&actual, &linked).unwrap();
+
+        assert!(
+            super::open_trusted_export_worker_staging_directory(&linked.join("staging")).is_err()
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn trusted_worker_staging_rejects_insecure_final_permissions() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let directory = tempfile::tempdir().unwrap();
+        let staging = directory.path().join("staging");
+
+        std::fs::create_dir(&staging).unwrap();
+        std::fs::set_permissions(&staging, std::fs::Permissions::from_mode(0o750)).unwrap();
+
+        assert!(super::open_trusted_export_worker_staging_directory(&staging).is_err());
     }
 
     #[test]

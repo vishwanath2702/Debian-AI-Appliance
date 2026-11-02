@@ -11,8 +11,8 @@ pub use localization::LocalizationConfiguration;
 
 mod model_export;
 pub use model_export::{
-    ModelExportArtifact, ModelExportOperation, ModelExportOperationId,
-    ModelExportSource, ModelExportValidationError,
+    ModelExportArtifact, ModelExportOperation, ModelExportOperationId, ModelExportSource,
+    ModelExportValidationError,
 };
 
 use std::{

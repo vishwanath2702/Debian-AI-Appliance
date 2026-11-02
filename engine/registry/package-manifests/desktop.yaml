@@ -14,9 +14,10 @@ packages:
   - xwayland
   - xdg-desktop-portal-kde
 
-  # DAIA graphical model importer
+  # DAIA graphical model importer and manager
   - kdialog
   - qdbus-qt6
+  - python3-pyqt6
   - pkexec
   - ntfs-3g
 

@@ -94,11 +94,10 @@ pub fn load_content_repositories() -> Result<Vec<model::ContentRepository>, Regi
     Ok(repository.repositories().to_vec())
 }
 
-mod post_install_models;
 mod model_export_source;
+mod post_install_models;
 pub use model_export_source::{
-    plan_ollama_export_from_mounted_source,
-    plan_ollama_export_from_unmounted_volume,
+    plan_ollama_export_from_mounted_source, plan_ollama_export_from_unmounted_volume,
 };
 pub use post_install_models::{DiscoveredModel, ModelDiscoveryIssue, ModelDiscoveryReport};
 

@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=DAIA Model Manager
+Comment=Manage, import, and benchmark local AI models
+Exec=/usr/bin/daia-model-manager
+Icon=applications-science
+Terminal=false
+Categories=Utility;System;

@@ -593,6 +593,21 @@ pub fn create_handle_anchored_export_staging(
 
     let parent = validate_export_destination_ancestors(&root_fd, relative_parent, effective_uid)?;
 
+    create_export_staging_from_opened_parent(&parent)
+}
+
+/// Create export staging beneath an already-authorized destination descriptor.
+///
+/// This validates filesystem and directory metadata, but does not authorize
+/// the destination or isolate it from hostile same-UID processes.
+#[cfg(target_os = "linux")]
+pub fn create_export_staging_from_opened_parent(
+    parent: &std::os::fd::OwnedFd,
+) -> io::Result<HandleAnchoredExportStaging> {
+    use rustix::fs::{Mode, OFlags};
+
+    let effective_uid = rustix::process::geteuid().as_raw();
+
     // A writable parent allows other users to replace the staging
     // directory name between identity verification and publication.
     // Inspect the retained handle; never change user permissions.
@@ -682,7 +697,7 @@ pub fn create_handle_anchored_export_staging(
                 }
 
                 return Ok(HandleAnchoredExportStaging {
-                    parent,
+                    parent: parent.try_clone()?,
                     directory,
                     name,
                     published: false,
@@ -1219,6 +1234,81 @@ pub fn export_authorized_ollama_model(
     )
     .map_err(|error| not_published(error.into()))?;
 
+    export_ollama_model_from_opened_store(
+        &store,
+        manifest_relative_path,
+        destination_parent,
+        destination_name,
+    )
+}
+
+/// Export from a separately authorized, already-opened model-store directory.
+///
+/// The caller must establish source authorization and process isolation.
+/// Retaining the store descriptor prevents subsequent pathname replacement
+/// from redirecting source traversal. This does not freeze writable contents.
+#[cfg(target_os = "linux")]
+pub fn export_ollama_model_from_opened_store(
+    store: &std::os::fd::OwnedFd,
+    manifest_relative_path: &Path,
+    destination_parent: &Path,
+    destination_name: &std::ffi::OsStr,
+) -> Result<ExportPublicationOutcome, ExportPublicationError> {
+    let not_published = |source: io::Error| ExportPublicationError {
+        outcome: ExportPublicationOutcome::NotPublished,
+        source,
+    };
+
+    let staging =
+        create_handle_anchored_export_staging(destination_parent).map_err(not_published)?;
+
+    export_ollama_model_into_staging(store, manifest_relative_path, staging, destination_name)
+}
+
+/// Export using separately authorized source and destination directory handles.
+///
+/// Neither directory is reopened by pathname. The caller remains responsible
+/// for authorization, source integrity, and hostile same-UID isolation.
+#[cfg(target_os = "linux")]
+pub fn export_ollama_model_from_opened_directories(
+    store: &std::os::fd::OwnedFd,
+    manifest_relative_path: &Path,
+    destination_parent: &std::os::fd::OwnedFd,
+    destination_name: &std::ffi::OsStr,
+) -> Result<ExportPublicationOutcome, ExportPublicationError> {
+    let not_published = |source: io::Error| ExportPublicationError {
+        outcome: ExportPublicationOutcome::NotPublished,
+        source,
+    };
+
+    let staging =
+        create_export_staging_from_opened_parent(destination_parent).map_err(not_published)?;
+
+    export_ollama_model_into_staging(store, manifest_relative_path, staging, destination_name)
+}
+
+#[cfg(target_os = "linux")]
+fn export_ollama_model_into_staging(
+    store: &std::os::fd::OwnedFd,
+    manifest_relative_path: &Path,
+    staging: HandleAnchoredExportStaging,
+    destination_name: &std::ffi::OsStr,
+) -> Result<ExportPublicationOutcome, ExportPublicationError> {
+    use rustix::fs::{Mode, OFlags};
+
+    let not_published = |source: io::Error| ExportPublicationError {
+        outcome: ExportPublicationOutcome::NotPublished,
+        source,
+    };
+
+    let metadata = rustix::fs::fstat(store).map_err(|error| not_published(error.into()))?;
+
+    if rustix::fs::FileType::from_raw_mode(metadata.st_mode) != rustix::fs::FileType::Directory {
+        return Err(not_published(invalid(
+            "export model store is not a directory",
+        )));
+    }
+
     let manifests = rustix::fs::openat(
         &store,
         "manifests",
@@ -1240,9 +1330,6 @@ pub fn export_authorized_ollama_model(
 
     let mut plan = assemble_opened_ollama_export_plan(manifest, &blobs, manifest_relative_path)
         .map_err(not_published)?;
-
-    let staging =
-        create_handle_anchored_export_staging(destination_parent).map_err(not_published)?;
 
     write_opened_ollama_export_plan(&mut plan, &staging.directory).map_err(not_published)?;
 
@@ -1462,6 +1549,188 @@ mod tests {
         );
 
         assert_eq!(not_published.source.kind(), io::ErrorKind::AlreadyExists,);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn opened_directories_export_survives_destination_path_replacement() {
+        use rustix::fs::{Mode, OFlags};
+        use sha2::{Digest, Sha256};
+        use std::ffi::OsStr;
+        use std::os::unix::fs::PermissionsExt;
+
+        if rustix::process::geteuid().as_raw() == 0 {
+            return;
+        }
+
+        let root = tempfile::tempdir().unwrap();
+        fs::set_permissions(root.path(), fs::Permissions::from_mode(0o700)).unwrap();
+
+        let store = root.path().join("models");
+        let relative = Path::new("registry.ollama.ai/library/example/latest");
+        let manifest_parent = store.join("manifests").join(relative.parent().unwrap());
+        let blob_parent = store.join("blobs");
+
+        fs::create_dir_all(&manifest_parent).unwrap();
+        fs::create_dir_all(&blob_parent).unwrap();
+
+        let blob = b"trusted offline model";
+        let hash = format!("{:x}", Sha256::digest(blob));
+        let digest = format!("sha256:{hash}");
+
+        fs::write(blob_parent.join(format!("sha256-{hash}")), blob).unwrap();
+
+        let manifest = serde_json::to_vec(&serde_json::json!({
+            "schemaVersion": 2,
+            "config": {"digest": digest, "size": blob.len()},
+            "layers": []
+        }))
+        .unwrap();
+
+        fs::write(manifest_parent.join("latest"), &manifest).unwrap();
+
+        let destination = root.path().join("exports");
+        let original_destination = root.path().join("original-exports");
+
+        fs::create_dir(&destination).unwrap();
+        fs::set_permissions(&destination, fs::Permissions::from_mode(0o700)).unwrap();
+
+        let store_fd = rustix::fs::openat(
+            rustix::fs::CWD,
+            &store,
+            OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+            Mode::empty(),
+        )
+        .unwrap();
+
+        let destination_fd = rustix::fs::openat(
+            rustix::fs::CWD,
+            &destination,
+            OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+            Mode::empty(),
+        )
+        .unwrap();
+
+        fs::rename(&destination, &original_destination).unwrap();
+        fs::create_dir(&destination).unwrap();
+
+        let outcome = export_ollama_model_from_opened_directories(
+            &store_fd,
+            relative,
+            &destination_fd,
+            OsStr::new("retained-export"),
+        )
+        .unwrap();
+
+        assert_eq!(outcome, ExportPublicationOutcome::PublishedAndSynced);
+
+        assert_eq!(
+            fs::read(
+                original_destination
+                    .join("retained-export/manifests")
+                    .join(relative)
+            )
+            .unwrap(),
+            manifest
+        );
+
+        assert_eq!(
+            fs::read(
+                original_destination
+                    .join("retained-export/blobs")
+                    .join(format!("sha256-{hash}"))
+            )
+            .unwrap(),
+            blob
+        );
+
+        assert!(
+            !destination.join("retained-export").exists(),
+            "replacement destination must not receive the export"
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn opened_store_export_survives_source_path_replacement() {
+        use rustix::fs::{Mode, OFlags};
+        use sha2::{Digest, Sha256};
+        use std::ffi::OsStr;
+        use std::os::unix::fs::PermissionsExt;
+
+        if rustix::process::geteuid().as_raw() == 0 {
+            return;
+        }
+
+        let root = tempfile::tempdir().unwrap();
+        fs::set_permissions(root.path(), fs::Permissions::from_mode(0o700)).unwrap();
+
+        let store = root.path().join("models");
+        let original = root.path().join("original-models");
+        let relative = Path::new("registry.ollama.ai/library/example/latest");
+
+        let manifest_parent = store.join("manifests/registry.ollama.ai/library/example");
+        let blob_parent = store.join("blobs");
+
+        fs::create_dir_all(&manifest_parent).unwrap();
+        fs::create_dir_all(&blob_parent).unwrap();
+
+        let blob = b"original trusted model content";
+        let hash = format!("{:x}", Sha256::digest(blob));
+        let digest = format!("sha256:{hash}");
+
+        fs::write(blob_parent.join(format!("sha256-{hash}")), blob).unwrap();
+
+        let manifest = serde_json::to_vec(&serde_json::json!({
+            "schemaVersion": 2,
+            "config": {"digest": digest, "size": blob.len()},
+            "layers": []
+        }))
+        .unwrap();
+
+        fs::write(manifest_parent.join("latest"), &manifest).unwrap();
+
+        let opened = rustix::fs::openat(
+            rustix::fs::CWD,
+            &store,
+            OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+            Mode::empty(),
+        )
+        .unwrap();
+
+        fs::rename(&store, &original).unwrap();
+
+        fs::create_dir_all(store.join("manifests")).unwrap();
+        fs::create_dir_all(store.join("blobs")).unwrap();
+
+        let destination = root.path().join("exports");
+        fs::create_dir(&destination).unwrap();
+        fs::set_permissions(&destination, fs::Permissions::from_mode(0o700)).unwrap();
+
+        let outcome = export_ollama_model_from_opened_store(
+            &opened,
+            relative,
+            &destination,
+            OsStr::new("retained-export"),
+        )
+        .unwrap();
+
+        assert_eq!(outcome, ExportPublicationOutcome::PublishedAndSynced);
+
+        assert_eq!(
+            fs::read(destination.join("retained-export/manifests").join(relative)).unwrap(),
+            manifest
+        );
+
+        assert_eq!(
+            fs::read(
+                destination
+                    .join("retained-export/blobs")
+                    .join(format!("sha256-{hash}"))
+            )
+            .unwrap(),
+            blob
+        );
     }
 
     #[cfg(target_os = "linux")]

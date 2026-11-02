@@ -1,3 +1,666 @@
+/// Compares two regular model files without modifying either file.
+///
+/// Files are opened without following final-component symlinks on Unix.
+/// Comparison uses bounded memory and does not modify either file.
+///
+/// # Errors
+///
+/// Returns an I/O error if either file cannot be opened, inspected, or read.
+fn model_files_have_identical_content(
+    source: &std::path::Path,
+    stored: &std::path::Path,
+) -> Result<bool, std::io::Error> {
+    use std::io::{Error, ErrorKind, Read};
+
+    fn open_regular(path: &std::path::Path) -> Result<std::fs::File, std::io::Error> {
+        let mut options = std::fs::OpenOptions::new();
+        options.read(true);
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.custom_flags(0o400000);
+        }
+
+        let file = options.open(path)?;
+
+        if !file.metadata()?.is_file() {
+            return Err(Error::new(
+                ErrorKind::InvalidInput,
+                "model comparison requires regular files",
+            ));
+        }
+
+        Ok(file)
+    }
+
+    let mut source_file = open_regular(source)?;
+    let mut stored_file = open_regular(stored)?;
+
+    let source_size = source_file.metadata()?.len();
+    let stored_size = stored_file.metadata()?.len();
+
+    if source_size != stored_size {
+        return Ok(false);
+    }
+
+    let mut source_buffer = [0_u8; 65_536];
+    let mut stored_buffer = [0_u8; 65_536];
+    let mut remaining = source_size;
+
+    while remaining > 0 {
+        let chunk = remaining.min(source_buffer.len() as u64) as usize;
+
+        source_file.read_exact(&mut source_buffer[..chunk])?;
+        stored_file.read_exact(&mut stored_buffer[..chunk])?;
+
+        if source_buffer[..chunk] != stored_buffer[..chunk] {
+            return Ok(false);
+        }
+
+        remaining -= chunk as u64;
+    }
+
+    Ok(true)
+}
+
+#[cfg(test)]
+mod model_content_identity_tests {
+    use super::model_files_have_identical_content;
+
+    #[test]
+    fn identical_files_match() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("source.gguf");
+        let stored = directory.path().join("stored.gguf");
+
+        std::fs::write(&source, vec![0x5a; 150_000]).unwrap();
+        std::fs::write(&stored, vec![0x5a; 150_000]).unwrap();
+
+        assert!(model_files_have_identical_content(&source, &stored).unwrap());
+    }
+
+    #[test]
+    fn different_content_is_rejected() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("source.gguf");
+        let stored = directory.path().join("stored.gguf");
+
+        std::fs::write(&source, b"GGUF-original").unwrap();
+        std::fs::write(&stored, b"GGUF-modified").unwrap();
+
+        assert!(!model_files_have_identical_content(&source, &stored).unwrap());
+    }
+
+    #[test]
+    fn different_sizes_are_rejected() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("source.gguf");
+        let stored = directory.path().join("stored.gguf");
+
+        std::fs::write(&source, b"GGUF").unwrap();
+        std::fs::write(&stored, b"GGUF-extra").unwrap();
+
+        assert!(!model_files_have_identical_content(&source, &stored).unwrap());
+    }
+
+    #[test]
+    fn missing_file_returns_error() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("missing.gguf");
+        let stored = directory.path().join("stored.gguf");
+
+        std::fs::write(&stored, b"GGUF").unwrap();
+
+        assert!(model_files_have_identical_content(&source, &stored).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn symlink_is_rejected() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("source.gguf");
+        let stored = directory.path().join("stored.gguf");
+        let link = directory.path().join("link.gguf");
+
+        std::fs::write(&source, b"GGUF").unwrap();
+        std::fs::write(&stored, b"GGUF").unwrap();
+        std::os::unix::fs::symlink(&source, &link).unwrap();
+
+        assert!(model_files_have_identical_content(&link, &stored).is_err());
+    }
+}
+
+/// Read-only classification of content already present at a DAIA destination.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ExistingModelContentClassification {
+    Missing,
+    UntrackedIdentical,
+    UntrackedDifferent,
+    TrackedIdentical,
+    TrackedDifferent,
+}
+
+/// Classifies a destination without modifying content or appliance state.
+///
+/// The caller must validate the destination path and its parent directories
+/// before using this result in any privileged import or recovery workflow.
+fn classify_existing_model_content(
+    source: &std::path::Path,
+    logical_destination: &std::path::Path,
+    destination: &std::path::Path,
+    appliance_state: &state::ApplianceState,
+) -> Result<ExistingModelContentClassification, std::io::Error> {
+    let tracked = appliance_state
+        .imported_content()
+        .iter()
+        .any(|item| item.path() == logical_destination);
+
+    match std::fs::symlink_metadata(destination) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(ExistingModelContentClassification::Missing);
+        }
+        Err(error) => return Err(error),
+        Ok(metadata) if !metadata.file_type().is_file() => {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "existing model destination is not a regular file",
+            ));
+        }
+        Ok(_) => {}
+    }
+
+    let identical = model_files_have_identical_content(source, destination)?;
+
+    Ok(match (tracked, identical) {
+        (false, true) => ExistingModelContentClassification::UntrackedIdentical,
+        (false, false) => ExistingModelContentClassification::UntrackedDifferent,
+        (true, true) => ExistingModelContentClassification::TrackedIdentical,
+        (true, false) => ExistingModelContentClassification::TrackedDifferent,
+    })
+}
+
+#[cfg(test)]
+mod existing_model_content_classification_tests {
+    use super::{
+        ExistingModelContentClassification as Classification, classify_existing_model_content,
+    };
+
+    #[test]
+    fn missing_destination_is_classified() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("source.gguf");
+        let destination = directory.path().join("missing.gguf");
+        std::fs::write(&source, b"GGUF").unwrap();
+
+        let state = state::ApplianceState::new("desktop");
+        assert_eq!(
+            classify_existing_model_content(&source, &destination, &destination, &state).unwrap(),
+            Classification::Missing
+        );
+    }
+
+    #[test]
+    fn untracked_identical_destination_is_classified() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("source.gguf");
+        let destination = directory.path().join("stored.gguf");
+        std::fs::write(&source, b"GGUF").unwrap();
+        std::fs::write(&destination, b"GGUF").unwrap();
+
+        let state = state::ApplianceState::new("desktop");
+        assert_eq!(
+            classify_existing_model_content(&source, &destination, &destination, &state).unwrap(),
+            Classification::UntrackedIdentical
+        );
+    }
+
+    #[test]
+    fn untracked_different_destination_is_classified() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("source.gguf");
+        let destination = directory.path().join("stored.gguf");
+        std::fs::write(&source, b"GGUF-one").unwrap();
+        std::fs::write(&destination, b"GGUF-two").unwrap();
+
+        let state = state::ApplianceState::new("desktop");
+        assert_eq!(
+            classify_existing_model_content(&source, &destination, &destination, &state).unwrap(),
+            Classification::UntrackedDifferent
+        );
+    }
+
+    #[test]
+    fn tracked_identical_destination_is_classified() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("source.gguf");
+        let destination = directory.path().join("stored.gguf");
+        std::fs::write(&source, b"GGUF").unwrap();
+        std::fs::write(&destination, b"GGUF").unwrap();
+
+        let mut state = state::ApplianceState::new("desktop");
+        state.record_imported_content(model::ImportedContentItem::new(
+            model::ExternalContentItemId::new("test-source"),
+            &destination,
+        ));
+
+        assert_eq!(
+            classify_existing_model_content(&source, &destination, &destination, &state).unwrap(),
+            Classification::TrackedIdentical
+        );
+    }
+
+    #[test]
+    fn tracked_logical_destination_matches_distinct_physical_path() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().join("appliance");
+        let source = directory.path().join("source.gguf");
+        let logical_destination = std::path::Path::new("/var/lib/daia/content/model.gguf");
+        let physical_destination = root.join("var/lib/daia/content/model.gguf");
+
+        std::fs::create_dir_all(physical_destination.parent().unwrap()).unwrap();
+        std::fs::write(&source, b"GGUF").unwrap();
+        std::fs::write(&physical_destination, b"GGUF").unwrap();
+
+        let mut state = state::ApplianceState::new("desktop");
+        state.record_imported_content(model::ImportedContentItem::new(
+            model::ExternalContentItemId::new("test-source"),
+            logical_destination,
+        ));
+
+        assert_ne!(logical_destination, physical_destination);
+
+        assert_eq!(
+            classify_existing_model_content(
+                &source,
+                logical_destination,
+                &physical_destination,
+                &state,
+            )
+            .unwrap(),
+            Classification::TrackedIdentical
+        );
+    }
+
+    #[test]
+    fn tracked_different_destination_is_classified() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("source.gguf");
+        let destination = directory.path().join("stored.gguf");
+        std::fs::write(&source, b"GGUF-one").unwrap();
+        std::fs::write(&destination, b"GGUF-two").unwrap();
+
+        let mut state = state::ApplianceState::new("desktop");
+        state.record_imported_content(model::ImportedContentItem::new(
+            model::ExternalContentItemId::new("test-source"),
+            &destination,
+        ));
+
+        assert_eq!(
+            classify_existing_model_content(&source, &destination, &destination, &state).unwrap(),
+            Classification::TrackedDifferent
+        );
+    }
+}
+
+/// Reports whether another persisted model references the destination.
+///
+/// This is a read-only ownership check. It does not authorize content reuse.
+fn destination_has_other_model_owner(
+    destination: &std::path::Path,
+    requested_model_name: &str,
+    appliance_state: &state::ApplianceState,
+) -> bool {
+    appliance_state
+        .model_realizations()
+        .iter()
+        .any(|realization| {
+            realization.content().path() == destination
+                && realization.id().as_str() != requested_model_name
+        })
+}
+
+#[cfg(test)]
+mod existing_model_destination_ownership_tests {
+    use super::destination_has_other_model_owner;
+
+    fn state_with_model(model_name: &str, destination: &std::path::Path) -> state::ApplianceState {
+        let mut appliance_state = state::ApplianceState::new("desktop");
+
+        let content = model::ImportedContentItem::new(
+            model::ExternalContentItemId::new("test-source"),
+            destination,
+        );
+
+        appliance_state.record_imported_content(content.clone());
+        appliance_state.record_model_realization(model::ModelRealization::new(
+            model::ModelRealizationId::new(model_name),
+            model::InferenceEngineId::ollama(),
+            content,
+        ));
+
+        appliance_state
+    }
+
+    #[test]
+    fn unowned_destination_has_no_conflict() {
+        let state = state::ApplianceState::new("desktop");
+
+        assert!(!destination_has_other_model_owner(
+            std::path::Path::new("/var/lib/daia/content/model.gguf"),
+            "requested-model",
+            &state,
+        ));
+    }
+
+    #[test]
+    fn same_model_name_is_not_another_owner() {
+        let destination = std::path::Path::new("/var/lib/daia/content/model.gguf");
+        let state = state_with_model("requested-model", destination);
+
+        assert!(!destination_has_other_model_owner(
+            destination,
+            "requested-model",
+            &state,
+        ));
+    }
+
+    #[test]
+    fn different_model_name_is_another_owner() {
+        let destination = std::path::Path::new("/var/lib/daia/content/model.gguf");
+        let state = state_with_model("existing-model", destination);
+
+        assert!(destination_has_other_model_owner(
+            destination,
+            "requested-model",
+            &state,
+        ));
+    }
+
+    #[test]
+    fn unrelated_destination_has_no_conflict() {
+        let state = state_with_model(
+            "existing-model",
+            std::path::Path::new("/var/lib/daia/content/other.gguf"),
+        );
+
+        assert!(!destination_has_other_model_owner(
+            std::path::Path::new("/var/lib/daia/content/model.gguf"),
+            "requested-model",
+            &state,
+        ));
+    }
+}
+
+/// Reports whether another source-item identity claims this destination.
+///
+/// This is a read-only state check and does not authorize content reuse.
+fn destination_has_other_source_owner(
+    destination: &std::path::Path,
+    requested_source_item_id: &model::ExternalContentItemId,
+    appliance_state: &state::ApplianceState,
+) -> bool {
+    appliance_state
+        .imported_content()
+        .iter()
+        .any(|item| item.path() == destination && item.source_item_id() != requested_source_item_id)
+}
+
+#[cfg(test)]
+mod existing_model_source_ownership_tests {
+    use super::destination_has_other_source_owner;
+
+    fn state_with_source(source_id: &str, destination: &std::path::Path) -> state::ApplianceState {
+        let mut appliance_state = state::ApplianceState::new("desktop");
+
+        appliance_state.record_imported_content(model::ImportedContentItem::new(
+            model::ExternalContentItemId::new(source_id),
+            destination,
+        ));
+
+        appliance_state
+    }
+
+    #[test]
+    fn untracked_destination_has_no_source_conflict() {
+        let state = state::ApplianceState::new("desktop");
+        let destination = std::path::Path::new("/var/lib/daia/content/model.gguf");
+
+        assert!(!destination_has_other_source_owner(
+            destination,
+            &model::ExternalContentItemId::new("requested-source"),
+            &state,
+        ));
+    }
+
+    #[test]
+    fn matching_source_identity_has_no_conflict() {
+        let destination = std::path::Path::new("/var/lib/daia/content/model.gguf");
+        let state = state_with_source("requested-source", destination);
+
+        assert!(!destination_has_other_source_owner(
+            destination,
+            &model::ExternalContentItemId::new("requested-source"),
+            &state,
+        ));
+    }
+
+    #[test]
+    fn different_source_identity_is_a_conflict() {
+        let destination = std::path::Path::new("/var/lib/daia/content/model.gguf");
+        let state = state_with_source("existing-source", destination);
+
+        assert!(destination_has_other_source_owner(
+            destination,
+            &model::ExternalContentItemId::new("requested-source"),
+            &state,
+        ));
+    }
+
+    #[test]
+    fn unrelated_destination_has_no_source_conflict() {
+        let state = state_with_source(
+            "existing-source",
+            std::path::Path::new("/var/lib/daia/content/other.gguf"),
+        );
+
+        assert!(!destination_has_other_source_owner(
+            std::path::Path::new("/var/lib/daia/content/model.gguf"),
+            &model::ExternalContentItemId::new("requested-source"),
+            &state,
+        ));
+    }
+}
+
+/// Conservative decision for an attempted model-content import.
+///
+/// Only a missing destination permits the ordinary no-overwrite copy path.
+/// Existing content is never adopted or replaced by this policy.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ExistingModelImportDecision {
+    ImportNew,
+    OwnershipConflict,
+    RequiresExplicitRecovery,
+    ContentCollision,
+}
+
+fn decide_existing_model_import(
+    classification: ExistingModelContentClassification,
+    other_model_owner: bool,
+    other_source_owner: bool,
+) -> ExistingModelImportDecision {
+    if other_model_owner || other_source_owner {
+        return ExistingModelImportDecision::OwnershipConflict;
+    }
+
+    match classification {
+        ExistingModelContentClassification::Missing => ExistingModelImportDecision::ImportNew,
+        ExistingModelContentClassification::UntrackedIdentical
+        | ExistingModelContentClassification::TrackedIdentical => {
+            ExistingModelImportDecision::RequiresExplicitRecovery
+        }
+        ExistingModelContentClassification::UntrackedDifferent
+        | ExistingModelContentClassification::TrackedDifferent => {
+            ExistingModelImportDecision::ContentCollision
+        }
+    }
+}
+
+#[cfg(test)]
+mod existing_model_import_decision_tests {
+    use super::{
+        ExistingModelContentClassification as Classification,
+        ExistingModelImportDecision as Decision, decide_existing_model_import,
+    };
+
+    #[test]
+    fn missing_destination_permits_new_import() {
+        assert_eq!(
+            decide_existing_model_import(Classification::Missing, false, false),
+            Decision::ImportNew
+        );
+    }
+
+    #[test]
+    fn identical_untracked_content_requires_explicit_recovery() {
+        assert_eq!(
+            decide_existing_model_import(Classification::UntrackedIdentical, false, false,),
+            Decision::RequiresExplicitRecovery
+        );
+    }
+
+    #[test]
+    fn identical_tracked_content_requires_explicit_recovery() {
+        assert_eq!(
+            decide_existing_model_import(Classification::TrackedIdentical, false, false,),
+            Decision::RequiresExplicitRecovery
+        );
+    }
+
+    #[test]
+    fn different_content_is_a_collision() {
+        for classification in [
+            Classification::UntrackedDifferent,
+            Classification::TrackedDifferent,
+        ] {
+            assert_eq!(
+                decide_existing_model_import(classification, false, false),
+                Decision::ContentCollision
+            );
+        }
+    }
+
+    #[test]
+    fn another_model_owner_blocks_import() {
+        assert_eq!(
+            decide_existing_model_import(Classification::TrackedIdentical, true, false),
+            Decision::OwnershipConflict
+        );
+    }
+
+    #[test]
+    fn another_source_owner_blocks_import() {
+        assert_eq!(
+            decide_existing_model_import(Classification::TrackedIdentical, false, true),
+            Decision::OwnershipConflict
+        );
+    }
+
+    #[test]
+    fn ownership_conflict_takes_precedence_over_missing_destination() {
+        assert_eq!(
+            decide_existing_model_import(Classification::Missing, true, false),
+            Decision::OwnershipConflict
+        );
+    }
+}
+
+/// Validates existing parent components of DAIA model-content storage.
+///
+/// Missing directories are permitted because the import engine creates them.
+/// Existing components must be real directories, never symbolic links.
+fn validate_model_import_destination_parents(root: &std::path::Path) -> Result<(), String> {
+    for component in ["var", "var/lib", "var/lib/daia", "var/lib/daia/content"] {
+        let path = root.join(component);
+
+        match std::fs::symlink_metadata(&path) {
+            Ok(metadata) if metadata.file_type().is_dir() => {}
+            Ok(_) => {
+                return Err(format!(
+                    "DAIA model import destination parent is not a real directory: {}",
+                    path.display()
+                ));
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(format!(
+                    "Cannot inspect DAIA model import destination parent {}: {error}",
+                    path.display()
+                ));
+            }
+        }
+    }
+
+    Ok(())
+}
+
+#[cfg(test)]
+mod model_import_destination_parent_tests {
+    use super::validate_model_import_destination_parents;
+
+    #[test]
+    fn missing_destination_directories_are_allowed() {
+        let directory = tempfile::tempdir().unwrap();
+        assert!(validate_model_import_destination_parents(directory.path()).is_ok());
+    }
+
+    #[test]
+    fn existing_real_directories_are_allowed() {
+        let directory = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(directory.path().join("var/lib/daia/content")).unwrap();
+
+        assert!(validate_model_import_destination_parents(directory.path()).is_ok());
+    }
+
+    #[test]
+    fn regular_file_in_parent_chain_is_rejected() {
+        let directory = tempfile::tempdir().unwrap();
+        std::fs::create_dir(directory.path().join("var")).unwrap();
+        std::fs::write(directory.path().join("var/lib"), b"not a directory").unwrap();
+
+        assert!(validate_model_import_destination_parents(directory.path()).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn symlinked_parent_directory_is_rejected() {
+        use std::os::unix::fs::symlink;
+
+        let directory = tempfile::tempdir().unwrap();
+        let outside = directory.path().join("outside");
+        std::fs::create_dir(&outside).unwrap();
+        std::fs::create_dir(directory.path().join("var")).unwrap();
+        symlink(&outside, directory.path().join("var/lib")).unwrap();
+
+        assert!(validate_model_import_destination_parents(directory.path()).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn dangling_parent_symlink_is_rejected() {
+        use std::os::unix::fs::symlink;
+
+        let directory = tempfile::tempdir().unwrap();
+        symlink(
+            directory.path().join("missing"),
+            directory.path().join("var"),
+        )
+        .unwrap();
+
+        assert!(validate_model_import_destination_parents(directory.path()).is_err());
+    }
+}
+
 /// A model artifact successfully discovered in a selected directory.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DiscoveredModel {
@@ -439,6 +1102,45 @@ where
             model::ContentSourceId::new("post-install-model-volume"),
             path,
         );
+
+        validate_model_import_destination_parents(root)?;
+
+        let logical_destination = std::path::Path::new("/var/lib/daia/content").join(filename);
+        let physical_destination = root.join("var/lib/daia/content").join(filename);
+
+        let classification = classify_existing_model_content(
+            item.path(),
+            &logical_destination,
+            &physical_destination,
+            &appliance_state,
+        )
+        .map_err(|error| format!("Cannot inspect existing model content: {error}"))?;
+
+        let other_model_owner =
+            destination_has_other_model_owner(&logical_destination, model_name, &appliance_state);
+        let other_source_owner =
+            destination_has_other_source_owner(&logical_destination, item.id(), &appliance_state);
+
+        match decide_existing_model_import(classification, other_model_owner, other_source_owner) {
+            ExistingModelImportDecision::ImportNew => {}
+            ExistingModelImportDecision::OwnershipConflict => {
+                return Err(
+                    "Model destination is already owned by another model or source".to_owned(),
+                );
+            }
+            ExistingModelImportDecision::RequiresExplicitRecovery => {
+                return Err(
+                    "Identical model content already exists; explicit recovery is required"
+                        .to_owned(),
+                );
+            }
+            ExistingModelImportDecision::ContentCollision => {
+                return Err(
+                    "Model destination already contains different content; import refused"
+                        .to_owned(),
+                );
+            }
+        }
 
         let engine = engine::Engine::from_registry(registry::Registry::default());
 
@@ -1956,6 +2658,254 @@ mod mounted_model_import_tests {
         .expect("mounted model import");
 
         assert_eq!(*mounter.events.borrow(), vec!["mount", "unmount"]);
+    }
+}
+
+#[cfg(test)]
+mod mounted_model_import_collision_tests {
+    use std::{
+        cell::RefCell,
+        path::{Path, PathBuf},
+    };
+
+    use inspector::{ContentVolumeMounter, StorageInspectError};
+
+    struct CollisionMounter<'a> {
+        mountpoint: &'a Path,
+        events: RefCell<Vec<&'static str>>,
+    }
+
+    impl ContentVolumeMounter for CollisionMounter<'_> {
+        fn mount_read_only(
+            &self,
+            _volume: &model::DiscoveredContentVolume,
+        ) -> Result<PathBuf, StorageInspectError> {
+            self.events.borrow_mut().push("mount");
+            Ok(self.mountpoint.to_path_buf())
+        }
+
+        fn unmount(&self, _mountpoint: &Path) -> Result<(), StorageInspectError> {
+            self.events.borrow_mut().push("unmount");
+            Ok(())
+        }
+    }
+
+    fn valid_gguf() -> Vec<u8> {
+        let mut bytes = Vec::from(*b"GGUF");
+        bytes.extend_from_slice(&3_u32.to_le_bytes());
+        bytes.extend_from_slice(&0_u64.to_le_bytes());
+        bytes.extend_from_slice(&1_u64.to_le_bytes());
+
+        let key = b"general.architecture";
+        bytes.extend_from_slice(&(key.len() as u64).to_le_bytes());
+        bytes.extend_from_slice(key);
+        bytes.extend_from_slice(&8_u32.to_le_bytes());
+
+        let value = b"llama";
+        bytes.extend_from_slice(&(value.len() as u64).to_le_bytes());
+        bytes.extend_from_slice(value);
+
+        bytes
+    }
+
+    fn assert_rejected_import(
+        existing_bytes: &[u8],
+        expected_error: &str,
+        other_model_owner: bool,
+    ) {
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let root = temporary.path().join("appliance");
+        let mountpoint = temporary.path().join("usb");
+
+        std::fs::create_dir_all(&mountpoint).expect("create mock USB");
+
+        let source_bytes = valid_gguf();
+        std::fs::write(mountpoint.join("model.gguf"), &source_bytes).expect("write source GGUF");
+
+        let destination = root.join("var/lib/daia/content/model.gguf");
+        std::fs::create_dir_all(destination.parent().unwrap()).expect("create content directory");
+        std::fs::write(&destination, existing_bytes).expect("write existing destination");
+
+        let mut appliance_state = state::ApplianceState::new("desktop");
+
+        if other_model_owner {
+            appliance_state.record_model_realization(model::ModelRealization::new(
+                model::ModelRealizationId::new("another-model"),
+                model::InferenceEngineId::ollama(),
+                model::ImportedContentItem::new(
+                    model::ExternalContentItemId::new("another-source"),
+                    "/var/lib/daia/content/model.gguf",
+                ),
+            ));
+        }
+
+        appliance_state
+            .write_to_root(&root)
+            .expect("write initial appliance state");
+
+        let mounter = CollisionMounter {
+            mountpoint: &mountpoint,
+            events: RefCell::new(Vec::new()),
+        };
+
+        let volume = model::DiscoveredContentVolume::new("/dev/mock1", "/dev/mock", "mock");
+
+        let result = super::import_selected_model_on_volume_with(
+            &mounter,
+            &volume,
+            Path::new("model.gguf"),
+            "test-model",
+            &root,
+        );
+
+        let error = result.expect_err("existing destination must be rejected");
+        assert!(
+            error.contains(expected_error),
+            "unexpected import error: {error}"
+        );
+
+        assert_eq!(
+            std::fs::read(&destination).expect("read preserved destination"),
+            existing_bytes,
+            "existing destination must not change"
+        );
+
+        assert_eq!(
+            *mounter.events.borrow(),
+            vec!["mount", "unmount"],
+            "volume must be unmounted after rejection"
+        );
+
+        let persisted = state::ApplianceState::read_from_root(&root).expect("read appliance state");
+
+        assert!(
+            persisted
+                .model_realizations()
+                .iter()
+                .all(|realization| realization.id().as_str() != "test-model"),
+            "rejected model must not be recorded"
+        );
+    }
+
+    #[test]
+    fn identical_existing_gguf_requires_explicit_recovery() {
+        let bytes = valid_gguf();
+        assert_rejected_import(&bytes, "explicit recovery is required", false);
+    }
+
+    #[test]
+    fn different_existing_gguf_is_rejected_without_overwrite() {
+        assert_rejected_import(
+            b"different existing model content",
+            "different content",
+            false,
+        );
+    }
+
+    #[test]
+    fn other_model_owner_is_rejected_without_overwrite() {
+        let bytes = valid_gguf();
+        assert_rejected_import(&bytes, "already owned", true);
+    }
+
+    #[test]
+    fn different_source_owner_is_rejected_without_overwrite() {
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let root = temporary.path().join("appliance");
+        let mountpoint = temporary.path().join("usb");
+
+        std::fs::create_dir_all(&mountpoint).expect("create mock USB");
+
+        let bytes = valid_gguf();
+        std::fs::write(mountpoint.join("model.gguf"), &bytes).expect("write source GGUF");
+
+        let destination = root.join("var/lib/daia/content/model.gguf");
+        std::fs::create_dir_all(destination.parent().unwrap())
+            .expect("create destination directory");
+        std::fs::write(&destination, &bytes).expect("write existing GGUF");
+
+        let mut appliance_state = state::ApplianceState::new("desktop");
+        appliance_state.record_imported_content(model::ImportedContentItem::new(
+            model::ExternalContentItemId::new("another-source"),
+            "/var/lib/daia/content/model.gguf",
+        ));
+        appliance_state
+            .write_to_root(&root)
+            .expect("write initial appliance state");
+
+        let mounter = CollisionMounter {
+            mountpoint: &mountpoint,
+            events: RefCell::new(Vec::new()),
+        };
+
+        let volume = model::DiscoveredContentVolume::new("/dev/mock1", "/dev/mock", "mock");
+
+        let result = super::import_selected_model_on_volume_with(
+            &mounter,
+            &volume,
+            Path::new("model.gguf"),
+            "test-model",
+            &root,
+        );
+
+        let error = result.expect_err("different source owner must be rejected");
+        assert!(error.contains("already owned"), "{error}");
+
+        assert_eq!(std::fs::read(&destination).unwrap(), bytes);
+        assert_eq!(*mounter.events.borrow(), vec!["mount", "unmount"]);
+
+        let persisted = state::ApplianceState::read_from_root(&root).unwrap();
+        assert!(persisted.model_realizations().is_empty());
+        assert_eq!(persisted.imported_content().len(), 1);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn symlinked_destination_parent_is_rejected_without_escape() {
+        use std::os::unix::fs::symlink;
+
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let root = temporary.path().join("appliance");
+        let mountpoint = temporary.path().join("usb");
+        let outside = temporary.path().join("outside");
+
+        std::fs::create_dir_all(&mountpoint).expect("create mock USB");
+        std::fs::create_dir_all(&outside).expect("create outside directory");
+        std::fs::create_dir_all(root.join("var/lib/daia")).expect("create DAIA directory");
+
+        let bytes = valid_gguf();
+        std::fs::write(mountpoint.join("model.gguf"), &bytes).expect("write source GGUF");
+
+        symlink(&outside, root.join("var/lib/daia/content"))
+            .expect("create unsafe destination symlink");
+
+        state::ApplianceState::new("desktop")
+            .write_to_root(&root)
+            .expect("write initial appliance state");
+
+        let mounter = CollisionMounter {
+            mountpoint: &mountpoint,
+            events: RefCell::new(Vec::new()),
+        };
+
+        let volume = model::DiscoveredContentVolume::new("/dev/mock1", "/dev/mock", "mock");
+
+        let result = super::import_selected_model_on_volume_with(
+            &mounter,
+            &volume,
+            Path::new("model.gguf"),
+            "test-model",
+            &root,
+        );
+
+        let error = result.expect_err("symlinked destination must be rejected");
+        assert!(error.contains("not a real directory"), "{error}");
+
+        assert!(!outside.join("model.gguf").exists());
+        assert_eq!(*mounter.events.borrow(), vec!["mount", "unmount"]);
+
+        let persisted = state::ApplianceState::read_from_root(&root).unwrap();
+        assert!(persisted.model_realizations().is_empty());
     }
 }
 

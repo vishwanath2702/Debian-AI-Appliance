@@ -1,6 +1,7 @@
 """Installation contract for DAIA Model Exporter executables."""
 
 from pathlib import Path
+import subprocess
 import unittest
 
 
@@ -29,12 +30,92 @@ class ExportInstallationTests(unittest.TestCase):
             ROOT / "runtime/services/daia-model-export-worker.service"
         ).read_text()
 
+        self.assertIn("DynamicUser=yes\n", service)
         self.assertIn("User=daia-export\n", service)
-        self.assertIn("Group=daia-export\n", service)
+        self.assertNotIn("Group=daia-export\n", service)
         self.assertIn("ProtectSystem=strict\n", service)
         self.assertIn("ProtectHome=yes\n", service)
         self.assertIn("StateDirectory=daia-model-export\n", service)
         self.assertIn("StateDirectoryMode=0700\n", service)
+
+    def test_worker_does_not_provision_static_identity(self):
+        installer = (ROOT / "runtime/modules/ai.sh").read_text()
+        service = (
+            ROOT / "runtime/services/daia-model-export-worker.service"
+        ).read_text()
+
+        self.assertIn("DynamicUser=yes\n", service)
+        self.assertIn(
+            "if getent passwd daia-export >/dev/null; then",
+            installer,
+        )
+        self.assertIn(
+            "Legacy permanent exporter account prevents dynamic isolation",
+            installer,
+        )
+        self.assertNotIn("export_sysusers_destination=", installer)
+        self.assertNotIn(
+            'systemd-sysusers "$export_sysusers_destination"',
+            installer,
+        )
+
+    def test_static_exporter_account_definition_is_absent(self):
+        account = ROOT / "runtime/sysusers.d/daia-export.conf"
+        self.assertFalse(account.exists())
+
+    def test_legacy_account_guard_rejects_existing_account(self):
+        installer = (ROOT / "runtime/modules/ai.sh").read_text()
+
+        start = "ai_install() {"
+        end = "\n}\n\n_ai_verify_ollama_account() {"
+
+        self.assertEqual(installer.count(start), 1)
+        self.assertEqual(installer.count(end), 1)
+
+        install_function = installer.split(start, 1)[1].split(end, 1)[0]
+
+        guard = """    if getent passwd daia-export >/dev/null; then
+        echo "Legacy permanent exporter account prevents dynamic isolation" >&2
+        return 1
+    fi"""
+
+        self.assertEqual(install_function.count(guard), 1)
+
+        for account_exists in (True, False):
+            with self.subTest(account_exists=account_exists):
+                mock = (
+                    "getent() { return 0; }"
+                    if account_exists
+                    else "getent() { return 2; }"
+                )
+
+                script = (
+                    mock + "\n"
+                    + "check_legacy_account() {\n"
+                    + guard + "\n"
+                    + "return 0\n"
+                    + "}\n"
+                    + "check_legacy_account\n"
+                )
+
+                result = subprocess.run(
+                    ["bash", "-c", script],
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+
+                self.assertEqual(
+                    result.returncode,
+                    1 if account_exists else 0,
+                    result.stderr,
+                )
+
+                if account_exists:
+                    self.assertIn(
+                        "Legacy permanent exporter account",
+                        result.stderr,
+                    )
 
     def test_both_executables_have_installation_rules(self):
         sources = [

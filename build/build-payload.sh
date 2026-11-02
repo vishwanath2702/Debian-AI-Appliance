@@ -386,6 +386,11 @@ stage_runtime()
         "$DAIA_RUNTIME_SOURCE/sysusers.d" \
         "$DAIA_SYSUSERS_TARGET"
 
+    stage_runtime_directory \
+        "Runtime polkit authorization policies" \
+        "$DAIA_RUNTIME_SOURCE/polkit-1" \
+        "$DAIA_ROOT_TARGET/polkit-1"
+
     if [[ -f "$DAIA_RUNTIME_SOURCE/runtime.sh" ]]
     then
         copy_file \
@@ -410,18 +415,39 @@ stage_runtime()
             "Graphical model importer staged successfully."
     fi
 
-    if [[ -f "$DAIA_RUNTIME_SOURCE/daia-model-importer.desktop" ]]
+    if [[ ! -f "$DAIA_RUNTIME_SOURCE/daia-model-manager.py" ]]
     then
-        ensure_directory "$DAIA_WORKSPACE/usr/share/applications"
-
-        copy_file \
-            "$DAIA_RUNTIME_SOURCE/daia-model-importer.desktop" \
-            "$DAIA_WORKSPACE/usr/share/applications/daia-model-importer.desktop" \
-            0644
-
-        record_staged_component \
-            "Graphical model importer desktop launcher staged successfully."
+        log_error "Required Model Manager executable source is missing:"
+        log_error "  $DAIA_RUNTIME_SOURCE/daia-model-manager.py"
+        return 1
     fi
+
+    if [[ ! -f "$DAIA_RUNTIME_SOURCE/daia-model-manager.desktop" ]]
+    then
+        log_error "Required Model Manager desktop launcher is missing:"
+        log_error "  $DAIA_RUNTIME_SOURCE/daia-model-manager.desktop"
+        return 1
+    fi
+
+    ensure_directory "$DAIA_WORKSPACE/usr/bin"
+
+    copy_file \
+        "$DAIA_RUNTIME_SOURCE/daia-model-manager.py" \
+        "$DAIA_WORKSPACE/usr/bin/daia-model-manager" \
+        0755
+
+    record_staged_component \
+        "Graphical model manager staged successfully."
+
+    ensure_directory "$DAIA_WORKSPACE/usr/share/applications"
+
+    copy_file \
+        "$DAIA_RUNTIME_SOURCE/daia-model-manager.desktop" \
+        "$DAIA_WORKSPACE/usr/share/applications/daia-model-manager.desktop" \
+        0644
+
+    record_staged_component \
+        "Graphical model manager desktop launcher staged successfully."
 
     if [[ -f "$DAIA_RUNTIME_SOURCE/firstboot.sh" ]]
     then

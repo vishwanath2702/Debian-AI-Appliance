@@ -27,6 +27,35 @@ fn main() -> ExitCode {
         return run_restricted_model_list(device);
     }
 
+    if is_model_recovery_status_request(&arguments) {
+        let Some(model_name) = arguments[1].to_str() else {
+            eprintln!("Invalid model name encoding");
+            return ExitCode::FAILURE;
+        };
+
+        if let Err(message) = validate_model_name(model_name) {
+            eprintln!("{message}");
+            return ExitCode::FAILURE;
+        }
+
+        let Some(filename) = arguments[2].to_str() else {
+            eprintln!("Invalid GGUF filename encoding");
+            return ExitCode::FAILURE;
+        };
+
+        if let Err(message) = validate_gguf_filename(filename) {
+            eprintln!("{message}");
+            return ExitCode::FAILURE;
+        }
+
+        if !is_root() {
+            eprintln!("DAIA model recovery status requires administrator authorization");
+            return ExitCode::FAILURE;
+        }
+
+        return run_restricted_model_recovery_status(model_name, filename);
+    }
+
     if is_model_resume_request(&arguments) {
         let Some(model_name) = arguments[1].to_str() else {
             eprintln!("Invalid model name encoding");
@@ -89,8 +118,61 @@ fn main() -> ExitCode {
     run_restricted_model_import(device, filename, model_name)
 }
 
+fn is_model_recovery_status_request(arguments: &[std::ffi::OsString]) -> bool {
+    arguments.len() == 3 && arguments[0] == "recovery-status"
+}
+
+fn run_restricted_model_recovery_status(model_name: &str, filename: &str) -> ExitCode {
+    match model_recovery_record_status(model_name, filename, std::path::Path::new("/")) {
+        Ok(status) => {
+            println!("{}", status.as_str());
+            ExitCode::SUCCESS
+        }
+        Err(error) => {
+            eprintln!("Cannot inspect model recovery status: {error}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
 fn is_model_resume_request(arguments: &[std::ffi::OsString]) -> bool {
     arguments.len() == 2 && arguments[0] == "resume-model"
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ModelRecoveryRecordStatus {
+    Recorded,
+    NotRecorded,
+}
+
+impl ModelRecoveryRecordStatus {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Recorded => "RECORDED",
+            Self::NotRecorded => "NOT_RECORDED",
+        }
+    }
+}
+
+fn model_recovery_record_status(
+    model_name: &str,
+    filename: &str,
+    root: &std::path::Path,
+) -> Result<ModelRecoveryRecordStatus, std::io::Error> {
+    let appliance_state = state::ApplianceState::read_from_root(root)?;
+
+    if appliance_state
+        .model_realizations()
+        .iter()
+        .any(|realization| {
+            realization.id().as_str() == model_name
+                && realization.content().path().file_name() == Some(std::ffi::OsStr::new(filename))
+        })
+    {
+        Ok(ModelRecoveryRecordStatus::Recorded)
+    } else {
+        Ok(ModelRecoveryRecordStatus::NotRecorded)
+    }
 }
 
 fn run_restricted_model_resume(model_name: &str) -> ExitCode {
@@ -515,6 +597,107 @@ mod tests {
             "model.gguf",
             "model-name",
         ])));
+    }
+
+    #[test]
+    fn recovery_record_status_reports_recorded_model() {
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let root = temporary.path().join("appliance");
+
+        let mut appliance_state = state::ApplianceState::new("desktop");
+        appliance_state.record_model_realization(model::ModelRealization::new(
+            model::ModelRealizationId::new("recorded-model"),
+            model::InferenceEngineId::ollama(),
+            model::ImportedContentItem::new(
+                model::ExternalContentItemId::new("source"),
+                "/var/lib/daia/content/model.gguf",
+            ),
+        ));
+        appliance_state.write_to_root(&root).expect("persist state");
+
+        let result = super::model_recovery_record_status("recorded-model", "model.gguf", &root)
+            .expect("read recovery status");
+
+        assert_eq!(result.as_str(), "RECORDED");
+    }
+
+    #[test]
+    fn recovery_record_status_rejects_different_gguf_filename() {
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let root = temporary.path().join("appliance");
+
+        let mut appliance_state = state::ApplianceState::new("desktop");
+        appliance_state.record_model_realization(model::ModelRealization::new(
+            model::ModelRealizationId::new("recorded-model"),
+            model::InferenceEngineId::ollama(),
+            model::ImportedContentItem::new(
+                model::ExternalContentItemId::new("source"),
+                "/var/lib/daia/content/model.gguf",
+            ),
+        ));
+        appliance_state.write_to_root(&root).expect("persist state");
+
+        let result = super::model_recovery_record_status("recorded-model", "different.gguf", &root)
+            .expect("read recovery status");
+
+        assert_eq!(result.as_str(), "NOT_RECORDED");
+    }
+
+    #[test]
+    fn recovery_record_status_reports_missing_model() {
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let root = temporary.path().join("appliance");
+
+        state::ApplianceState::new("desktop")
+            .write_to_root(&root)
+            .expect("persist state");
+
+        let result = super::model_recovery_record_status("absent-model", "model.gguf", &root)
+            .expect("read recovery status");
+
+        assert_eq!(result.as_str(), "NOT_RECORDED");
+    }
+
+    #[test]
+    fn recovery_record_status_does_not_hide_state_read_failure() {
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let root = temporary.path().join("appliance");
+
+        let result = super::model_recovery_record_status("any-model", "model.gguf", &root);
+
+        assert!(
+            result.is_err(),
+            "missing state must not be treated as absent model"
+        );
+    }
+
+    #[test]
+    fn recognizes_only_explicit_recovery_status_requests() {
+        use std::ffi::OsString;
+
+        let args =
+            |values: &[&str]| -> Vec<OsString> { values.iter().map(OsString::from).collect() };
+
+        assert!(super::is_model_recovery_status_request(&args(&[
+            "recovery-status",
+            "recorded-model",
+            "model.gguf",
+        ])));
+
+        for values in [
+            vec![],
+            vec!["recovery-status"],
+            vec!["recovery-status", "model"],
+            vec!["recovery-status", "model", "model.gguf", "extra"],
+            vec!["resume-model", "model"],
+            vec!["list-models", "/dev/sdb1"],
+            vec!["/dev/sdb1", "model.gguf", "model"],
+        ] {
+            assert!(
+                !super::is_model_recovery_status_request(&args(&values)),
+                "{values:?}"
+            );
+        }
     }
 
     #[test]

@@ -523,7 +523,6 @@ fn install_exporter_binaries(build_context: &BuildContext) -> Result<(), BuildEr
                 }
                 Err(error) => return Err(BuildError::Workspace(error)),
             }
-
         }
     }
     Ok(())

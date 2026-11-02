@@ -76,6 +76,7 @@ dependencies = [
  "registry",
  "rpassword",
  "rustix 1.1.4",
+ "serde",
  "serde_json",
  "state",
  "tempfile",

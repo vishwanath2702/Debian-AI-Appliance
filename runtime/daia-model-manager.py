@@ -9,6 +9,7 @@ import sys
 from PyQt6.QtCore import QProcess
 from PyQt6.QtWidgets import (
     QApplication,
+    QFileDialog,
     QLabel,
     QListWidget,
     QLineEdit,
@@ -157,10 +158,20 @@ class ImportTab(QWidget):
         self.import_copied_bytes = 0
         self.failed_import_name = None
         self.active_import_name = None
+        self.active_import_filename = None
 
         self.recovery_process = QProcess(self)
         self.recovery_process.finished.connect(self._recovery_finished)
         self.recovery_process.errorOccurred.connect(self._recovery_error)
+
+        self.recovery_status_process = QProcess(self)
+        self.recovery_status_process.finished.connect(
+            self._recovery_status_finished
+        )
+        self.recovery_status_process.errorOccurred.connect(
+            self._recovery_status_error
+        )
+        self.pending_recovery_name = None
 
         self.status = QLabel("Select Scan to discover model source volumes.")
 
@@ -188,7 +199,7 @@ class ImportTab(QWidget):
         self.model_name = QLineEdit()
         self.model_name.setPlaceholderText("Ollama model name")
         self.model_name.setEnabled(False)
-        self.model_name.textChanged.connect(self._update_import_button)
+        self.model_name.textChanged.connect(self._model_name_changed)
 
         self.import_button = QPushButton("Review GGUF import")
         self.import_button.setEnabled(False)
@@ -225,10 +236,70 @@ class ImportTab(QWidget):
 
     def _clear_recovery_offer(self):
         self.failed_import_name = None
+        self.pending_recovery_name = None
         self.recovery_button.setEnabled(False)
         self.recovery_button.hide()
 
+    def _recovery_status_finished(self, exit_code, exit_status):
+        name = self.pending_recovery_name
+        self.pending_recovery_name = None
+
+        stdout = bytes(
+            self.recovery_status_process.readAllStandardOutput()
+        ).decode("utf-8", errors="replace").strip()
+        self.recovery_status_process.readAllStandardError()
+
+        if (
+            name is not None
+            and exit_status == QProcess.ExitStatus.NormalExit
+            and exit_code == 0
+            and stdout == "RECORDED"
+            and self.active_import_name == name
+            and self.volumes.currentItem() is not None
+            and self.models.currentItem() is not None
+            and self.models.currentItem().text() == self.active_import_filename
+            and self.model_name.text() == name
+        ):
+            self.failed_import_name = name
+            self.recovery_button.setEnabled(True)
+            self.recovery_button.show()
+
+        self._update_import_button()
+
+    def _recovery_status_error(self, error):
+        if error == QProcess.ProcessError.FailedToStart:
+            self.pending_recovery_name = None
+            self._clear_recovery_offer()
+            self._update_import_button()
+
+    def _start_recovery_status_check(self, name):
+        self._clear_recovery_offer()
+
+        if (
+            not name
+            or self.recovery_status_process.state()
+            != QProcess.ProcessState.NotRunning
+        ):
+            return
+
+        self.pending_recovery_name = name
+        self.import_button.setEnabled(False)
+        self.recovery_status_process.start(
+            "pkexec",
+            [
+                "/usr/bin/daia-model-import",
+                "recovery-status",
+                name,
+                self.active_import_filename,
+            ],
+        )
+
+    def _model_name_changed(self, *args):
+        self._clear_recovery_offer()
+        self._update_import_button()
+
     def _model_selection_changed(self, current, previous):
+        self._clear_recovery_offer()
         self.model_name.setEnabled(
             current is not None
             and self.process.state() == QProcess.ProcessState.NotRunning
@@ -252,6 +323,8 @@ class ImportTab(QWidget):
             and self.model_process.state() == QProcess.ProcessState.NotRunning
             and self.import_process.state() == QProcess.ProcessState.NotRunning
             and self.recovery_process.state() == QProcess.ProcessState.NotRunning
+            and self.recovery_status_process.state()
+            == QProcess.ProcessState.NotRunning
         )
 
     def review_import(self):
@@ -286,11 +359,14 @@ class ImportTab(QWidget):
             or self.model_process.state() != QProcess.ProcessState.NotRunning
             or self.import_process.state() != QProcess.ProcessState.NotRunning
             or self.recovery_process.state() != QProcess.ProcessState.NotRunning
+            or self.recovery_status_process.state()
+            != QProcess.ProcessState.NotRunning
         ):
             return
 
         self._clear_recovery_offer()
         self.active_import_name = name
+        self.active_import_filename = filename
         self.output.clear()
         self.output.hide()
         self.import_output_buffer = ""
@@ -393,24 +469,29 @@ class ImportTab(QWidget):
             self.status.setText("GGUF model imported successfully.")
         else:
             self.status.setText("GGUF model import failed.")
-            if (
-                exit_status == QProcess.ExitStatus.NormalExit
-                and exit_code not in (126, 127)
-                and self.active_import_name is not None
-            ):
-                self.failed_import_name = self.active_import_name
-                self.recovery_button.setEnabled(True)
-                self.recovery_button.show()
+            # A failed import does not prove that a persisted model
+            # realization exists. Recovery must be offered only after
+            # an explicit backend eligibility check.
+            self._clear_recovery_offer()
             self.output.setPlainText(
                 stderr or stdout or
                 "Authorization was cancelled or the import failed."
             )
             self.output.show()
+            if (
+                exit_status == QProcess.ExitStatus.NormalExit
+                and exit_code not in (126, 127)
+                and self.active_import_name is not None
+            ):
+                self._start_recovery_status_check(
+                    self.active_import_name
+                )
 
     def _import_error(self, error):
         if error == QProcess.ProcessError.FailedToStart:
             self.progress.hide()
             self.active_import_name = None
+            self.active_import_filename = None
             self._clear_recovery_offer()
             self.status.setText("Unable to start import authorization.")
             self.output.setPlainText(self.import_process.errorString())
@@ -456,10 +537,17 @@ class ImportTab(QWidget):
     def start_recovery(self, name):
         if (
             name != self.failed_import_name
+            or name != self.active_import_name
+            or self.model_name.text() != name
+            or self.volumes.currentItem() is None
+            or self.models.currentItem() is None
+            or self.models.currentItem().text() != self.active_import_filename
             or self.process.state() != QProcess.ProcessState.NotRunning
             or self.model_process.state() != QProcess.ProcessState.NotRunning
             or self.import_process.state() != QProcess.ProcessState.NotRunning
             or self.recovery_process.state() != QProcess.ProcessState.NotRunning
+            or self.recovery_status_process.state()
+            != QProcess.ProcessState.NotRunning
         ):
             return
 
@@ -517,10 +605,14 @@ class ImportTab(QWidget):
                 "Authorization was cancelled or recovery failed."
             )
             self.output.show()
-            self.recovery_button.setEnabled(
-                exit_status == QProcess.ExitStatus.NormalExit
-                and exit_code not in (126, 127)
+            authorization_cancelled = (
+                exit_status != QProcess.ExitStatus.NormalExit
+                or exit_code in (126, 127)
             )
+            if authorization_cancelled:
+                self._clear_recovery_offer()
+            else:
+                self.recovery_button.setEnabled(True)
 
     def _recovery_error(self, error):
         if error == QProcess.ProcessError.FailedToStart:
@@ -536,7 +628,7 @@ class ImportTab(QWidget):
             self.model_name.setEnabled(
                 self.models.currentItem() is not None
             )
-            self.recovery_button.setEnabled(False)
+            self._clear_recovery_offer()
             self._update_import_button()
 
     def _volume_selection_changed(self, current, previous):
@@ -559,6 +651,8 @@ class ImportTab(QWidget):
             or self.model_process.state() != QProcess.ProcessState.NotRunning
             or self.import_process.state() != QProcess.ProcessState.NotRunning
             or self.recovery_process.state() != QProcess.ProcessState.NotRunning
+            or self.recovery_status_process.state()
+            != QProcess.ProcessState.NotRunning
         ):
             return
 
@@ -661,6 +755,9 @@ class ImportTab(QWidget):
             return
 
         if self.recovery_process.state() != QProcess.ProcessState.NotRunning:
+            return
+
+        if self.recovery_status_process.state() != QProcess.ProcessState.NotRunning:
             return
 
         self._clear_recovery_offer()
@@ -818,6 +915,100 @@ class BenchmarkTab(QWidget):
         super().closeEvent(event)
 
 
+class ExportTab(QWidget):
+    """Read-only model selection until secure export execution is available."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+
+        self.process = QProcess(self)
+        self.process.finished.connect(self._finished)
+        self.process.errorOccurred.connect(self._process_error)
+
+        self.status = QLabel("Select Refresh to discover installed Ollama models.")
+        self.models = QListWidget()
+        self.destination = QLineEdit()
+        self.destination.setReadOnly(True)
+        self.destination.setPlaceholderText("Select an export destination folder")
+
+        self.refresh_button = QPushButton("Refresh Models")
+        self.refresh_button.clicked.connect(self.refresh)
+
+        self.destination_button = QPushButton("Choose Destination")
+        self.destination_button.clicked.connect(self.choose_destination)
+
+        self.export_button = QPushButton("Export Model")
+        self.export_button.setEnabled(False)
+        self.export_button.setToolTip(
+            "Export execution is disabled until authorization and isolation are verified."
+        )
+
+        layout = QVBoxLayout(self)
+        layout.addWidget(self.status)
+        layout.addWidget(self.models)
+        layout.addWidget(self.refresh_button)
+        layout.addWidget(self.destination)
+        layout.addWidget(self.destination_button)
+        layout.addWidget(self.export_button)
+
+    def refresh(self):
+        if self.process.state() != QProcess.ProcessState.NotRunning:
+            return
+
+        self.models.clear()
+        self.status.setText("Loading installed Ollama models...")
+        self.refresh_button.setEnabled(False)
+        command = os.environ.get("DAIA_COMMAND", "/usr/bin/daia")
+        self.process.start(command, ["model", "installed", "--json"])
+
+    def _finished(self, exit_code, exit_status):
+        stdout = bytes(self.process.readAllStandardOutput()).decode(
+            "utf-8", errors="replace"
+        )
+        self.refresh_button.setEnabled(True)
+
+        if exit_status != QProcess.ExitStatus.NormalExit or exit_code != 0:
+            self.status.setText("Unable to load installed models.")
+            return
+
+        try:
+            inventory = json.loads(stdout)
+            if not isinstance(inventory, list):
+                raise ValueError("Invalid inventory")
+            names = []
+            for entry in inventory:
+                if not isinstance(entry, dict):
+                    raise ValueError("Invalid model entry")
+                name = entry.get("name")
+                if not isinstance(name, str) or not name:
+                    raise ValueError("Invalid model name")
+                names.append(name)
+        except (ValueError, TypeError):
+            self.status.setText("Invalid installed-model inventory.")
+            return
+
+        self.models.addItems(names)
+        self.status.setText(f"Installed Ollama models: {len(names)}")
+
+    def _process_error(self, error):
+        if error == QProcess.ProcessError.FailedToStart:
+            self.refresh_button.setEnabled(True)
+            self.status.setText("Unable to start DAIA CLI.")
+
+    def choose_destination(self):
+        directory = QFileDialog.getExistingDirectory(
+            self, "Choose Model Export Destination"
+        )
+        if directory:
+            self.destination.setText(directory)
+
+    def closeEvent(self, event):
+        if self.process.state() != QProcess.ProcessState.NotRunning:
+            self.process.kill()
+            self.process.waitForFinished(2000)
+        super().closeEvent(event)
+
+
 class ModelManager(QMainWindow):
     def __init__(self):
         super().__init__()
@@ -831,10 +1022,7 @@ class ModelManager(QMainWindow):
 
         tabs.addTab(BenchmarkTab(), "Benchmark")
 
-        placeholder = QWidget()
-        layout = QVBoxLayout(placeholder)
-        layout.addWidget(QLabel("Export integration is coming soon."))
-        tabs.addTab(placeholder, "Export")
+        tabs.addTab(ExportTab(), "Export")
 
         self.setCentralWidget(tabs)
 
