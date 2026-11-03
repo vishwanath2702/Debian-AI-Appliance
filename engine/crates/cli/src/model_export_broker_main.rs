@@ -844,4 +844,23 @@ mod tests {
     fn broker_denies_without_an_authorization_provider() {
         assert!(authorize_export(&AuthorizationDecision::Denied, &operation("export")).is_err());
     }
+
+    #[test]
+    fn privileged_pkexec_identity_cannot_supply_an_operation_grant() {
+        let requested = operation("export");
+
+        // Privileged execution and invoking-user attribution are prerequisites,
+        // not independent evidence of authorization for this operation.
+        assert!(validate_broker_effective_uid(0).is_ok());
+        assert_eq!(validate_pkexec_invoking_uid(Some("1000")), Ok(1000));
+
+        assert!(
+            authorize_export(&AuthorizationDecision::Denied, &requested).is_err(),
+            "privileged identity must not authorize an export"
+        );
+        assert!(
+            validate_export_resources(&ExportResourceDecision::Unverified, &requested).is_err(),
+            "privileged identity must not verify export resources"
+        );
+    }
 }
