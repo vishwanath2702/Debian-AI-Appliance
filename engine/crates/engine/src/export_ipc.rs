@@ -1168,6 +1168,86 @@ mod export_directory_context_tests {
     }
 
     #[test]
+    fn rejects_substituted_complete_request_with_matching_directories() {
+        use model::{
+            ModelExportArtifact, ModelExportDestinationSelection, ModelExportOperation,
+            ModelExportOperationId, ModelExportResourceSelection, ModelExportSource,
+            ModelExportSourceSelection, canonical_export_request_bytes,
+        };
+
+        let source = tempfile::tempdir().unwrap();
+        let destination = tempfile::tempdir().unwrap();
+
+        let operation = |name: &str| {
+            ModelExportOperation::new(
+                ModelExportOperationId::new("operation-1").unwrap(),
+                ModelExportSource::Gguf,
+                name,
+                vec![ModelExportArtifact::new("model.gguf", "a".repeat(64), 12).unwrap()],
+            )
+            .unwrap()
+        };
+
+        let selection = |file: &str, destination: &str| {
+            ModelExportResourceSelection::new(
+                ModelExportSourceSelection::gguf("/media/models", file).unwrap(),
+                ModelExportDestinationSelection::new(destination).unwrap(),
+            )
+        };
+
+        let original_operation = operation("export");
+        let original_selection = selection("original.gguf", "/media/export");
+
+        let original_request =
+            canonical_export_request_bytes(&original_operation, &original_selection);
+
+        let substituted_requests = [
+            canonical_export_request_bytes(&operation("other-export"), &original_selection),
+            canonical_export_request_bytes(
+                &original_operation,
+                &selection("substituted.gguf", "/media/export"),
+            ),
+            canonical_export_request_bytes(
+                &original_operation,
+                &selection("original.gguf", "/media/other"),
+            ),
+        ];
+
+        let context = ExportDirectoryContext::new(
+            &original_request,
+            std::fs::File::open(source.path()).unwrap().into(),
+            std::fs::File::open(destination.path()).unwrap().into(),
+        )
+        .unwrap();
+
+        let received_source = std::fs::File::open(source.path()).unwrap();
+        let received_destination = std::fs::File::open(destination.path()).unwrap();
+
+        context
+            .verify_received(
+                &original_request,
+                received_source.as_fd(),
+                received_destination.as_fd(),
+            )
+            .unwrap();
+
+        for substituted in substituted_requests {
+            assert_ne!(original_request, substituted);
+            assert_eq!(
+                context
+                    .verify_received(
+                        &substituted,
+                        received_source.as_fd(),
+                        received_destination.as_fd(),
+                    )
+                    .unwrap_err()
+                    .kind(),
+                ErrorKind::PermissionDenied,
+            );
+        }
+    }
+
+    #[test]
     fn rejects_empty_or_oversized_operation_identity() {
         let source = tempfile::tempdir().unwrap();
         let destination = tempfile::tempdir().unwrap();
