@@ -95,7 +95,7 @@ fn validate_export_ipc_message(message: &[u8], descriptor_count: usize) -> std::
 /// The empty ancillary buffer deliberately rejects descriptor-bearing
 /// messages through MSG_CTRUNC. No exporter operation is performed.
 #[cfg(target_os = "linux")]
-fn receive_export_ipc_probe(socket: &std::os::fd::OwnedFd) -> std::io::Result<()> {
+pub fn receive_export_ipc_probe(socket: &std::os::fd::OwnedFd) -> std::io::Result<()> {
     use rustix::net::{RecvAncillaryBuffer, RecvFlags, ReturnFlags};
     use std::io::{Error, ErrorKind, IoSliceMut};
 

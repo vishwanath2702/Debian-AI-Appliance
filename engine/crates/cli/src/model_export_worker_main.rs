@@ -12,6 +12,7 @@ use std::os::fd::AsFd;
 #[cfg(target_os = "linux")]
 fn handle_export_connection(connection: &std::os::fd::OwnedFd) -> std::io::Result<()> {
     engine::export_ipc::verify_export_root_peer(connection)?;
+    engine::export_ipc::receive_export_ipc_probe(connection)?;
 
     Err(std::io::Error::new(
         std::io::ErrorKind::PermissionDenied,
