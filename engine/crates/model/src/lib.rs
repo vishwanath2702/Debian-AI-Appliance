@@ -21,6 +21,9 @@ pub use model_export_selection::{
     ModelExportSourceSelection,
 };
 
+mod model_export_request;
+pub use model_export_request::canonical_export_request_bytes;
+
 use std::{
     fmt,
     path::{Path, PathBuf},

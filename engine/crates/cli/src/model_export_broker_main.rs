@@ -4,7 +4,7 @@
 //! authorization. An independently verified authorization mechanism must
 //! be implemented before export operations are enabled.
 
-use model::ModelExportOperation;
+use model::{ModelExportOperation, canonical_export_request_bytes};
 
 use model::{
     ModelExportArtifact, ModelExportDestinationSelection, ModelExportOperationId,
@@ -292,28 +292,6 @@ fn validate_pkexec_invoking_uid(value: Option<&str>) -> Result<u32, &'static str
     }
 
     Ok(uid)
-}
-
-/// Canonical binding of an export operation and its selected resources.
-///
-/// This encodes request intent only. It does not establish Polkit
-/// authorization, resource identity, or safe filesystem access.
-fn canonical_export_request_bytes(
-    operation: &ModelExportOperation,
-    selection: &ModelExportResourceSelection,
-) -> Vec<u8> {
-    let operation_bytes = operation.canonical_bytes();
-    let selection_bytes = selection.canonical_bytes();
-
-    let mut bytes = b"DAIA-MODEL-EXPORT-REQUEST\0".to_vec();
-    bytes.extend_from_slice(&1_u32.to_be_bytes());
-
-    for field in [&operation_bytes, &selection_bytes] {
-        bytes.extend_from_slice(&(field.len() as u64).to_be_bytes());
-        bytes.extend_from_slice(field);
-    }
-
-    bytes
 }
 
 /// An operation-specific authorization grant.
