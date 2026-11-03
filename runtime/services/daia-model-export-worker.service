@@ -16,6 +16,7 @@ NoNewPrivileges=yes
 ProtectProc=invisible
 ProcSubset=pid
 RestrictAddressFamilies=AF_UNIX
+PrivateNetwork=yes
 PrivateTmp=yes
 PrivateDevices=yes
 ProtectSystem=strict

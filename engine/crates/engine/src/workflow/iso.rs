@@ -483,6 +483,15 @@ fn write_file(path: &std::path::Path, contents: &str) -> Result<(), BuildError> 
 fn install_exporter_binaries(build_context: &BuildContext) -> Result<(), BuildError> {
     // Stage the exporter executables without activating either component.
     // Authorization and worker isolation must be established separately.
+    let broker = build_context.daia_model_export_broker_binary();
+    let worker = build_context.daia_model_export_worker_binary();
+
+    if broker.is_some() != worker.is_some() {
+        return Err(BuildError::Workspace(std::io::Error::other(
+            "Model Exporter broker and worker must be staged together",
+        )));
+    }
+
     for (binary, name) in [
         (
             build_context.daia_model_export_broker_binary(),
@@ -1110,6 +1119,67 @@ mod tests {
             verify_exporter_secure_executable(&non_executable).is_err(),
             "non-root-owned executable must be rejected"
         );
+    }
+
+    #[test]
+    fn exporter_staging_rejects_partial_binary_configuration() {
+        let temp = tempfile::tempdir().expect("temporary directory");
+        let rootfs = temp.path().join("rootfs");
+        let broker = temp.path().join("broker");
+        let worker = temp.path().join("worker");
+
+        fs::write(&broker, b"broker").expect("write broker fixture");
+        fs::write(&worker, b"worker").expect("write worker fixture");
+
+        for (include_broker, include_worker) in [(true, false), (false, true)] {
+            let mut context = BuildContext::new(
+                &rootfs,
+                temp.path().join("source.iso"),
+                temp.path().join("work"),
+                temp.path().join("output.iso"),
+                temp.path().join("assets"),
+                BootstrapConfig::default(),
+            );
+
+            if include_broker {
+                context = context.with_daia_model_export_broker_binary(&broker);
+            }
+
+            if include_worker {
+                context = context.with_daia_model_export_worker_binary(&worker);
+            }
+
+            let result = super::install_exporter_binaries(&context);
+            assert!(
+                result.is_err(),
+                "partial exporter configuration must be rejected"
+            );
+            assert!(
+                !rootfs.join("usr/libexec/daia-model-export-broker").exists(),
+                "broker must not be staged after rejection"
+            );
+            assert!(
+                !rootfs.join("usr/libexec/daia-model-export-worker").exists(),
+                "worker must not be staged after rejection"
+            );
+        }
+    }
+
+    #[test]
+    fn exporter_staging_allows_both_binaries_absent() {
+        let temp = tempfile::tempdir().expect("temporary directory");
+
+        let context = BuildContext::new(
+            temp.path().join("rootfs"),
+            temp.path().join("source.iso"),
+            temp.path().join("work"),
+            temp.path().join("output.iso"),
+            temp.path().join("assets"),
+            BootstrapConfig::default(),
+        );
+
+        super::install_exporter_binaries(&context)
+            .expect("existing optional staging contract must remain valid");
     }
 
     #[test]

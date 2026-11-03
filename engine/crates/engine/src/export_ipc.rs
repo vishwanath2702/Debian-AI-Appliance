@@ -810,6 +810,119 @@ mod directory_handoff_validation_tests {
     }
 }
 
+/// Retains two independently selected directory handles for identity checks.
+///
+/// Construction validates descriptor types but does not establish authorization,
+/// source integrity, destination safety, or hostile same-UID isolation.
+/// Callers must acquire both handles through a separately trusted boundary.
+#[cfg(target_os = "linux")]
+#[derive(Debug)]
+pub struct ExportDirectoryContext {
+    operation_bytes: Vec<u8>,
+    source: std::os::fd::OwnedFd,
+    destination: std::os::fd::OwnedFd,
+}
+
+#[cfg(target_os = "linux")]
+impl ExportDirectoryContext {
+    /// Take ownership of independently acquired source and destination handles.
+    ///
+    /// The handles must already have been selected by a trusted caller.
+    pub fn new(
+        operation_bytes: &[u8],
+        source: std::os::fd::OwnedFd,
+        destination: std::os::fd::OwnedFd,
+    ) -> std::io::Result<Self> {
+        use std::io::{Error, ErrorKind};
+        use std::os::fd::AsFd;
+
+        if operation_bytes.is_empty() || operation_bytes.len() > 1024 * 1024 {
+            return Err(Error::new(
+                ErrorKind::InvalidInput,
+                "invalid export operation identity length",
+            ));
+        }
+
+        verify_export_directory_identity(
+            source.as_fd(),
+            destination.as_fd(),
+            source.as_fd(),
+            destination.as_fd(),
+        )?;
+
+        Ok(Self {
+            operation_bytes: operation_bytes.to_vec(),
+            source,
+            destination,
+        })
+    }
+
+    /// Compare transferred handles against the retained operation and directories.
+    pub fn verify_received(
+        &self,
+        received_operation: &[u8],
+        received_source: std::os::fd::BorrowedFd<'_>,
+        received_destination: std::os::fd::BorrowedFd<'_>,
+    ) -> std::io::Result<()> {
+        use std::io::{Error, ErrorKind};
+        use std::os::fd::AsFd;
+
+        if received_operation != self.operation_bytes {
+            return Err(Error::new(
+                ErrorKind::PermissionDenied,
+                "export operation identity mismatch",
+            ));
+        }
+
+        verify_export_directory_identity(
+            received_source,
+            received_destination,
+            self.source.as_fd(),
+            self.destination.as_fd(),
+        )
+    }
+}
+
+/// Compare transferred directories against independently trusted open handles.
+///
+/// Device and inode identity prevents substitution of a different directory
+/// during descriptor handoff. The trusted handles must originate from a
+/// separately authorized boundary, never from the untrusted IPC payload.
+///
+/// This does not authorize the operation, freeze directory contents, or
+/// provide hostile same-UID process isolation.
+#[cfg(target_os = "linux")]
+pub fn verify_export_directory_identity(
+    received_source: std::os::fd::BorrowedFd<'_>,
+    received_destination: std::os::fd::BorrowedFd<'_>,
+    trusted_source: std::os::fd::BorrowedFd<'_>,
+    trusted_destination: std::os::fd::BorrowedFd<'_>,
+) -> std::io::Result<()> {
+    use rustix::fs::{FileType, fstat};
+    use std::io::{Error, ErrorKind};
+
+    for (received, trusted) in [
+        (received_source, trusted_source),
+        (received_destination, trusted_destination),
+    ] {
+        let actual = fstat(received)?;
+        let expected = fstat(trusted)?;
+
+        if FileType::from_raw_mode(actual.st_mode) != FileType::Directory
+            || FileType::from_raw_mode(expected.st_mode) != FileType::Directory
+            || actual.st_dev != expected.st_dev
+            || actual.st_ino != expected.st_ino
+        {
+            return Err(Error::new(
+                ErrorKind::PermissionDenied,
+                "export directory identity mismatch",
+            ));
+        }
+    }
+
+    Ok(())
+}
+
 /// Receive exactly two directory descriptors, ordered source then destination.
 ///
 /// The caller must independently authenticate the sender and authorize the
@@ -872,6 +985,229 @@ pub fn receive_export_directory_handoff(
     let destination = descriptors.pop().expect("validated destination descriptor");
     let source = descriptors.pop().expect("validated source descriptor");
     Ok((source, destination))
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod export_directory_context_tests {
+    use super::*;
+    use std::io::ErrorKind;
+    use std::os::fd::AsFd;
+
+    #[test]
+    fn retains_and_verifies_independent_directory_handles() {
+        let source = tempfile::tempdir().unwrap();
+        let destination = tempfile::tempdir().unwrap();
+
+        let context = ExportDirectoryContext::new(
+            b"operation-a",
+            std::fs::File::open(source.path()).unwrap().into(),
+            std::fs::File::open(destination.path()).unwrap().into(),
+        )
+        .unwrap();
+
+        let received_source = std::fs::File::open(source.path()).unwrap();
+        let received_destination = std::fs::File::open(destination.path()).unwrap();
+
+        context
+            .verify_received(
+                b"operation-a",
+                received_source.as_fd(),
+                received_destination.as_fd(),
+            )
+            .unwrap();
+    }
+
+    #[test]
+    fn rejects_substituted_and_swapped_directories() {
+        let source = tempfile::tempdir().unwrap();
+        let destination = tempfile::tempdir().unwrap();
+        let substitute = tempfile::tempdir().unwrap();
+
+        let context = ExportDirectoryContext::new(
+            b"operation-a",
+            std::fs::File::open(source.path()).unwrap().into(),
+            std::fs::File::open(destination.path()).unwrap().into(),
+        )
+        .unwrap();
+
+        let received_source = std::fs::File::open(source.path()).unwrap();
+        let received_destination = std::fs::File::open(destination.path()).unwrap();
+        let received_substitute = std::fs::File::open(substitute.path()).unwrap();
+
+        for (candidate_source, candidate_destination) in [
+            (received_substitute.as_fd(), received_destination.as_fd()),
+            (received_source.as_fd(), received_substitute.as_fd()),
+            (received_destination.as_fd(), received_source.as_fd()),
+        ] {
+            assert_eq!(
+                context
+                    .verify_received(b"operation-a", candidate_source, candidate_destination)
+                    .unwrap_err()
+                    .kind(),
+                ErrorKind::PermissionDenied,
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_regular_files_during_construction() {
+        let source = tempfile::tempdir().unwrap();
+        let destination = tempfile::tempdir().unwrap();
+
+        let regular_source = tempfile::tempfile().unwrap();
+        let regular_destination = tempfile::tempfile().unwrap();
+
+        assert!(
+            ExportDirectoryContext::new(
+                b"operation-a",
+                regular_source.into(),
+                std::fs::File::open(destination.path()).unwrap().into(),
+            )
+            .is_err()
+        );
+
+        assert!(
+            ExportDirectoryContext::new(
+                b"operation-a",
+                std::fs::File::open(source.path()).unwrap().into(),
+                regular_destination.into(),
+            )
+            .is_err()
+        );
+    }
+    #[test]
+    fn rejects_different_operation_with_matching_directories() {
+        let source = tempfile::tempdir().unwrap();
+        let destination = tempfile::tempdir().unwrap();
+
+        let context = ExportDirectoryContext::new(
+            b"operation-a",
+            std::fs::File::open(source.path()).unwrap().into(),
+            std::fs::File::open(destination.path()).unwrap().into(),
+        )
+        .unwrap();
+
+        let received_source = std::fs::File::open(source.path()).unwrap();
+        let received_destination = std::fs::File::open(destination.path()).unwrap();
+
+        assert_eq!(
+            context
+                .verify_received(
+                    b"operation-b",
+                    received_source.as_fd(),
+                    received_destination.as_fd(),
+                )
+                .unwrap_err()
+                .kind(),
+            ErrorKind::PermissionDenied,
+        );
+
+        context
+            .verify_received(
+                b"operation-a",
+                received_source.as_fd(),
+                received_destination.as_fd(),
+            )
+            .unwrap();
+    }
+
+    #[test]
+    fn rejects_empty_or_oversized_operation_identity() {
+        let source = tempfile::tempdir().unwrap();
+        let destination = tempfile::tempdir().unwrap();
+
+        for operation in [Vec::new(), vec![b'x'; 1024 * 1024 + 1]] {
+            assert_eq!(
+                ExportDirectoryContext::new(
+                    &operation,
+                    std::fs::File::open(source.path()).unwrap().into(),
+                    std::fs::File::open(destination.path()).unwrap().into(),
+                )
+                .unwrap_err()
+                .kind(),
+                ErrorKind::InvalidInput,
+            );
+        }
+    }
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod trusted_directory_identity_tests {
+    use super::*;
+    use std::io::ErrorKind;
+    use std::os::fd::AsFd;
+
+    #[test]
+    fn accepts_matching_trusted_directory_handles() {
+        let source = tempfile::tempdir().unwrap();
+        let destination = tempfile::tempdir().unwrap();
+        let source_fd = std::fs::File::open(source.path()).unwrap();
+        let destination_fd = std::fs::File::open(destination.path()).unwrap();
+
+        verify_export_directory_identity(
+            source_fd.as_fd(),
+            destination_fd.as_fd(),
+            source_fd.as_fd(),
+            destination_fd.as_fd(),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn rejects_source_and_destination_substitution() {
+        let source = tempfile::tempdir().unwrap();
+        let destination = tempfile::tempdir().unwrap();
+        let substitute = tempfile::tempdir().unwrap();
+
+        let source_fd = std::fs::File::open(source.path()).unwrap();
+        let destination_fd = std::fs::File::open(destination.path()).unwrap();
+        let substitute_fd = std::fs::File::open(substitute.path()).unwrap();
+
+        for (received_source, received_destination) in [
+            (substitute_fd.as_fd(), destination_fd.as_fd()),
+            (source_fd.as_fd(), substitute_fd.as_fd()),
+            (destination_fd.as_fd(), source_fd.as_fd()),
+        ] {
+            let error = verify_export_directory_identity(
+                received_source,
+                received_destination,
+                source_fd.as_fd(),
+                destination_fd.as_fd(),
+            )
+            .unwrap_err();
+
+            assert_eq!(error.kind(), ErrorKind::PermissionDenied);
+        }
+    }
+
+    #[test]
+    fn rejects_regular_file_as_trusted_or_received_directory() {
+        let source = tempfile::tempdir().unwrap();
+        let destination = tempfile::tempdir().unwrap();
+        let source_fd = std::fs::File::open(source.path()).unwrap();
+        let destination_fd = std::fs::File::open(destination.path()).unwrap();
+        let regular_file = tempfile::tempfile().unwrap();
+
+        assert!(
+            verify_export_directory_identity(
+                regular_file.as_fd(),
+                destination_fd.as_fd(),
+                source_fd.as_fd(),
+                destination_fd.as_fd(),
+            )
+            .is_err()
+        );
+
+        assert!(
+            verify_export_directory_identity(
+                source_fd.as_fd(),
+                destination_fd.as_fd(),
+                regular_file.as_fd(),
+                destination_fd.as_fd(),
+            )
+            .is_err()
+        );
+    }
 }
 
 #[cfg(all(test, target_os = "linux"))]
@@ -985,6 +1321,76 @@ mod directory_descriptor_transfer_tests {
         assert_eq!(transferred_source.st_dev, original_source.st_dev);
         assert_eq!(transferred_destination.st_ino, original_destination.st_ino);
         assert_eq!(transferred_destination.st_dev, original_destination.st_dev);
+    }
+
+    #[test]
+    fn transferred_directories_match_independently_opened_handles() {
+        let source = tempfile::tempdir().unwrap();
+        let destination = tempfile::tempdir().unwrap();
+
+        let source_fd = std::fs::File::open(source.path()).unwrap();
+        let destination_fd = std::fs::File::open(destination.path()).unwrap();
+
+        // Open separate trusted handles before the IPC transfer.
+        let trusted_source = std::fs::File::open(source.path()).unwrap();
+        let trusted_destination = std::fs::File::open(destination.path()).unwrap();
+
+        let (sender, receiver) = create_export_ipc_pair().unwrap();
+
+        send_directories(
+            &sender,
+            OPERATION,
+            &[source_fd.as_fd(), destination_fd.as_fd()],
+        );
+
+        let (received_source, received_destination) =
+            receive_export_directory_handoff(receiver.as_fd(), OPERATION).unwrap();
+
+        verify_export_directory_identity(
+            received_source.as_fd(),
+            received_destination.as_fd(),
+            trusted_source.as_fd(),
+            trusted_destination.as_fd(),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn transferred_directory_substitution_is_rejected() {
+        let source = tempfile::tempdir().unwrap();
+        let destination = tempfile::tempdir().unwrap();
+        let substitute = tempfile::tempdir().unwrap();
+
+        let source_fd = std::fs::File::open(source.path()).unwrap();
+        let destination_fd = std::fs::File::open(destination.path()).unwrap();
+        let substitute_fd = std::fs::File::open(substitute.path()).unwrap();
+
+        // These handles represent the independently selected directories.
+        let trusted_source = std::fs::File::open(source.path()).unwrap();
+        let trusted_destination = std::fs::File::open(destination.path()).unwrap();
+
+        for descriptors in [
+            [substitute_fd.as_fd(), destination_fd.as_fd()],
+            [source_fd.as_fd(), substitute_fd.as_fd()],
+            [destination_fd.as_fd(), source_fd.as_fd()],
+        ] {
+            let (sender, receiver) = create_export_ipc_pair().unwrap();
+
+            send_directories(&sender, OPERATION, &descriptors);
+
+            let (received_source, received_destination) =
+                receive_export_directory_handoff(receiver.as_fd(), OPERATION).unwrap();
+
+            let error = verify_export_directory_identity(
+                received_source.as_fd(),
+                received_destination.as_fd(),
+                trusted_source.as_fd(),
+                trusted_destination.as_fd(),
+            )
+            .unwrap_err();
+
+            assert_eq!(error.kind(), std::io::ErrorKind::PermissionDenied);
+        }
     }
 
     #[test]

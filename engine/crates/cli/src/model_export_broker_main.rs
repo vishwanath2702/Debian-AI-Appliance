@@ -6,7 +6,10 @@
 
 use model::ModelExportOperation;
 
-use model::{ModelExportArtifact, ModelExportOperationId, ModelExportSource};
+use model::{
+    ModelExportArtifact, ModelExportDestinationSelection, ModelExportOperationId,
+    ModelExportResourceSelection, ModelExportSource, ModelExportSourceSelection,
+};
 use serde::de::{self, Deserialize, Deserializer, MapAccess, SeqAccess, Visitor};
 use serde_json::Value;
 use std::collections::BTreeMap;
@@ -112,8 +115,64 @@ fn string_field<'a>(
         .ok_or("invalid JSON string field")
 }
 
+/// Parsed request metadata only; this is not an authorization grant.
+#[derive(Debug)]
+struct ParsedExportRequest {
+    operation: ModelExportOperation,
+    selection: Option<ModelExportResourceSelection>,
+}
+
+/// Parse untrusted resource intent without accessing the filesystem.
+fn parse_export_selection(
+    value: &Value,
+    operation_source: &ModelExportSource,
+) -> Result<ModelExportResourceSelection, &'static str> {
+    let selection = exact_object(value, &["source", "destination"])?;
+
+    let source_value = selection.get("source").ok_or("missing source selection")?;
+    let source_object = source_value.as_object().ok_or("invalid source selection")?;
+
+    let source = match string_field(source_object, "kind")? {
+        "gguf" => {
+            let fields = exact_object(source_value, &["kind", "directory", "relative_file"])?;
+            if !matches!(operation_source, ModelExportSource::Gguf) {
+                return Err("selection source does not match operation");
+            }
+            ModelExportSourceSelection::gguf(
+                string_field(fields, "directory")?,
+                string_field(fields, "relative_file")?,
+            )
+            .map_err(|_| "invalid GGUF source selection")?
+        }
+        "ollama" => {
+            let fields = exact_object(source_value, &["kind", "directory", "relative_manifest"])?;
+            if !matches!(operation_source, ModelExportSource::Ollama) {
+                return Err("selection source does not match operation");
+            }
+            ModelExportSourceSelection::ollama(
+                string_field(fields, "directory")?,
+                string_field(fields, "relative_manifest")?,
+            )
+            .map_err(|_| "invalid Ollama source selection")?
+        }
+        _ => return Err("invalid selection source kind"),
+    };
+
+    let destination = exact_object(
+        selection
+            .get("destination")
+            .ok_or("missing destination selection")?,
+        &["directory"],
+    )?;
+
+    let destination = ModelExportDestinationSelection::new(string_field(destination, "directory")?)
+        .map_err(|_| "invalid destination selection")?;
+
+    Ok(ModelExportResourceSelection::new(source, destination))
+}
+
 /// Parse metadata only. No authorization or file access occurs here.
-fn parse_export_request(input: &[u8]) -> Result<ModelExportOperation, &'static str> {
+fn parse_export_request(input: &[u8]) -> Result<ParsedExportRequest, &'static str> {
     const MAX_BYTES: usize = 1024 * 1024;
 
     if input.is_empty() || input.len() > MAX_BYTES {
@@ -127,10 +186,17 @@ fn parse_export_request(input: &[u8]) -> Result<ModelExportOperation, &'static s
         .end()
         .map_err(|_| "trailing export JSON data")?;
 
-    let envelope = exact_object(&root.0, &["version", "operation"])?;
-    if envelope.get("version") != Some(&Value::from(1)) {
-        return Err("unsupported export request version");
-    }
+    let version = root
+        .0
+        .as_object()
+        .and_then(|fields| fields.get("version"))
+        .ok_or("missing export request version")?;
+
+    let envelope = match version.as_u64() {
+        Some(1) => exact_object(&root.0, &["version", "operation"])?,
+        Some(2) => exact_object(&root.0, &["version", "operation", "selection"])?,
+        _ => return Err("unsupported export request version"),
+    };
 
     let operation = exact_object(
         envelope.get("operation").ok_or("missing operation")?,
@@ -175,8 +241,24 @@ fn parse_export_request(input: &[u8]) -> Result<ModelExportOperation, &'static s
         );
     }
 
-    ModelExportOperation::new(id, source, destination, artifacts)
-        .map_err(|_| "invalid export operation")
+    let operation = ModelExportOperation::new(id, source.clone(), destination, artifacts)
+        .map_err(|_| "invalid export operation")?;
+
+    let selection = match version.as_u64() {
+        Some(1) => None,
+        Some(2) => Some(parse_export_selection(
+            envelope
+                .get("selection")
+                .ok_or("missing resource selection")?,
+            &source,
+        )?),
+        _ => return Err("unsupported export request version"),
+    };
+
+    Ok(ParsedExportRequest {
+        operation,
+        selection,
+    })
 }
 
 /// Check the broker's effective identity.
@@ -248,9 +330,44 @@ fn authorize_export(
     }
 }
 
+/// The privileged broker accepts no command-line request or authorization claims.
+/// All operation metadata must arrive through its bounded stdin parser.
+fn validate_broker_arguments(argument_count: usize) -> Result<(), &'static str> {
+    if argument_count != 0 {
+        return Err("DAIA Model Export broker accepts no arguments");
+    }
+
+    Ok(())
+}
+
+/// Resource binding is a separate prerequisite from operation authorization.
+/// No production resource grant exists until trusted source and destination
+/// handles are independently established.
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum ExportResourceDecision {
+    Unverified,
+    #[cfg(test)]
+    VerifiedForOperation(Vec<u8>),
+}
+
+fn validate_export_resources(
+    decision: &ExportResourceDecision,
+    operation: &ModelExportOperation,
+) -> Result<(), &'static str> {
+    match decision {
+        #[cfg(test)]
+        ExportResourceDecision::VerifiedForOperation(bytes)
+            if *bytes == operation.canonical_bytes() =>
+        {
+            Ok(())
+        }
+        _ => Err("DAIA Model Export resources are not verified"),
+    }
+}
+
 const MAX_EXPORT_REQUEST_BYTES: u64 = 1024 * 1024;
 
-fn read_export_request<R: Read>(reader: R) -> Result<ModelExportOperation, &'static str> {
+fn read_export_request<R: Read>(reader: R) -> Result<ParsedExportRequest, &'static str> {
     let mut input = Vec::new();
     reader
         .take(MAX_EXPORT_REQUEST_BYTES + 1)
@@ -265,6 +382,11 @@ fn read_export_request<R: Read>(reader: R) -> Result<ModelExportOperation, &'sta
 }
 
 fn main() {
+    if let Err(error) = validate_broker_arguments(std::env::args_os().skip(1).count()) {
+        eprintln!("DAIA Model Export broker: {error}");
+        std::process::exit(1);
+    }
+
     // Effective UID is a prerequisite, not proof of Polkit authorization.
     if validate_broker_effective_uid(rustix::process::geteuid().as_raw()).is_err() {
         eprintln!("DAIA Model Export broker requires privileged activation");
@@ -297,7 +419,15 @@ fn main() {
 
     // Parsing does not authorize an operation. Until a trusted authorization
     // provider exists, every valid request must still be denied.
-    if let Err(error) = authorize_export(&AuthorizationDecision::Denied, &operation) {
+    if let Err(error) = authorize_export(&AuthorizationDecision::Denied, &operation.operation) {
+        eprintln!("DAIA Model Export broker: {error}");
+        std::process::exit(1);
+    }
+
+    // Resource verification remains a separate fail-closed prerequisite.
+    if let Err(error) =
+        validate_export_resources(&ExportResourceDecision::Unverified, &operation.operation)
+    {
         eprintln!("DAIA Model Export broker: {error}");
         std::process::exit(1);
     }
@@ -311,6 +441,35 @@ fn main() {
 mod tests {
     use super::*;
 
+    #[test]
+    fn broker_accepts_no_command_line_arguments() {
+        assert!(validate_broker_arguments(0).is_ok());
+
+        for count in [1, 2, 3, 100] {
+            assert!(
+                validate_broker_arguments(count).is_err(),
+                "unexpectedly accepted {count} arguments"
+            );
+        }
+    }
+
+    #[test]
+    fn unverified_resources_never_authorize_export() {
+        let requested = operation("export");
+        assert!(
+            validate_export_resources(&ExportResourceDecision::Unverified, &requested).is_err()
+        );
+    }
+
+    #[test]
+    fn resource_binding_rejects_different_operation() {
+        let requested = operation("export");
+        let decision = ExportResourceDecision::VerifiedForOperation(requested.canonical_bytes());
+
+        assert!(validate_export_resources(&decision, &requested).is_ok());
+        assert!(validate_export_resources(&decision, &operation("other-export")).is_err());
+    }
+
     fn request() -> String {
         format!(
             r#"{{"version":1,"operation":{{"id":"operation-1","source":"ollama","destination_name":"export","artifacts":[{{"relative_path":"model.gguf","sha256":"{}","size_bytes":12}}]}}}}"#,
@@ -319,10 +478,108 @@ mod tests {
     }
 
     #[test]
+    fn parser_accepts_version_two_ollama_selection_without_authorizing() {
+        let input = request().replacen(
+            r#""version":1"#,
+            r#""version":2,"selection":{"source":{"kind":"ollama","directory":"/var/lib/ollama/models","relative_manifest":"registry.ollama.ai/library/qwen/latest"},"destination":{"directory":"/media/export"}}"#,
+            1,
+        );
+
+        let parsed = parse_export_request(input.as_bytes()).unwrap();
+        let selection = parsed
+            .selection
+            .as_ref()
+            .expect("version 2 requires selection");
+
+        assert!(matches!(
+            selection.source(),
+            ModelExportSourceSelection::Ollama {
+                directory,
+                relative_manifest
+            } if directory == "/var/lib/ollama/models"
+                && relative_manifest == "registry.ollama.ai/library/qwen/latest"
+        ));
+        assert_eq!(selection.destination().directory(), "/media/export");
+        assert!(authorize_export(&AuthorizationDecision::Denied, &parsed.operation).is_err());
+        assert!(
+            validate_export_resources(&ExportResourceDecision::Unverified, &parsed.operation)
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn parser_accepts_version_two_gguf_selection_without_authorizing() {
+        let input = request()
+            .replacen(r#""source":"ollama""#, r#""source":"gguf""#, 1)
+            .replacen(
+                r#""version":1"#,
+                r#""version":2,"selection":{"source":{"kind":"gguf","directory":"/media/models","relative_file":"files/example.gguf"},"destination":{"directory":"/media/export"}}"#,
+                1,
+            );
+
+        let parsed = parse_export_request(input.as_bytes()).unwrap();
+        let selection = parsed
+            .selection
+            .as_ref()
+            .expect("version 2 requires selection");
+
+        assert!(matches!(
+            selection.source(),
+            ModelExportSourceSelection::Gguf {
+                directory,
+                relative_file
+            } if directory == "/media/models"
+                && relative_file == "files/example.gguf"
+        ));
+        assert_eq!(selection.destination().directory(), "/media/export");
+        assert!(authorize_export(&AuthorizationDecision::Denied, &parsed.operation).is_err());
+        assert!(
+            validate_export_resources(&ExportResourceDecision::Unverified, &parsed.operation)
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn parser_rejects_invalid_version_two_selections() {
+        let valid = request().replacen(
+            r#""version":1"#,
+            r#""version":2,"selection":{"source":{"kind":"ollama","directory":"/var/lib/ollama/models","relative_manifest":"registry.ollama.ai/library/qwen/latest"},"destination":{"directory":"/media/export"}}"#,
+            1,
+        );
+
+        assert!(parse_export_request(valid.as_bytes()).is_ok());
+
+        let cases = [
+            valid.replace(r#""kind":"ollama""#, r#""kind":"gguf""#),
+            valid.replace("/var/lib/ollama/models", "/var/lib/../ollama/models"),
+            valid.replace("registry.ollama.ai/library/qwen/latest", "../qwen/latest"),
+            valid.replace("/media/export", "/media/../export"),
+            valid.replace(
+                r#""destination":{"directory":"/media/export"}"#,
+                r#""destination":{}"#,
+            ),
+            valid.replace(r#""kind":"ollama""#, r#""kind":"ollama","kind":"ollama""#),
+            valid.replace(
+                r#""directory":"/media/export""#,
+                r#""directory":"/media/export","unexpected":true"#,
+            ),
+            valid.replace(r#""kind":"ollama""#, r#""kind":"unknown""#),
+        ];
+
+        for input in cases {
+            assert_ne!(input, valid, "negative fixture must differ");
+            assert!(
+                parse_export_request(input.as_bytes()).is_err(),
+                "accepted invalid selection: {input}"
+            );
+        }
+    }
+
+    #[test]
     fn request_intake_accepts_valid_metadata_without_authorizing() {
         let parsed = read_export_request(request().as_bytes()).unwrap();
-        assert_eq!(parsed.destination_name(), "export");
-        assert!(authorize_export(&AuthorizationDecision::Denied, &parsed).is_err());
+        assert_eq!(parsed.operation.destination_name(), "export");
+        assert!(authorize_export(&AuthorizationDecision::Denied, &parsed.operation).is_err());
     }
 
     #[test]
@@ -344,9 +601,9 @@ mod tests {
     #[test]
     fn parser_accepts_valid_metadata_without_authorizing() {
         let parsed = parse_export_request(request().as_bytes()).unwrap();
-        assert_eq!(parsed.destination_name(), "export");
-        assert_eq!(parsed.artifacts().len(), 1);
-        assert!(authorize_export(&AuthorizationDecision::Denied, &parsed).is_err());
+        assert_eq!(parsed.operation.destination_name(), "export");
+        assert_eq!(parsed.operation.artifacts().len(), 1);
+        assert!(authorize_export(&AuthorizationDecision::Denied, &parsed.operation).is_err());
     }
 
     #[test]
@@ -516,7 +773,7 @@ mod tests {
 
         // Parsing validates metadata, but it cannot authorize an export.
         let decision = AuthorizationDecision::Denied;
-        assert!(authorize_export(&decision, &parsed).is_err());
+        assert!(authorize_export(&decision, &parsed.operation).is_err());
 
         // An untrusted authorization claim must not change that result.
         let claimed = valid.replace(r#""version":1"#, r#""version":1,"authorized":true"#);

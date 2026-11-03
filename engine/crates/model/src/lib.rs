@@ -15,6 +15,12 @@ pub use model_export::{
     ModelExportValidationError,
 };
 
+mod model_export_selection;
+pub use model_export_selection::{
+    ModelExportDestinationSelection, ModelExportResourceSelection, ModelExportSelectionError,
+    ModelExportSourceSelection,
+};
+
 use std::{
     fmt,
     path::{Path, PathBuf},
