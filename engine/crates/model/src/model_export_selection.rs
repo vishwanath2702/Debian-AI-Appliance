@@ -166,11 +166,110 @@ impl ModelExportResourceSelection {
     pub const fn destination(&self) -> &ModelExportDestinationSelection {
         &self.destination
     }
+
+    /// Deterministic encoding of selected resource intent.
+    ///
+    /// This is not a resource identity, authorization grant, or proof that
+    /// any filesystem path is safe to open.
+    #[must_use]
+    pub fn canonical_bytes(&self) -> Vec<u8> {
+        fn field(bytes: &mut Vec<u8>, tag: u8, value: &str) {
+            bytes.push(tag);
+            bytes.extend_from_slice(&(value.len() as u64).to_be_bytes());
+            bytes.extend_from_slice(value.as_bytes());
+        }
+
+        let mut bytes = b"DAIA-MODEL-EXPORT-SELECTION\0".to_vec();
+        bytes.extend_from_slice(&1_u32.to_be_bytes());
+
+        match &self.source {
+            ModelExportSourceSelection::Gguf {
+                directory,
+                relative_file,
+            } => {
+                field(&mut bytes, 1, "gguf");
+                field(&mut bytes, 2, directory);
+                field(&mut bytes, 3, relative_file);
+            }
+            ModelExportSourceSelection::Ollama {
+                directory,
+                relative_manifest,
+            } => {
+                field(&mut bytes, 1, "ollama");
+                field(&mut bytes, 2, directory);
+                field(&mut bytes, 3, relative_manifest);
+            }
+        }
+
+        field(&mut bytes, 4, self.destination.directory());
+        bytes
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn canonical_selection_matches_fixed_byte_fixture() {
+        let selection = ModelExportResourceSelection::new(
+            ModelExportSourceSelection::gguf("/src", "a.gguf").unwrap(),
+            ModelExportDestinationSelection::new("/dst").unwrap(),
+        );
+
+        let mut expected = b"DAIA-MODEL-EXPORT-SELECTION\0".to_vec();
+        expected.extend_from_slice(&1_u32.to_be_bytes());
+
+        for (tag, value) in [
+            (1_u8, "gguf"),
+            (2_u8, "/src"),
+            (3_u8, "a.gguf"),
+            (4_u8, "/dst"),
+        ] {
+            expected.push(tag);
+            expected.extend_from_slice(&(value.len() as u64).to_be_bytes());
+            expected.extend_from_slice(value.as_bytes());
+        }
+
+        assert_eq!(selection.canonical_bytes(), expected);
+    }
+
+    #[test]
+    fn canonical_selection_changes_with_selected_resources() {
+        let destination = ModelExportDestinationSelection::new("/media/export").unwrap();
+        let first = ModelExportResourceSelection::new(
+            ModelExportSourceSelection::gguf("/media/models", "a.gguf").unwrap(),
+            destination.clone(),
+        );
+        let same = ModelExportResourceSelection::new(
+            ModelExportSourceSelection::gguf("/media/models", "a.gguf").unwrap(),
+            destination.clone(),
+        );
+        let different_source = ModelExportResourceSelection::new(
+            ModelExportSourceSelection::gguf("/media/models", "b.gguf").unwrap(),
+            destination.clone(),
+        );
+        let different_destination = ModelExportResourceSelection::new(
+            ModelExportSourceSelection::gguf("/media/models", "a.gguf").unwrap(),
+            ModelExportDestinationSelection::new("/media/other").unwrap(),
+        );
+        let ollama = ModelExportResourceSelection::new(
+            ModelExportSourceSelection::ollama(
+                "/media/models",
+                "registry.ollama.ai/library/qwen/latest",
+            )
+            .unwrap(),
+            destination,
+        );
+
+        assert_eq!(first.canonical_bytes(), same.canonical_bytes());
+        assert_ne!(first.canonical_bytes(), different_source.canonical_bytes());
+        assert_ne!(
+            first.canonical_bytes(),
+            different_destination.canonical_bytes()
+        );
+        assert_ne!(first.canonical_bytes(), ollama.canonical_bytes());
+    }
 
     #[test]
     fn accepts_gguf_and_ollama_selections() {
