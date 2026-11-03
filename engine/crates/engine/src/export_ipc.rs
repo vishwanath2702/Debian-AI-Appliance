@@ -1112,6 +1112,62 @@ mod export_directory_context_tests {
     }
 
     #[test]
+    fn rejects_substituted_resource_selection_with_matching_directories() {
+        use model::{
+            ModelExportDestinationSelection, ModelExportResourceSelection,
+            ModelExportSourceSelection,
+        };
+
+        let source = tempfile::tempdir().unwrap();
+        let destination = tempfile::tempdir().unwrap();
+
+        let original_selection = ModelExportResourceSelection::new(
+            ModelExportSourceSelection::gguf("/media/models", "original.gguf").unwrap(),
+            ModelExportDestinationSelection::new("/media/export").unwrap(),
+        );
+
+        let substituted_selection = ModelExportResourceSelection::new(
+            ModelExportSourceSelection::gguf("/media/models", "substituted.gguf").unwrap(),
+            ModelExportDestinationSelection::new("/media/export").unwrap(),
+        );
+
+        let original_request = original_selection.canonical_bytes();
+        let substituted_request = substituted_selection.canonical_bytes();
+
+        assert_ne!(original_request, substituted_request);
+
+        let context = ExportDirectoryContext::new(
+            &original_request,
+            std::fs::File::open(source.path()).unwrap().into(),
+            std::fs::File::open(destination.path()).unwrap().into(),
+        )
+        .unwrap();
+
+        let received_source = std::fs::File::open(source.path()).unwrap();
+        let received_destination = std::fs::File::open(destination.path()).unwrap();
+
+        context
+            .verify_received(
+                &original_request,
+                received_source.as_fd(),
+                received_destination.as_fd(),
+            )
+            .unwrap();
+
+        assert_eq!(
+            context
+                .verify_received(
+                    &substituted_request,
+                    received_source.as_fd(),
+                    received_destination.as_fd(),
+                )
+                .unwrap_err()
+                .kind(),
+            ErrorKind::PermissionDenied,
+        );
+    }
+
+    #[test]
     fn rejects_empty_or_oversized_operation_identity() {
         let source = tempfile::tempdir().unwrap();
         let destination = tempfile::tempdir().unwrap();
