@@ -31,6 +31,7 @@ class ExportInstallationTests(unittest.TestCase):
         ).read_text()
 
         self.assertIn("DynamicUser=yes\n", service)
+        self.assertIn("PrivateUsers=yes\n", service)
         self.assertIn("User=daia-export\n", service)
         self.assertNotIn("Group=daia-export\n", service)
         self.assertIn("ProtectSystem=strict\n", service)
@@ -45,6 +46,7 @@ class ExportInstallationTests(unittest.TestCase):
         ).read_text()
 
         self.assertIn("DynamicUser=yes\n", service)
+        self.assertIn("PrivateUsers=yes\n", service)
         self.assertIn(
             "if getent passwd daia-export >/dev/null; then",
             installer,

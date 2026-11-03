@@ -6,6 +6,7 @@ ConditionPathExists=/usr/libexec/daia-model-export-worker
 [Service]
 Type=exec
 DynamicUser=yes
+PrivateUsers=yes
 User=daia-export
 ExecStart=/usr/libexec/daia-model-export-worker
 Sockets=daia-model-export.socket

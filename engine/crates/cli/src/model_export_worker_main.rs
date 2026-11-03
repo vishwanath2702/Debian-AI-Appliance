@@ -143,6 +143,18 @@ fn main() {
         }
     };
 
+    // Validate systemd activation metadata before accepting a connection.
+    // Environment metadata is not independent proof of trusted launch.
+    if let Err(error) = engine::export_ipc::validate_export_ipc_activation_metadata(
+        std::env::var("LISTEN_PID").ok().as_deref(),
+        std::env::var("LISTEN_FDS").ok().as_deref(),
+        std::env::var("LISTEN_FDNAMES").ok().as_deref(),
+        std::process::id(),
+    ) {
+        eprintln!("DAIA Model Export worker: invalid activation metadata: {error}");
+        std::process::exit(1);
+    }
+
     if let Err(error) = engine::export_ipc::validate_export_ipc_listener(stdin.as_fd()) {
         eprintln!("DAIA Model Export worker: invalid activation listener: {error}");
         std::process::exit(1);
