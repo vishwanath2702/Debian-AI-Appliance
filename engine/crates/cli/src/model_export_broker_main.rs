@@ -294,6 +294,28 @@ fn validate_pkexec_invoking_uid(value: Option<&str>) -> Result<u32, &'static str
     Ok(uid)
 }
 
+/// Canonical binding of an export operation and its selected resources.
+///
+/// This encodes request intent only. It does not establish Polkit
+/// authorization, resource identity, or safe filesystem access.
+fn canonical_export_request_bytes(
+    operation: &ModelExportOperation,
+    selection: &ModelExportResourceSelection,
+) -> Vec<u8> {
+    let operation_bytes = operation.canonical_bytes();
+    let selection_bytes = selection.canonical_bytes();
+
+    let mut bytes = b"DAIA-MODEL-EXPORT-REQUEST\0".to_vec();
+    bytes.extend_from_slice(&1_u32.to_be_bytes());
+
+    for field in [&operation_bytes, &selection_bytes] {
+        bytes.extend_from_slice(&(field.len() as u64).to_be_bytes());
+        bytes.extend_from_slice(field);
+    }
+
+    bytes
+}
+
 /// An operation-specific authorization grant.
 ///
 /// No production constructor exists until an independently trusted
@@ -319,10 +341,13 @@ enum AuthorizationDecision {
 fn authorize_export(
     decision: &AuthorizationDecision,
     operation: &ModelExportOperation,
+    selection: Option<&ModelExportResourceSelection>,
 ) -> Result<(), &'static str> {
+    let selection = selection.ok_or("DAIA Model Export resource selection required")?;
+
     match decision {
         AuthorizationDecision::VerifiedForOperation(grant)
-            if grant.operation_bytes == operation.canonical_bytes() =>
+            if grant.operation_bytes == canonical_export_request_bytes(operation, selection) =>
         {
             Ok(())
         }
@@ -419,7 +444,11 @@ fn main() {
 
     // Parsing does not authorize an operation. Until a trusted authorization
     // provider exists, every valid request must still be denied.
-    if let Err(error) = authorize_export(&AuthorizationDecision::Denied, &operation.operation) {
+    if let Err(error) = authorize_export(
+        &AuthorizationDecision::Denied,
+        &operation.operation,
+        operation.selection.as_ref(),
+    ) {
         eprintln!("DAIA Model Export broker: {error}");
         std::process::exit(1);
     }
@@ -500,7 +529,14 @@ mod tests {
                 && relative_manifest == "registry.ollama.ai/library/qwen/latest"
         ));
         assert_eq!(selection.destination().directory(), "/media/export");
-        assert!(authorize_export(&AuthorizationDecision::Denied, &parsed.operation).is_err());
+        assert!(
+            authorize_export(
+                &AuthorizationDecision::Denied,
+                &parsed.operation,
+                parsed.selection.as_ref()
+            )
+            .is_err()
+        );
         assert!(
             validate_export_resources(&ExportResourceDecision::Unverified, &parsed.operation)
                 .is_err()
@@ -532,7 +568,14 @@ mod tests {
                 && relative_file == "files/example.gguf"
         ));
         assert_eq!(selection.destination().directory(), "/media/export");
-        assert!(authorize_export(&AuthorizationDecision::Denied, &parsed.operation).is_err());
+        assert!(
+            authorize_export(
+                &AuthorizationDecision::Denied,
+                &parsed.operation,
+                parsed.selection.as_ref()
+            )
+            .is_err()
+        );
         assert!(
             validate_export_resources(&ExportResourceDecision::Unverified, &parsed.operation)
                 .is_err()
@@ -579,7 +622,14 @@ mod tests {
     fn request_intake_accepts_valid_metadata_without_authorizing() {
         let parsed = read_export_request(request().as_bytes()).unwrap();
         assert_eq!(parsed.operation.destination_name(), "export");
-        assert!(authorize_export(&AuthorizationDecision::Denied, &parsed.operation).is_err());
+        assert!(
+            authorize_export(
+                &AuthorizationDecision::Denied,
+                &parsed.operation,
+                parsed.selection.as_ref()
+            )
+            .is_err()
+        );
     }
 
     #[test]
@@ -603,7 +653,14 @@ mod tests {
         let parsed = parse_export_request(request().as_bytes()).unwrap();
         assert_eq!(parsed.operation.destination_name(), "export");
         assert_eq!(parsed.operation.artifacts().len(), 1);
-        assert!(authorize_export(&AuthorizationDecision::Denied, &parsed.operation).is_err());
+        assert!(
+            authorize_export(
+                &AuthorizationDecision::Denied,
+                &parsed.operation,
+                parsed.selection.as_ref()
+            )
+            .is_err()
+        );
     }
 
     #[test]
@@ -693,19 +750,115 @@ mod tests {
     }
 
     #[test]
+    fn complete_request_binding_changes_with_resources_and_operation() {
+        let requested = operation("export");
+
+        let selection = ModelExportResourceSelection::new(
+            ModelExportSourceSelection::ollama(
+                "/media/models",
+                "registry.ollama.ai/library/qwen/latest",
+            )
+            .unwrap(),
+            ModelExportDestinationSelection::new("/media/export").unwrap(),
+        );
+
+        let different_source = ModelExportResourceSelection::new(
+            ModelExportSourceSelection::ollama(
+                "/media/models",
+                "registry.ollama.ai/library/qwen/other",
+            )
+            .unwrap(),
+            ModelExportDestinationSelection::new("/media/export").unwrap(),
+        );
+
+        let different_destination = ModelExportResourceSelection::new(
+            selection.source().clone(),
+            ModelExportDestinationSelection::new("/media/other").unwrap(),
+        );
+
+        let expected = canonical_export_request_bytes(&requested, &selection);
+
+        assert_eq!(
+            expected,
+            canonical_export_request_bytes(&requested, &selection)
+        );
+        assert_ne!(
+            expected,
+            canonical_export_request_bytes(&requested, &different_source)
+        );
+        assert_ne!(
+            expected,
+            canonical_export_request_bytes(&requested, &different_destination)
+        );
+        assert_ne!(
+            expected,
+            canonical_export_request_bytes(&operation("other-export"), &selection)
+        );
+    }
+
+    fn authorization_selection() -> ModelExportResourceSelection {
+        ModelExportResourceSelection::new(
+            ModelExportSourceSelection::ollama(
+                "/media/models",
+                "registry.ollama.ai/library/qwen/latest",
+            )
+            .unwrap(),
+            ModelExportDestinationSelection::new("/media/export").unwrap(),
+        )
+    }
+
+    #[test]
     fn broker_denies_without_verified_authorization() {
-        assert!(authorize_export(&AuthorizationDecision::Denied, &operation("export")).is_err());
+        assert!(
+            authorize_export(&AuthorizationDecision::Denied, &operation("export"), None).is_err()
+        );
     }
 
     #[test]
     fn broker_accepts_only_matching_operation() {
         let requested = operation("export");
         let decision = AuthorizationDecision::VerifiedForOperation(VerifiedExportGrant::for_test(
-            requested.canonical_bytes(),
+            canonical_export_request_bytes(&requested, &authorization_selection()),
         ));
 
-        assert!(authorize_export(&decision, &requested).is_ok());
-        assert!(authorize_export(&decision, &operation("other-export")).is_err());
+        assert!(authorize_export(&decision, &requested, Some(&authorization_selection())).is_ok());
+        assert!(
+            authorize_export(
+                &decision,
+                &operation("other-export"),
+                Some(&authorization_selection())
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn authorization_rejects_resource_substitution_and_missing_selection() {
+        let requested = operation("export");
+        let selected = authorization_selection();
+
+        let decision = AuthorizationDecision::VerifiedForOperation(VerifiedExportGrant::for_test(
+            canonical_export_request_bytes(&requested, &selected),
+        ));
+
+        let changed_source = ModelExportResourceSelection::new(
+            ModelExportSourceSelection::ollama(
+                "/media/models",
+                "registry.ollama.ai/library/qwen/other",
+            )
+            .unwrap(),
+            selected.destination().clone(),
+        );
+
+        let changed_destination = ModelExportResourceSelection::new(
+            selected.source().clone(),
+            ModelExportDestinationSelection::new("/media/other").unwrap(),
+        );
+
+        assert!(authorize_export(&decision, &requested, Some(&selected)).is_ok());
+        assert!(authorize_export(&decision, &requested, Some(&changed_source)).is_err());
+        assert!(authorize_export(&decision, &requested, Some(&changed_destination)).is_err());
+        assert!(authorize_export(&decision, &requested, None).is_err());
     }
 
     #[test]
@@ -724,7 +877,7 @@ mod tests {
                 VerifiedExportGrant::for_test(claim.as_bytes().to_vec()),
             );
             assert!(
-                authorize_export(&decision, &requested).is_err(),
+                authorize_export(&decision, &requested, Some(&authorization_selection())).is_err(),
                 "untrusted claim must not authorize: {claim}"
             );
         }
@@ -742,11 +895,11 @@ mod tests {
         .unwrap();
 
         let decision = AuthorizationDecision::VerifiedForOperation(VerifiedExportGrant::for_test(
-            requested.canonical_bytes(),
+            canonical_export_request_bytes(&requested, &authorization_selection()),
         ));
 
-        assert!(authorize_export(&decision, &requested).is_ok());
-        assert!(authorize_export(&decision, &different).is_err());
+        assert!(authorize_export(&decision, &requested, Some(&authorization_selection())).is_ok());
+        assert!(authorize_export(&decision, &different, Some(&authorization_selection())).is_err());
     }
 
     #[test]
@@ -762,7 +915,9 @@ mod tests {
                 VerifiedExportGrant::for_test(claim.to_vec()),
             );
 
-            assert!(authorize_export(&decision, &requested).is_err());
+            assert!(
+                authorize_export(&decision, &requested, Some(&authorization_selection())).is_err()
+            );
         }
     }
 
@@ -773,7 +928,7 @@ mod tests {
 
         // Parsing validates metadata, but it cannot authorize an export.
         let decision = AuthorizationDecision::Denied;
-        assert!(authorize_export(&decision, &parsed.operation).is_err());
+        assert!(authorize_export(&decision, &parsed.operation, parsed.selection.as_ref()).is_err());
 
         // An untrusted authorization claim must not change that result.
         let claimed = valid.replace(r#""version":1"#, r#""version":1,"authorized":true"#);
@@ -837,12 +992,14 @@ mod tests {
         assert!(validate_broker_effective_uid(0).is_ok());
 
         let requested = operation("export");
-        assert!(authorize_export(&AuthorizationDecision::Denied, &requested).is_err());
+        assert!(authorize_export(&AuthorizationDecision::Denied, &requested, None).is_err());
     }
 
     #[test]
     fn broker_denies_without_an_authorization_provider() {
-        assert!(authorize_export(&AuthorizationDecision::Denied, &operation("export")).is_err());
+        assert!(
+            authorize_export(&AuthorizationDecision::Denied, &operation("export"), None).is_err()
+        );
     }
 
     #[test]
@@ -855,7 +1012,7 @@ mod tests {
         assert_eq!(validate_pkexec_invoking_uid(Some("1000")), Ok(1000));
 
         assert!(
-            authorize_export(&AuthorizationDecision::Denied, &requested).is_err(),
+            authorize_export(&AuthorizationDecision::Denied, &requested, None).is_err(),
             "privileged identity must not authorize an export"
         );
         assert!(
