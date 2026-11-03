@@ -378,11 +378,14 @@ enum ExportResourceDecision {
 fn validate_export_resources(
     decision: &ExportResourceDecision,
     operation: &ModelExportOperation,
+    selection: Option<&ModelExportResourceSelection>,
 ) -> Result<(), &'static str> {
+    let selection = selection.ok_or("DAIA Model Export resource selection required")?;
+
     match decision {
         #[cfg(test)]
         ExportResourceDecision::VerifiedForOperation(bytes)
-            if *bytes == operation.canonical_bytes() =>
+            if *bytes == canonical_export_request_bytes(operation, selection) =>
         {
             Ok(())
         }
@@ -454,9 +457,11 @@ fn main() {
     }
 
     // Resource verification remains a separate fail-closed prerequisite.
-    if let Err(error) =
-        validate_export_resources(&ExportResourceDecision::Unverified, &operation.operation)
-    {
+    if let Err(error) = validate_export_resources(
+        &ExportResourceDecision::Unverified,
+        &operation.operation,
+        operation.selection.as_ref(),
+    ) {
         eprintln!("DAIA Model Export broker: {error}");
         std::process::exit(1);
     }
@@ -486,17 +491,50 @@ mod tests {
     fn unverified_resources_never_authorize_export() {
         let requested = operation("export");
         assert!(
-            validate_export_resources(&ExportResourceDecision::Unverified, &requested).is_err()
+            validate_export_resources(
+                &ExportResourceDecision::Unverified,
+                &requested,
+                Some(&authorization_selection()),
+            )
+            .is_err()
         );
     }
 
     #[test]
-    fn resource_binding_rejects_different_operation() {
+    fn resource_binding_rejects_different_operation_and_resources() {
         let requested = operation("export");
-        let decision = ExportResourceDecision::VerifiedForOperation(requested.canonical_bytes());
+        let selected = authorization_selection();
+        let decision = ExportResourceDecision::VerifiedForOperation(
+            canonical_export_request_bytes(&requested, &selected),
+        );
 
-        assert!(validate_export_resources(&decision, &requested).is_ok());
-        assert!(validate_export_resources(&decision, &operation("other-export")).is_err());
+        assert!(validate_export_resources(&decision, &requested, Some(&selected)).is_ok());
+        assert!(
+            validate_export_resources(&decision, &operation("other-export"), Some(&selected),)
+                .is_err()
+        );
+
+        let changed_source = ModelExportResourceSelection::new(
+            ModelExportSourceSelection::ollama(
+                "/media/models",
+                "registry.ollama.ai/library/qwen/other",
+            )
+            .unwrap(),
+            selected.destination().clone(),
+        );
+
+        let changed_destination = ModelExportResourceSelection::new(
+            selected.source().clone(),
+            ModelExportDestinationSelection::new("/media/other").unwrap(),
+        );
+
+        assert!(validate_export_resources(&decision, &requested, Some(&changed_source),).is_err());
+
+        assert!(
+            validate_export_resources(&decision, &requested, Some(&changed_destination),).is_err()
+        );
+
+        assert!(validate_export_resources(&decision, &requested, None).is_err());
     }
 
     fn request() -> String {
@@ -538,8 +576,12 @@ mod tests {
             .is_err()
         );
         assert!(
-            validate_export_resources(&ExportResourceDecision::Unverified, &parsed.operation)
-                .is_err()
+            validate_export_resources(
+                &ExportResourceDecision::Unverified,
+                &parsed.operation,
+                parsed.selection.as_ref(),
+            )
+            .is_err()
         );
     }
 
@@ -577,8 +619,12 @@ mod tests {
             .is_err()
         );
         assert!(
-            validate_export_resources(&ExportResourceDecision::Unverified, &parsed.operation)
-                .is_err()
+            validate_export_resources(
+                &ExportResourceDecision::Unverified,
+                &parsed.operation,
+                parsed.selection.as_ref(),
+            )
+            .is_err()
         );
     }
 
@@ -1016,7 +1062,8 @@ mod tests {
             "privileged identity must not authorize an export"
         );
         assert!(
-            validate_export_resources(&ExportResourceDecision::Unverified, &requested).is_err(),
+            validate_export_resources(&ExportResourceDecision::Unverified, &requested, None)
+                .is_err(),
             "privileged identity must not verify export resources"
         );
     }
