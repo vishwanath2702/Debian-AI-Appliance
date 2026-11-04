@@ -132,6 +132,7 @@ impl LiveRootfsPreparer for SystemLiveRootfsPreparer {
             &installer_service,
             r#"[Unit]
 Description=DAIA Rust Installer
+ConditionKernelCommandLine=daia.mode=install
 After=systemd-user-sessions.service
 Before=graphical.target
 Conflicts=graphical.target
@@ -164,6 +165,46 @@ WantedBy=multi-user.target
             &installer_link,
         )?;
 
+        // Recovery uses its own target so Debian's rescue.service does not
+        // require sulogin authentication against the temporary Live root.
+        // No installed filesystems are mounted or repaired automatically.
+        write_file(
+            &systemd_directory.join("daia-recovery.target"),
+            r#"[Unit]
+Description=DAIA Live Recovery Mode
+Requires=sysinit.target daia-recovery.service
+After=sysinit.target daia-recovery.service
+AllowIsolate=yes
+"#,
+        )?;
+
+        write_file(
+            &systemd_directory.join("daia-recovery.service"),
+            r#"[Unit]
+Description=DAIA Live Recovery Console
+ConditionKernelCommandLine=daia.mode=recovery
+DefaultDependencies=no
+After=sysinit.target
+Before=daia-recovery.target
+Conflicts=shutdown.target
+Before=shutdown.target
+
+[Service]
+Type=idle
+Environment=HOME=/root
+WorkingDirectory=-/root
+ExecStart=/usr/bin/bash --login
+StandardInput=tty-force
+StandardOutput=inherit
+StandardError=inherit
+TTYPath=/dev/tty1
+TTYReset=yes
+TTYVHangup=yes
+KillMode=process
+Restart=no
+"#,
+        )?;
+
         let getty_wants = build_context
             .rootfs()
             .join("etc/systemd/system/getty.target.wants");
@@ -188,6 +229,15 @@ WantedBy=multi-user.target
                 &getty_link,
             )?;
         }
+
+        // This configuration belongs only to the ephemeral Live USB.
+        // NormalizeInstalledSystem must remove it from the installed rootfs.
+        let live_sddm_directory = build_context.rootfs().join("etc/sddm.conf.d");
+        create_directory(&live_sddm_directory)?;
+        write_file(
+            &live_sddm_directory.join("90-daia-live-autologin.conf"),
+            "[Autologin]\nUser=daia\nSession=plasmax11.desktop\nRelogin=false\n",
+        )?;
 
         clean_live_rootfs(build_context.rootfs())?;
 
@@ -1390,6 +1440,43 @@ mod tests {
         assert!(
             installer_service.contains("ExecStart=/usr/bin/daia-tui"),
             "live installer service must launch the DAIA terminal installer"
+        );
+        assert!(
+            installer_service.contains("ConditionKernelCommandLine=daia.mode=install"),
+            "installer service must run only when Install DAIA is selected"
+        );
+
+        let recovery_target =
+            fs::read_to_string(rootfs.join("etc/systemd/system/daia-recovery.target"))
+                .expect("DAIA recovery target should exist");
+        let recovery_service =
+            fs::read_to_string(rootfs.join("etc/systemd/system/daia-recovery.service"))
+                .expect("DAIA recovery service should exist");
+
+        assert!(
+            recovery_target.contains("Requires=sysinit.target daia-recovery.service"),
+            "recovery target must require the recovery console"
+        );
+        assert!(
+            recovery_service.contains("ConditionKernelCommandLine=daia.mode=recovery"),
+            "recovery console must be restricted to Recovery Mode"
+        );
+        assert!(
+            recovery_service.contains("ExecStart=/usr/bin/bash --login"),
+            "recovery console must launch the local shell"
+        );
+        assert!(
+            recovery_service.contains("TTYPath=/dev/tty1"),
+            "recovery console must use the physical terminal"
+        );
+
+        let live_autologin =
+            fs::read_to_string(rootfs.join("etc/sddm.conf.d/90-daia-live-autologin.conf"))
+                .expect("Live SDDM autologin configuration should exist");
+
+        assert_eq!(
+            live_autologin, "[Autologin]\nUser=daia\nSession=plasmax11.desktop\nRelogin=false\n",
+            "Live SDDM must autologin the temporary DAIA user using Plasma X11"
         );
         assert!(
             !installer_service.contains("ExecStart=/usr/bin/daia install"),

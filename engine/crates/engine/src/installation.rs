@@ -1425,6 +1425,49 @@ where
                     Err(error) => return Err(error),
                 }
 
+                // The Live USB permits automatic login for its temporary
+                // account. Never carry that configuration into an installation.
+                let live_autologin = root.join("etc/sddm.conf.d/90-daia-live-autologin.conf");
+
+                match std::fs::symlink_metadata(&live_autologin) {
+                    Ok(metadata)
+                        if metadata.file_type().is_file() || metadata.file_type().is_symlink() =>
+                    {
+                        std::fs::remove_file(&live_autologin)?;
+                    }
+                    Ok(_) => {
+                        return Err(io::Error::new(
+                            io::ErrorKind::InvalidData,
+                            "Live SDDM autologin path is not a regular file or symlink",
+                        ));
+                    }
+                    Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+                    Err(error) => return Err(error),
+                }
+
+                // Recovery provides a privileged console only on the Live USB.
+                // Neither recovery unit may survive into the installed system.
+                for unit in ["daia-recovery.target", "daia-recovery.service"] {
+                    let path = root.join("etc/systemd/system").join(unit);
+
+                    match std::fs::symlink_metadata(&path) {
+                        Ok(metadata)
+                            if metadata.file_type().is_file()
+                                || metadata.file_type().is_symlink() =>
+                        {
+                            std::fs::remove_file(&path)?;
+                        }
+                        Ok(_) => {
+                            return Err(io::Error::new(
+                                io::ErrorKind::InvalidData,
+                                "Live recovery unit path is not a regular file or symlink",
+                            ));
+                        }
+                        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+                        Err(error) => return Err(error),
+                    }
+                }
+
                 let mut command = Command::new("systemctl");
                 command
                     .arg(&root_argument)
@@ -2738,6 +2781,24 @@ mod tests {
         std::fs::write(&installer_service, b"live installer service")
             .expect("live installer service should be written");
 
+        let live_sddm_directory = target_root.join("etc/sddm.conf.d");
+        std::fs::create_dir_all(&live_sddm_directory)
+            .expect("Live SDDM configuration directory should be created");
+        let live_autologin = live_sddm_directory.join("90-daia-live-autologin.conf");
+        std::fs::write(
+            &live_autologin,
+            b"[Autologin]\\nUser=daia\\nSession=plasmax11.desktop\\n",
+        )
+        .expect("Live SDDM autologin configuration should be written");
+
+        let recovery_target = systemd_directory.join("daia-recovery.target");
+        let recovery_service = systemd_directory.join("daia-recovery.service");
+
+        std::fs::write(&recovery_target, b"Live recovery target")
+            .expect("Live recovery target should be written");
+        std::fs::write(&recovery_service, b"Live recovery service")
+            .expect("Live recovery service should be written");
+
         let runner = RecordingCommandRunner::default();
         let mut executor = SystemInstallationOperationExecutor::with_dependencies(runner);
 
@@ -2750,6 +2811,18 @@ mod tests {
         assert!(
             !installer_service.exists(),
             "live installer service must be removed from the installed system"
+        );
+        assert!(
+            !live_autologin.exists(),
+            "Live SDDM autologin must not survive installation"
+        );
+        assert!(
+            !recovery_target.exists(),
+            "Live recovery target must not survive installation"
+        );
+        assert!(
+            !recovery_service.exists(),
+            "Live recovery service must not survive installation"
         );
 
         let root_argument = format!("--root={}", target_root.display());

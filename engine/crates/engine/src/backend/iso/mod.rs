@@ -385,7 +385,14 @@ mod tests {
 
         assert!(grub_contents.contains("set default=0"));
         assert!(grub_contents.contains("set timeout=5"));
-        assert!(grub_contents.contains("menuentry \"Debian AI Appliance\""));
+        for (title, mode) in [
+            ("Try DAIA Live", "live"),
+            ("Install DAIA", "install"),
+            ("DAIA Recovery Mode", "recovery"),
+        ] {
+            assert!(grub_contents.contains(&format!("menuentry \"{title}\"")));
+            assert!(grub_contents.contains(&format!("daia.mode={mode}")));
+        }
         assert!(grub_contents.contains(
     "linux /live/vmlinuz boot=live components username=daia user-fullname=\"DAIA Live User\" hostname=daia quiet"
 ));

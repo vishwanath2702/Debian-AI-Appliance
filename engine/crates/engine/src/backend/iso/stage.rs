@@ -256,12 +256,25 @@ impl GrubConfigStage {
                 "set default=0\n",
                 "set timeout={}\n",
                 "\n",
-                "menuentry \"{}\" {{\n",
-                "    linux /live/vmlinuz {}\n",
+                "menuentry \"Try DAIA Live\" {{\n",
+                "    linux /live/vmlinuz {} daia.mode=live systemd.unit=graphical.target\n",
+                "    initrd /live/initrd.img\n",
+                "}}\n",
+                "\n",
+                "menuentry \"Install DAIA\" {{\n",
+                "    linux /live/vmlinuz {} daia.mode=install systemd.unit=multi-user.target\n",
+                "    initrd /live/initrd.img\n",
+                "}}\n",
+                "\n",
+                "menuentry \"DAIA Recovery Mode\" {{\n",
+                "    linux /live/vmlinuz {} daia.mode=recovery systemd.unit=daia-recovery.target\n",
                 "    initrd /live/initrd.img\n",
                 "}}\n",
             ),
-            grub.timeout, grub.menu_title, grub.kernel_command_line,
+            grub.timeout,
+            grub.kernel_command_line,
+            grub.kernel_command_line,
+            grub.kernel_command_line,
         );
 
         fs::write(&output, contents)?;
@@ -674,7 +687,26 @@ mod tests {
 
         let contents = fs::read_to_string(output).expect("grub configuration should be readable");
 
-        assert!(contents.contains("Debian AI Appliance"));
+        for (title, mode, target) in [
+            ("Try DAIA Live", "live", "graphical.target"),
+            ("Install DAIA", "install", "multi-user.target"),
+            ("DAIA Recovery Mode", "recovery", "daia-recovery.target"),
+        ] {
+            let entry = format!("menuentry \"{title}\"");
+            let start = contents.find(&entry).expect("boot entry must exist");
+            let body = &contents[start..];
+            let end = body.find('}').expect("boot entry must close");
+            let body = &body[..end];
+
+            assert!(
+                body.contains(&format!("daia.mode={mode}")),
+                "{title} must select the correct DAIA mode"
+            );
+            assert!(
+                body.contains(&format!("systemd.unit={target}")),
+                "{title} must select the correct systemd target"
+            );
+        }
         assert!(contents.contains(
     "boot=live components username=daia user-fullname=\"DAIA Live User\" hostname=daia quiet"
 ));
