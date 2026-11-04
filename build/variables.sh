@@ -13,7 +13,7 @@ PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 # Directories
 ISO_DIR="$PROJECT_ROOT/iso"
-WORK_DIR="$PROJECT_ROOT/work"
+WORK_DIR="${DAIA_WORK_DIR:-$PROJECT_ROOT/work}"
 OUTPUT_DIR="$PROJECT_ROOT/output"
 
 MOUNT_DIR="$WORK_DIR/mount"

@@ -254,7 +254,11 @@ prepare_workspace()
 {
     log_section "Preparing payload workspace"
 
-    remove_path "$PAYLOAD_WORKSPACE"
+    if [[ -e "$PAYLOAD_WORKSPACE" || -L "$PAYLOAD_WORKSPACE" ]]
+    then
+        log_error "Payload workspace already exists; refusing overwrite: $PAYLOAD_WORKSPACE"
+        return 1
+    fi
 
     ensure_directory "$DAIA_ROOT_TARGET"
 

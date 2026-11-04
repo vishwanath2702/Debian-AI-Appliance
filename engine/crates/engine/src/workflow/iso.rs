@@ -337,11 +337,93 @@ where
     I: BuildBackend<Error = std::io::Error>,
 {
     fn prepare(build_context: &BuildContext) -> Result<(), BuildError> {
-        clean_directory(build_context.rootfs())?;
-        clean_directory(build_context.work_directory())?;
+        use std::path::Component;
 
-        if build_context.output_iso().exists() {
-            fs::remove_file(build_context.output_iso()).map_err(BuildError::Workspace)?;
+        let destinations = [
+            ("rootfs", build_context.rootfs()),
+            ("ISO work directory", build_context.work_directory()),
+            ("output ISO", build_context.output_iso()),
+        ];
+
+        for (label, path) in destinations {
+            if !path.is_absolute()
+                || path
+                    .components()
+                    .any(|component| matches!(component, Component::CurDir | Component::ParentDir))
+                || path == std::path::Path::new("/")
+            {
+                return Err(BuildError::Workspace(std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    format!(
+                        "fresh ISO build refused: unsafe {label} path: {}",
+                        path.display()
+                    ),
+                )));
+            }
+
+            for ancestor in path.ancestors().skip(1) {
+                match fs::symlink_metadata(ancestor) {
+                    Ok(metadata) if metadata.file_type().is_symlink() => {
+                        return Err(BuildError::Workspace(std::io::Error::new(
+                            std::io::ErrorKind::InvalidInput,
+                            format!(
+                                "fresh ISO build refused: symlinked ancestor: {}",
+                                ancestor.display()
+                            ),
+                        )));
+                    }
+                    Ok(metadata) if !metadata.is_dir() => {
+                        return Err(BuildError::Workspace(std::io::Error::new(
+                            std::io::ErrorKind::InvalidInput,
+                            format!(
+                                "fresh ISO build refused: non-directory ancestor: {}",
+                                ancestor.display()
+                            ),
+                        )));
+                    }
+                    Ok(_) => {}
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                    Err(error) => return Err(BuildError::Workspace(error)),
+                }
+            }
+        }
+
+        for first in 0..destinations.len() {
+            for second in (first + 1)..destinations.len() {
+                let (first_label, first_path) = destinations[first];
+                let (second_label, second_path) = destinations[second];
+
+                if first_path.starts_with(second_path) || second_path.starts_with(first_path) {
+                    return Err(BuildError::Workspace(std::io::Error::new(
+                        std::io::ErrorKind::InvalidInput,
+                        format!(
+                            "fresh ISO build refused: overlapping {first_label} and {second_label} paths"
+                        ),
+                    )));
+                }
+            }
+        }
+
+        // Fresh builds must not destroy existing workspaces or ISO images.
+        // symlink_metadata also detects dangling symlinks.
+        for (label, path) in [
+            ("rootfs", build_context.rootfs()),
+            ("ISO work directory", build_context.work_directory()),
+            ("output ISO", build_context.output_iso()),
+        ] {
+            match fs::symlink_metadata(path) {
+                Ok(_) => {
+                    return Err(BuildError::Workspace(std::io::Error::new(
+                        std::io::ErrorKind::AlreadyExists,
+                        format!(
+                            "fresh ISO build refused: {label} already exists: {}",
+                            path.display()
+                        ),
+                    )));
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => return Err(BuildError::Workspace(error)),
+            }
         }
 
         Ok(())
@@ -399,25 +481,20 @@ fn create_directory(path: &std::path::Path) -> Result<(), BuildError> {
 
 fn clean_directory(path: &std::path::Path) -> Result<(), BuildError> {
     if path.exists() {
-        match fs::remove_dir_all(path) {
-            Ok(()) => {}
-            Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
-                let status = std::process::Command::new("sudo")
-                    .arg("rm")
-                    .arg("-rf")
-                    .arg("--")
-                    .arg(path)
-                    .status()
-                    .map_err(BuildError::Workspace)?;
+        let mut entries = fs::read_dir(path).map_err(BuildError::Workspace)?;
 
-                if !status.success() {
-                    return Err(BuildError::Workspace(std::io::Error::other(format!(
-                        "failed to remove privileged build directory `{}`",
+        match entries.next() {
+            None => return Ok(()),
+            Some(Ok(_)) => {
+                return Err(BuildError::Workspace(std::io::Error::new(
+                    std::io::ErrorKind::PermissionDenied,
+                    format!(
+                        "live rootfs cleanup refused nonempty APT directory `{}`",
                         path.display()
-                    ))));
-                }
+                    ),
+                )));
             }
-            Err(error) => return Err(BuildError::Workspace(error)),
+            Some(Err(error)) => return Err(BuildError::Workspace(error)),
         }
     }
 
@@ -425,13 +502,156 @@ fn clean_directory(path: &std::path::Path) -> Result<(), BuildError> {
 
     Ok(())
 }
+#[cfg(target_os = "linux")]
+fn ensure_no_live_rootfs_mounts(rootfs: &std::path::Path) -> Result<(), BuildError> {
+    let rootfs = rootfs.canonicalize().map_err(BuildError::Workspace)?;
+    let mountinfo = fs::read_to_string("/proc/self/mountinfo").map_err(BuildError::Workspace)?;
+    validate_live_rootfs_mountinfo(&rootfs, &mountinfo)
+}
+
+#[cfg(target_os = "linux")]
+fn validate_live_rootfs_mountinfo(
+    rootfs: &std::path::Path,
+    mountinfo: &str,
+) -> Result<(), BuildError> {
+    use std::os::unix::ffi::OsStringExt;
+
+    for line in mountinfo.lines() {
+        let fields: Vec<&str> = line.split_whitespace().collect();
+
+        if fields.len() < 5 {
+            return Err(BuildError::Workspace(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "malformed mountinfo entry",
+            )));
+        }
+
+        let encoded = fields[4].as_bytes();
+        let mut decoded = Vec::new();
+        let mut index = 0;
+
+        while index < encoded.len() {
+            if encoded[index] == b'\\' {
+                if index + 3 >= encoded.len()
+                    || !encoded[index + 1..index + 4]
+                        .iter()
+                        .all(|byte| (b'0'..=b'7').contains(byte))
+                {
+                    return Err(BuildError::Workspace(std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        "invalid mountinfo path escape",
+                    )));
+                }
+
+                let value = ((encoded[index + 1] - b'0') << 6)
+                    | ((encoded[index + 2] - b'0') << 3)
+                    | (encoded[index + 3] - b'0');
+
+                decoded.push(value);
+                index += 4;
+            } else {
+                decoded.push(encoded[index]);
+                index += 1;
+            }
+        }
+
+        let mountpoint = std::path::PathBuf::from(std::ffi::OsString::from_vec(decoded));
+
+        if mountpoint.starts_with(&rootfs) {
+            return Err(BuildError::Workspace(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!(
+                    "live rootfs cleanup refused active mountpoint: {}",
+                    mountpoint.display()
+                ),
+            )));
+        }
+    }
+
+    Ok(())
+}
+
+#[cfg(not(target_os = "linux"))]
+fn ensure_no_live_rootfs_mounts(_rootfs: &std::path::Path) -> Result<(), BuildError> {
+    Err(BuildError::Workspace(std::io::Error::new(
+        std::io::ErrorKind::Unsupported,
+        "live rootfs cleanup mountpoint validation requires Linux",
+    )))
+}
 
 fn clean_live_rootfs(rootfs: &std::path::Path) -> Result<(), BuildError> {
+    use std::path::Component;
+
     let paths = [
         rootfs.join("var/cache/apt/archives"),
         rootfs.join("var/lib/apt/lists"),
     ];
 
+    // Validate every cleanup destination before modifying either directory.
+    for path in &paths {
+        if !path.is_absolute()
+            || path
+                .components()
+                .any(|component| matches!(component, Component::ParentDir))
+        {
+            return Err(BuildError::Workspace(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!("unsafe live rootfs cleanup path: {}", path.display()),
+            )));
+        }
+
+        for component_path in path.ancestors() {
+            match fs::symlink_metadata(component_path) {
+                Ok(metadata) if metadata.file_type().is_symlink() => {
+                    return Err(BuildError::Workspace(std::io::Error::new(
+                        std::io::ErrorKind::InvalidInput,
+                        format!(
+                            "live rootfs cleanup refused symlink: {}",
+                            component_path.display()
+                        ),
+                    )));
+                }
+                Ok(metadata) if !metadata.is_dir() => {
+                    return Err(BuildError::Workspace(std::io::Error::new(
+                        std::io::ErrorKind::InvalidInput,
+                        format!(
+                            "live rootfs cleanup refused non-directory: {}",
+                            component_path.display()
+                        ),
+                    )));
+                }
+                Ok(_) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => return Err(BuildError::Workspace(error)),
+            }
+        }
+    }
+
+    // Refuse mounted filesystems before modifying either APT directory.
+    ensure_no_live_rootfs_mounts(rootfs)?;
+
+    // Preflight every existing directory before creating either one.
+    for path in &paths {
+        if path.exists() {
+            let mut entries = fs::read_dir(path).map_err(BuildError::Workspace)?;
+
+            match entries.next() {
+                None => {}
+                Some(Ok(_)) => {
+                    return Err(BuildError::Workspace(std::io::Error::new(
+                        std::io::ErrorKind::PermissionDenied,
+                        format!(
+                            "live rootfs cleanup refused nonempty APT directory `{}`",
+                            path.display()
+                        ),
+                    )));
+                }
+                Some(Err(error)) => return Err(BuildError::Workspace(error)),
+            }
+        }
+    }
+
+    // Both destinations passed preflight; create missing directories.
     for path in paths {
         clean_directory(&path)?;
     }
@@ -1576,6 +1796,347 @@ mod tests {
         assert!(rootfs.join("usr/share/daia/appliance-profiles").is_dir());
 
         assert!(rootfs.join("usr/share/daia/assets").is_dir());
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn live_rootfs_mountinfo_rejects_rootfs_mountpoint() {
+        let rootfs = std::path::Path::new("/tmp/daia-test-rootfs");
+        let mountinfo = "42 1 0:42 / /tmp/daia-test-rootfs rw - tmpfs tmpfs rw\n";
+
+        assert!(super::validate_live_rootfs_mountinfo(rootfs, mountinfo).is_err());
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn live_rootfs_mountinfo_rejects_nested_mountpoint() {
+        let rootfs = std::path::Path::new("/tmp/daia-test-rootfs");
+        let mountinfo =
+            "42 1 0:42 / /tmp/daia-test-rootfs/var/cache/apt/archives rw - tmpfs tmpfs rw\n";
+
+        assert!(super::validate_live_rootfs_mountinfo(rootfs, mountinfo).is_err());
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn live_rootfs_mountinfo_decodes_escaped_spaces() {
+        let rootfs = std::path::Path::new("/tmp/daia test rootfs");
+        let mountinfo =
+            r"42 1 0:42 / /tmp/daia\040test\040rootfs/var/lib/apt/lists rw - tmpfs tmpfs rw";
+
+        assert!(super::validate_live_rootfs_mountinfo(rootfs, mountinfo).is_err());
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn live_rootfs_mountinfo_allows_unrelated_mountpoint() {
+        let rootfs = std::path::Path::new("/tmp/daia-test-rootfs");
+        let mountinfo = "42 1 0:42 / /tmp/unrelated-mount rw - tmpfs tmpfs rw\n";
+
+        assert!(super::validate_live_rootfs_mountinfo(rootfs, mountinfo).is_ok());
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn live_rootfs_mountinfo_rejects_malformed_entry() {
+        let rootfs = std::path::Path::new("/tmp/daia-test-rootfs");
+
+        assert!(super::validate_live_rootfs_mountinfo(rootfs, "invalid entry\n").is_err());
+
+        let invalid_escape = r"42 1 0:42 / /tmp/daia\04x-rootfs rw - tmpfs tmpfs rw";
+
+        assert!(super::validate_live_rootfs_mountinfo(rootfs, invalid_escape).is_err());
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn live_rootfs_cleanup_preserves_empty_apt_directories() {
+        use std::os::unix::fs::MetadataExt;
+
+        let temp = tempfile::tempdir().expect("temporary directory");
+        let rootfs = temp.path().join("rootfs");
+
+        let archives = rootfs.join("var/cache/apt/archives");
+        let lists = rootfs.join("var/lib/apt/lists");
+
+        fs::create_dir_all(&archives).expect("create archives");
+        fs::create_dir_all(&lists).expect("create lists");
+
+        let archives_before = fs::metadata(&archives).expect("archives metadata");
+        let lists_before = fs::metadata(&lists).expect("lists metadata");
+
+        super::clean_live_rootfs(&rootfs).expect("empty APT cleanup should succeed");
+
+        let archives_after = fs::metadata(&archives).expect("archives metadata");
+        let lists_after = fs::metadata(&lists).expect("lists metadata");
+
+        assert_eq!(archives_before.dev(), archives_after.dev());
+        assert_eq!(archives_before.ino(), archives_after.ino());
+
+        assert_eq!(lists_before.dev(), lists_after.dev());
+        assert_eq!(lists_before.ino(), lists_after.ino());
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn live_rootfs_cleanup_refuses_nonempty_apt_directories() {
+        use std::os::unix::fs::MetadataExt;
+
+        let temp = tempfile::tempdir().expect("temporary directory");
+        let rootfs = temp.path().join("rootfs");
+
+        let archives = rootfs.join("var/cache/apt/archives");
+        let lists = rootfs.join("var/lib/apt/lists");
+
+        fs::create_dir_all(&archives).expect("create archives");
+        fs::create_dir_all(&lists).expect("create lists");
+
+        fs::write(archives.join("sentinel"), b"preserve").expect("create archives sentinel");
+        fs::write(lists.join("sentinel"), b"preserve").expect("create lists sentinel");
+
+        let archives_before = fs::metadata(&archives).expect("archives metadata");
+        let lists_before = fs::metadata(&lists).expect("lists metadata");
+
+        let result = super::clean_live_rootfs(&rootfs);
+
+        assert!(result.is_err(), "nonempty APT cleanup must fail closed");
+
+        assert_eq!(
+            fs::read(archives.join("sentinel")).expect("archives sentinel"),
+            b"preserve"
+        );
+        assert_eq!(
+            fs::read(lists.join("sentinel")).expect("lists sentinel"),
+            b"preserve"
+        );
+
+        let archives_after = fs::metadata(&archives).expect("archives metadata");
+        let lists_after = fs::metadata(&lists).expect("lists metadata");
+
+        assert_eq!(archives_before.dev(), archives_after.dev());
+        assert_eq!(archives_before.ino(), archives_after.ino());
+        assert_eq!(lists_before.dev(), lists_after.dev());
+        assert_eq!(lists_before.ino(), lists_after.ino());
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn live_rootfs_cleanup_preflights_both_directories_before_creation() {
+        let temp = tempfile::tempdir().expect("temporary directory");
+        let rootfs = temp.path().join("rootfs");
+
+        let archives = rootfs.join("var/cache/apt/archives");
+        let lists = rootfs.join("var/lib/apt/lists");
+
+        fs::create_dir_all(&lists).expect("create lists");
+        fs::write(lists.join("sentinel"), b"preserve").expect("create lists sentinel");
+
+        assert!(!archives.exists(), "archives must initially be absent");
+
+        let result = super::clean_live_rootfs(&rootfs);
+
+        assert!(result.is_err(), "nonempty lists must reject cleanup");
+        assert!(
+            !archives.exists(),
+            "archives must remain absent when lists preflight fails"
+        );
+        assert_eq!(
+            fs::read(lists.join("sentinel")).expect("lists sentinel"),
+            b"preserve"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn live_rootfs_cleanup_validates_all_paths_before_deletion() {
+        let temp = tempfile::tempdir().expect("temporary directory");
+        let rootfs = temp.path().join("rootfs");
+        let external = temp.path().join("external");
+
+        let archives = rootfs.join("var/cache/apt/archives");
+        fs::create_dir_all(&archives).expect("create archives");
+        fs::write(archives.join("sentinel"), b"preserve").expect("write archives sentinel");
+
+        fs::create_dir_all(rootfs.join("var/lib/apt")).expect("create lists parent");
+        fs::create_dir_all(&external).expect("create external directory");
+
+        std::os::unix::fs::symlink(&external, rootfs.join("var/lib/apt/lists"))
+            .expect("create unsafe lists symlink");
+
+        let result = super::clean_live_rootfs(&rootfs);
+
+        assert!(result.is_err(), "unsafe cleanup must be rejected");
+        assert_eq!(
+            fs::read(archives.join("sentinel")).unwrap(),
+            b"preserve",
+            "cleanup must validate every path before deleting anything"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn live_rootfs_cleanup_rejects_symlinked_parent() {
+        let temp = tempfile::tempdir().expect("temporary directory");
+        let rootfs = temp.path().join("rootfs");
+        let external = temp.path().join("external");
+
+        fs::create_dir_all(rootfs.join("var/cache")).expect("create cache parent");
+        fs::create_dir_all(external.join("apt/archives")).expect("create external APT directory");
+        fs::write(external.join("apt/archives/sentinel"), b"preserve").expect("write sentinel");
+
+        std::os::unix::fs::symlink(external.join("apt"), rootfs.join("var/cache/apt"))
+            .expect("create unsafe parent symlink");
+
+        let result = super::clean_live_rootfs(&rootfs);
+
+        assert!(result.is_err(), "symlinked parent must be rejected");
+        assert_eq!(
+            fs::read(external.join("apt/archives/sentinel")).unwrap(),
+            b"preserve"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn live_rootfs_cleanup_rejects_symlinked_apt_directory() {
+        let temp = tempfile::tempdir().expect("temporary directory");
+        let rootfs = temp.path().join("rootfs");
+        let external = temp.path().join("external");
+
+        fs::create_dir_all(rootfs.join("var/cache/apt")).expect("create APT parent");
+        fs::create_dir_all(&external).expect("create external directory");
+        fs::write(external.join("sentinel"), b"preserve").expect("write external sentinel");
+
+        std::os::unix::fs::symlink(&external, rootfs.join("var/cache/apt/archives"))
+            .expect("create unsafe APT symlink");
+
+        let result = super::clean_live_rootfs(&rootfs);
+
+        assert!(result.is_err(), "symlinked cleanup path must be rejected");
+        assert_eq!(fs::read(external.join("sentinel")).unwrap(), b"preserve");
+    }
+
+    #[test]
+    fn fresh_build_refuses_existing_paths_without_deleting_contents() {
+        let temp = tempfile::tempdir().expect("temporary directory");
+
+        for existing in ["rootfs", "iso-build", "output.iso"] {
+            let rootfs = temp.path().join("rootfs");
+            let work = temp.path().join("iso-build");
+            let output = temp.path().join("output.iso");
+
+            let selected = temp.path().join(existing);
+            if existing == "output.iso" {
+                fs::write(&selected, b"preserve").expect("create output fixture");
+            } else {
+                fs::create_dir_all(&selected).expect("create directory fixture");
+                fs::write(selected.join("sentinel"), b"preserve").expect("create sentinel");
+            }
+
+            let context = BuildContext::new(
+                &rootfs,
+                temp.path().join("source.iso"),
+                &work,
+                &output,
+                temp.path().join("assets"),
+                BootstrapConfig::default(),
+            );
+
+            let result = super::IsoPipeline::<
+                super::MmdebstrapBootstrapper,
+                super::RootfsBackend,
+                super::SystemLiveRootfsPreparer,
+                super::SystemRootfsVerifier,
+                super::IsoBackend,
+            >::prepare(&context);
+
+            assert!(result.is_err(), "{existing} must be rejected");
+
+            if existing == "output.iso" {
+                assert_eq!(fs::read(&selected).unwrap(), b"preserve");
+            } else {
+                assert_eq!(fs::read(selected.join("sentinel")).unwrap(), b"preserve");
+            }
+
+            if existing == "output.iso" {
+                fs::remove_file(selected).unwrap();
+            } else {
+                fs::remove_dir_all(selected).unwrap();
+            }
+        }
+    }
+
+    #[test]
+    fn fresh_build_rejects_relative_and_overlapping_paths() {
+        let temp = tempfile::tempdir().expect("temporary directory");
+
+        for (rootfs, work, output) in [
+            (
+                std::path::PathBuf::from("relative/rootfs"),
+                temp.path().join("work"),
+                temp.path().join("output.iso"),
+            ),
+            (
+                temp.path().join("work/rootfs"),
+                temp.path().join("work"),
+                temp.path().join("output.iso"),
+            ),
+            (
+                temp.path().join("rootfs"),
+                temp.path().join("rootfs/iso-build"),
+                temp.path().join("output.iso"),
+            ),
+        ] {
+            let context = BuildContext::new(
+                rootfs,
+                temp.path().join("source.iso"),
+                work,
+                output,
+                temp.path().join("assets"),
+                BootstrapConfig::default(),
+            );
+
+            let result = super::IsoPipeline::<
+                super::MmdebstrapBootstrapper,
+                super::RootfsBackend,
+                super::SystemLiveRootfsPreparer,
+                super::SystemRootfsVerifier,
+                super::IsoBackend,
+            >::prepare(&context);
+
+            assert!(result.is_err(), "unsafe build paths must be rejected");
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn fresh_build_rejects_symlinked_parent() {
+        let temp = tempfile::tempdir().expect("temporary directory");
+        let real = temp.path().join("real");
+        let linked = temp.path().join("linked");
+
+        fs::create_dir(&real).expect("create real directory");
+        std::os::unix::fs::symlink(&real, &linked).expect("create parent symlink");
+
+        let context = BuildContext::new(
+            linked.join("rootfs"),
+            temp.path().join("source.iso"),
+            temp.path().join("iso-build"),
+            temp.path().join("output.iso"),
+            temp.path().join("assets"),
+            BootstrapConfig::default(),
+        );
+
+        let result = super::IsoPipeline::<
+            super::MmdebstrapBootstrapper,
+            super::RootfsBackend,
+            super::SystemLiveRootfsPreparer,
+            super::SystemRootfsVerifier,
+            super::IsoBackend,
+        >::prepare(&context);
+
+        assert!(result.is_err(), "symlinked parent must be rejected");
+        assert!(!real.join("rootfs").exists());
     }
 
     #[test]
