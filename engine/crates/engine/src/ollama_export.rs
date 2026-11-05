@@ -56,6 +56,7 @@ struct OpenedOllamaExportPlan {
     blobs: Vec<OpenedExportBlob>,
     manifest_relative_path: PathBuf,
     manifest_size_bytes: u64,
+    manifest_sha256: String,
     total_bytes: u64,
 }
 
@@ -76,6 +77,40 @@ impl OpenedOllamaExportPlan {
             return Err(invalid("invalid Ollama export manifest identity"));
         }
 
+        use std::os::unix::fs::FileExt;
+
+        if manifest_size > MAX_OLLAMA_EXPORT_MANIFEST_BYTES {
+            return Err(invalid("Ollama manifest exceeds maximum size"));
+        }
+
+        let mut bytes = Vec::new();
+        let mut offset = 0_u64;
+        let mut buffer = [0_u8; 64 * 1024];
+
+        loop {
+            let count = match manifest.read_at(&mut buffer, offset) {
+                Ok(0) => break,
+                Ok(count) => count,
+                Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+                Err(error) => return Err(error),
+            };
+
+            offset = offset
+                .checked_add(count as u64)
+                .ok_or_else(|| invalid("manifest size overflow"))?;
+
+            if offset > manifest_size {
+                return Err(invalid("Ollama manifest size mismatch"));
+            }
+
+            bytes.extend_from_slice(&buffer[..count]);
+        }
+
+        if offset != manifest_size {
+            return Err(invalid("Ollama manifest size mismatch"));
+        }
+
+        let manifest_sha256 = format!("{:x}", Sha256::digest(&bytes));
         let mut total_bytes = manifest_size;
 
         for blob in &blobs {
@@ -89,6 +124,7 @@ impl OpenedOllamaExportPlan {
             blobs,
             manifest_relative_path: manifest_relative_path.to_path_buf(),
             manifest_size_bytes: manifest_size,
+            manifest_sha256,
             total_bytes,
         })
     }
@@ -242,6 +278,13 @@ impl std::error::Error for ExportPublicationError {
 
 /// Classifies the outcome of rename and parent-directory synchronization.
 #[cfg(target_os = "linux")]
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "publication outcome classification retained for future exporter publication integration"
+    )
+)]
 fn classify_export_publication_outcome(renamed: bool, synced: bool) -> ExportPublicationOutcome {
     if !renamed {
         ExportPublicationOutcome::NotPublished
@@ -714,6 +757,294 @@ pub fn create_export_staging_from_opened_parent(
     ))
 }
 
+/// Create staging beneath an independently validated worker-private directory.
+///
+/// The caller must obtain `worker_state` from the trusted systemd worker-state
+/// validation path. This function checks ownership and permissions again,
+/// but cannot establish the provenance of an arbitrary supplied descriptor.
+///
+/// This does not authorize exports or publish staged artifacts.
+#[cfg(target_os = "linux")]
+pub fn create_worker_private_export_staging(
+    worker_state: &std::os::fd::OwnedFd,
+) -> io::Result<HandleAnchoredExportStaging> {
+    create_worker_private_export_staging_with_open(worker_state, |parent, name| {
+        rustix::fs::openat(
+            parent,
+            name,
+            rustix::fs::OFlags::RDONLY
+                | rustix::fs::OFlags::DIRECTORY
+                | rustix::fs::OFlags::NOFOLLOW
+                | rustix::fs::OFlags::CLOEXEC,
+            rustix::fs::Mode::empty(),
+        )
+        .map_err(Into::into)
+    })
+}
+
+#[cfg(target_os = "linux")]
+fn create_worker_private_export_staging_with_open<F>(
+    worker_state: &std::os::fd::OwnedFd,
+    mut open_directory: F,
+) -> io::Result<HandleAnchoredExportStaging>
+where
+    F: FnMut(&std::os::fd::OwnedFd, &str) -> io::Result<std::os::fd::OwnedFd>,
+{
+    use rustix::fs::{FileType, Mode};
+
+    let worker_uid = rustix::process::geteuid().as_raw();
+    if worker_uid == 0 {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "worker-private staging requires a non-root worker",
+        ));
+    }
+
+    let state = rustix::fs::fstat(worker_state)?;
+    if FileType::from_raw_mode(state.st_mode) != FileType::Directory
+        || state.st_uid != worker_uid
+        || state.st_mode & 0o7777 != 0o700
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "worker state directory is not private and worker-owned",
+        ));
+    }
+
+    // Clone before mkdirat so descriptor cloning cannot orphan staging.
+    let parent = worker_state.try_clone()?;
+
+    for _ in 0..16 {
+        let mut random = [0_u8; 16];
+        let filled = rustix::rand::getrandom(&mut random, rustix::rand::GetRandomFlags::empty())?;
+
+        if filled != random.len() {
+            return Err(io::Error::other("incomplete worker staging randomness"));
+        }
+
+        let suffix: String = random.iter().map(|byte| format!("{byte:02x}")).collect();
+        let name = format!(".daia-export-{suffix}");
+
+        match rustix::fs::mkdirat(worker_state, name.as_str(), Mode::from_raw_mode(0o700)) {
+            Ok(()) => {
+                let directory = match open_directory(worker_state, name.as_str()) {
+                    Ok(directory) => directory,
+                    Err(error) => {
+                        // No directory descriptor was obtained. Do not unlink
+                        // an entry whose identity cannot be verified.
+                        return Err(error);
+                    }
+                };
+
+                let staging = HandleAnchoredExportStaging {
+                    parent,
+                    directory,
+                    name,
+                    published: false,
+                };
+
+                let metadata = rustix::fs::fstat(&staging.directory)?;
+                if metadata.st_uid != worker_uid
+                    || metadata.st_mode & 0o7777 != 0o700
+                    || metadata.st_dev != state.st_dev
+                {
+                    return Err(io::Error::new(
+                        io::ErrorKind::PermissionDenied,
+                        "worker staging directory has unexpected metadata",
+                    ));
+                }
+
+                return Ok(staging);
+            }
+            Err(rustix::io::Errno::EXIST) => continue,
+            Err(error) => return Err(error.into()),
+        }
+    }
+
+    Err(io::Error::new(
+        io::ErrorKind::AlreadyExists,
+        "unable to allocate worker-private export staging",
+    ))
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod worker_private_staging_tests {
+    use super::*;
+    use std::os::unix::fs::PermissionsExt;
+
+    fn private_state() -> tempfile::TempDir {
+        let state = tempfile::tempdir().unwrap();
+        std::fs::set_permissions(state.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+        state
+    }
+
+    #[test]
+    fn creates_worker_owned_private_staging_and_cleans_up() {
+        if rustix::process::geteuid().as_raw() == 0 {
+            return;
+        }
+
+        let state = private_state();
+        let state_fd = std::fs::File::open(state.path()).unwrap();
+
+        let staging = create_worker_private_export_staging(&state_fd.into()).unwrap();
+
+        let staging_path = state.path().join(staging.name());
+        let metadata = std::fs::symlink_metadata(&staging_path).unwrap();
+
+        assert!(metadata.is_dir());
+        assert_eq!(metadata.permissions().mode() & 0o7777, 0o700);
+
+        drop(staging);
+
+        assert!(!staging_path.exists());
+    }
+
+    #[test]
+    fn removes_populated_staging_without_following_symlinks() {
+        if rustix::process::geteuid().as_raw() == 0 {
+            return;
+        }
+
+        let state = private_state();
+        let state_fd: std::os::fd::OwnedFd = std::fs::File::open(state.path()).unwrap().into();
+
+        let staging = create_worker_private_export_staging(&state_fd).unwrap();
+        let staging_path = state.path().join(staging.name());
+
+        let nested = staging_path.join("nested");
+        std::fs::create_dir(&nested).unwrap();
+        std::fs::write(nested.join("artifact"), b"model data").unwrap();
+
+        let outside = state.path().join("outside");
+        std::fs::write(&outside, b"preserve").unwrap();
+
+        std::os::unix::fs::symlink(&outside, nested.join("outside-link")).unwrap();
+
+        drop(staging);
+
+        assert!(!staging_path.exists());
+        assert_eq!(std::fs::read(&outside).unwrap(), b"preserve");
+    }
+
+    #[test]
+    fn rejects_insecure_worker_state_permissions() {
+        if rustix::process::geteuid().as_raw() == 0 {
+            return;
+        }
+
+        let state = private_state();
+
+        std::fs::set_permissions(state.path(), std::fs::Permissions::from_mode(0o750)).unwrap();
+
+        let state_fd: std::os::fd::OwnedFd = std::fs::File::open(state.path()).unwrap().into();
+
+        assert!(create_worker_private_export_staging(&state_fd).is_err());
+    }
+
+    #[test]
+    fn rejects_non_directory_state_descriptor() {
+        if rustix::process::geteuid().as_raw() == 0 {
+            return;
+        }
+
+        let state = private_state();
+        let file_path = state.path().join("not-a-directory");
+        std::fs::write(&file_path, b"invalid").unwrap();
+
+        let descriptor: std::os::fd::OwnedFd = std::fs::File::open(&file_path).unwrap().into();
+
+        assert!(create_worker_private_export_staging(&descriptor).is_err());
+    }
+
+    #[test]
+    fn failed_staging_open_does_not_delete_unverified_entry() {
+        if rustix::process::geteuid().as_raw() == 0 {
+            return;
+        }
+
+        let state = private_state();
+        let state_fd: std::os::fd::OwnedFd = std::fs::File::open(state.path()).unwrap().into();
+
+        let mut created_name = None;
+
+        let result = create_worker_private_export_staging_with_open(&state_fd, |_, name| {
+            created_name = Some(name.to_owned());
+            Err(io::Error::from(io::ErrorKind::PermissionDenied))
+        });
+
+        assert!(result.is_err());
+
+        let name = created_name.expect("open failure was not exercised");
+        let staging_path = state.path().join(&name);
+
+        assert!(staging_path.is_dir());
+
+        // Test-only cleanup of the known disposable directory.
+        std::fs::remove_dir(&staging_path).unwrap();
+    }
+
+    #[test]
+    fn rejected_staging_metadata_triggers_cleanup() {
+        if rustix::process::geteuid().as_raw() == 0 {
+            return;
+        }
+
+        let state = private_state();
+        let state_fd: std::os::fd::OwnedFd = std::fs::File::open(state.path()).unwrap().into();
+
+        let mut created_name = None;
+
+        let result = create_worker_private_export_staging_with_open(&state_fd, |parent, name| {
+            created_name = Some(name.to_owned());
+
+            let directory = rustix::fs::openat(
+                parent,
+                name,
+                rustix::fs::OFlags::RDONLY
+                    | rustix::fs::OFlags::DIRECTORY
+                    | rustix::fs::OFlags::NOFOLLOW
+                    | rustix::fs::OFlags::CLOEXEC,
+                rustix::fs::Mode::empty(),
+            )
+            .map_err(io::Error::from)?;
+
+            // Simulate unexpected staging metadata after opening.
+            rustix::fs::fchmod(&directory, rustix::fs::Mode::from_raw_mode(0o750))
+                .map_err(io::Error::from)?;
+
+            Ok(directory)
+        });
+
+        let error = match result {
+            Ok(_) => panic!("insecure staging metadata was accepted"),
+            Err(error) => error,
+        };
+
+        assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
+
+        let name = created_name.expect("staging open was not exercised");
+        let staging_path = state.path().join(name);
+
+        assert!(
+            !staging_path.exists(),
+            "rejected staging directory was not cleaned up"
+        );
+    }
+
+    #[test]
+    fn rejects_root_worker() {
+        if rustix::process::geteuid().as_raw() != 0 {
+            return;
+        }
+
+        let state = private_state();
+        let descriptor: std::os::fd::OwnedFd = std::fs::File::open(state.path()).unwrap().into();
+
+        assert!(create_worker_private_export_staging(&descriptor).is_err());
+    }
+}
+
 /// Creates an automatically cleaned-up private export staging directory.
 ///
 /// The destination parent must already exist and must not be a symlink.
@@ -893,14 +1224,22 @@ fn open_ollama_export_blob(
 #[cfg(target_os = "linux")]
 fn prepare_opened_export_manifest(
     mut manifest_file: fs::File,
-) -> io::Result<(fs::File, Manifest, u64)> {
+) -> io::Result<(fs::File, Manifest, u64, String)> {
     use std::io::{Seek, SeekFrom};
 
-    let (manifest, manifest_size) = read_ollama_export_manifest(&mut manifest_file)?;
+    let mut bytes = Vec::new();
+    (&mut manifest_file)
+        .take(MAX_OLLAMA_EXPORT_MANIFEST_BYTES + 1)
+        .read_to_end(&mut bytes)?;
+
+    let manifest = parse_ollama_export_manifest(&bytes)?;
+    let manifest_size =
+        u64::try_from(bytes.len()).map_err(|_| invalid("manifest size overflow"))?;
+    let digest = format!("{:x}", Sha256::digest(&bytes));
 
     manifest_file.seek(SeekFrom::Start(0))?;
 
-    Ok((manifest_file, manifest, manifest_size))
+    Ok((manifest_file, manifest, manifest_size, digest))
 }
 
 /// Collects unique, validated blob descriptors without reopening duplicates.
@@ -943,11 +1282,19 @@ fn assemble_opened_ollama_export_plan(
     blob_root_fd: &std::os::fd::OwnedFd,
     manifest_relative_path: &Path,
 ) -> io::Result<OpenedOllamaExportPlan> {
-    let (manifest_file, manifest, manifest_size) = prepare_opened_export_manifest(manifest_file)?;
+    let (manifest_file, manifest, manifest_size, digest) =
+        prepare_opened_export_manifest(manifest_file)?;
 
     let blobs = collect_opened_export_blobs(blob_root_fd, &manifest)?;
 
-    OpenedOllamaExportPlan::new(manifest_file, blobs, manifest_size, manifest_relative_path)
+    let plan =
+        OpenedOllamaExportPlan::new(manifest_file, blobs, manifest_size, manifest_relative_path)?;
+
+    if plan.manifest_sha256 != digest {
+        return Err(invalid("Ollama manifest changed after parsing"));
+    }
+
+    Ok(plan)
 }
 
 /// Copies a retained blob descriptor with the existing SHA-256 verification.
@@ -1123,6 +1470,7 @@ where
 fn write_opened_export_manifest(
     manifest: &mut fs::File,
     expected_size: u64,
+    expected_sha256: &str,
     destination_directory: &std::os::fd::OwnedFd,
     destination_name: &std::ffi::OsStr,
 ) -> io::Result<u64> {
@@ -1132,15 +1480,107 @@ fn write_opened_export_manifest(
 
     let mut destination = create_opened_export_file(destination_directory, destination_name)?;
 
+    if expected_sha256.len() != 64 || !expected_sha256.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return Err(invalid("invalid expected manifest digest"));
+    }
+
     let mut limited = manifest.take(expected_size.saturating_add(1));
-    let copied = io::copy(&mut limited, &mut destination)?;
+    let mut hasher = Sha256::new();
+    let mut buffer = [0_u8; 64 * 1024];
+    let mut copied = 0_u64;
+
+    loop {
+        let count = match limited.read(&mut buffer) {
+            Ok(0) => break,
+            Ok(count) => count,
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+            Err(error) => return Err(error),
+        };
+
+        copied = copied
+            .checked_add(count as u64)
+            .ok_or_else(|| invalid("manifest size overflow"))?;
+
+        if copied > expected_size {
+            return Err(invalid("Ollama export manifest size mismatch"));
+        }
+
+        destination.write_all(&buffer[..count])?;
+        hasher.update(&buffer[..count]);
+    }
 
     if copied != expected_size {
         return Err(invalid("Ollama export manifest size mismatch"));
     }
 
+    if format!("{:x}", hasher.finalize()) != expected_sha256 {
+        return Err(invalid("Ollama export manifest SHA-256 mismatch"));
+    }
+
     destination.sync_all()?;
     Ok(copied)
+}
+
+/// STEP_3434_SOURCE_VERIFIED
+/// Derive expected export artifacts from retained, parsed source metadata.
+///
+/// This is an integrity description, not an authorization grant.
+/// The caller must independently authorize and isolate source and staging.
+#[cfg(target_os = "linux")]
+fn source_verified_ollama_operation(
+    plan: &OpenedOllamaExportPlan,
+    destination_name: &std::ffi::OsStr,
+) -> io::Result<model::ModelExportOperation> {
+    use model::{
+        ModelExportArtifact, ModelExportOperation, ModelExportOperationId, ModelExportSource,
+    };
+
+    let destination_name = destination_name
+        .to_str()
+        .ok_or_else(|| invalid("non-UTF8 export destination name"))?;
+
+    let manifest_path = format!(
+        "manifests/{}",
+        plan.manifest_relative_path
+            .to_str()
+            .ok_or_else(|| invalid("non-UTF8 Ollama manifest path"))?
+    );
+
+    let mut artifacts = Vec::with_capacity(
+        plan.blobs
+            .len()
+            .checked_add(1)
+            .ok_or_else(|| invalid("artifact count overflow"))?,
+    );
+
+    artifacts.push(
+        ModelExportArtifact::new(
+            manifest_path,
+            plan.manifest_sha256.clone(),
+            plan.manifest_size_bytes,
+        )
+        .map_err(|error| invalid(format!("invalid manifest artifact: {error}")))?,
+    );
+
+    for blob in &plan.blobs {
+        let filename = blob_filename(&blob.digest)?;
+        let hash = blob
+            .digest
+            .strip_prefix("sha256:")
+            .ok_or_else(|| invalid("invalid Ollama blob digest"))?
+            .to_ascii_lowercase();
+
+        artifacts.push(
+            ModelExportArtifact::new(format!("blobs/{filename}"), hash, blob.size_bytes)
+                .map_err(|error| invalid(format!("invalid blob artifact: {error}")))?,
+        );
+    }
+
+    let id = ModelExportOperationId::new("source-verified-ollama")
+        .map_err(|error| invalid(format!("invalid operation id: {error}")))?;
+
+    ModelExportOperation::new(id, ModelExportSource::Ollama, destination_name, artifacts)
+        .map_err(|error| invalid(format!("invalid export operation: {error}")))
 }
 
 /// Writes an opened Ollama export plan into an existing staging directory.
@@ -1170,6 +1610,7 @@ fn write_opened_ollama_export_plan(
     let mut written = write_opened_export_manifest(
         &mut plan.manifest,
         plan.manifest_size_bytes,
+        &plan.manifest_sha256,
         &manifest_parent,
         manifest_name,
     )?;
@@ -1331,8 +1772,21 @@ fn export_ollama_model_into_staging(
     let mut plan = assemble_opened_ollama_export_plan(manifest, &blobs, manifest_relative_path)
         .map_err(not_published)?;
 
+    // Derive integrity expectations from opened source files, never
+    // from client-supplied operation hashes.
+    let verified_operation =
+        source_verified_ollama_operation(&plan, destination_name).map_err(not_published)?;
+
     write_opened_ollama_export_plan(&mut plan, &staging.directory).map_err(not_published)?;
 
+    crate::export_artifact_verification::verify_declared_export_artifacts(
+        &staging.directory,
+        &verified_operation,
+    )
+    .map_err(not_published)?;
+
+    // Integrity verification does not establish same-UID isolation.
+    // Production authorization remains disabled at the broker boundary.
     staging.publish(destination_name)
 }
 
@@ -2471,16 +2925,26 @@ mod tests {
         let mut manifest = fs::File::open(&source).unwrap();
         let name = OsStr::new("latest");
 
-        let copied =
-            write_opened_export_manifest(&mut manifest, bytes.len() as u64, &destination_fd, name)
-                .unwrap();
+        let copied = write_opened_export_manifest(
+            &mut manifest,
+            bytes.len() as u64,
+            &format!("{:x}", Sha256::digest(bytes)),
+            &destination_fd,
+            name,
+        )
+        .unwrap();
 
         assert_eq!(copied, bytes.len() as u64);
         assert_eq!(fs::read(destination.join(name)).unwrap(), bytes);
 
-        let error =
-            write_opened_export_manifest(&mut manifest, bytes.len() as u64, &destination_fd, name)
-                .unwrap_err();
+        let error = write_opened_export_manifest(
+            &mut manifest,
+            bytes.len() as u64,
+            &format!("{:x}", Sha256::digest(bytes)),
+            &destination_fd,
+            name,
+        )
+        .unwrap_err();
 
         assert_eq!(error.kind(), io::ErrorKind::AlreadyExists);
         assert_eq!(fs::read(destination.join(name)).unwrap(), bytes);
@@ -2517,6 +2981,7 @@ mod tests {
             let error = write_opened_export_manifest(
                 &mut manifest,
                 expected_size,
+                &format!("{:x}", Sha256::digest(bytes)),
                 &destination_fd,
                 OsStr::new(name),
             )
@@ -2524,6 +2989,46 @@ mod tests {
 
             assert_eq!(error.kind(), io::ErrorKind::InvalidData);
         }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn opened_export_manifest_rejects_same_size_mutation() {
+        use rustix::fs::{Mode, OFlags};
+        use std::ffi::OsStr;
+
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("manifest");
+        let before = b"manifest-data";
+        let after = b"manifest-DATA";
+        assert_eq!(before.len(), after.len());
+
+        fs::write(&source, before).unwrap();
+        let expected = format!("{:x}", Sha256::digest(before));
+        let mut manifest = fs::File::open(&source).unwrap();
+
+        let destination = directory.path().join("destination");
+        fs::create_dir(&destination).unwrap();
+        let destination_fd = rustix::fs::openat(
+            rustix::fs::CWD,
+            &destination,
+            OFlags::RDONLY | OFlags::DIRECTORY | OFlags::CLOEXEC,
+            Mode::empty(),
+        )
+        .unwrap();
+
+        fs::write(&source, after).unwrap();
+
+        let error = write_opened_export_manifest(
+            &mut manifest,
+            before.len() as u64,
+            &expected,
+            &destination_fd,
+            OsStr::new("latest"),
+        )
+        .unwrap_err();
+
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
     }
 
     #[cfg(target_os = "linux")]
@@ -2791,7 +3296,8 @@ mod tests {
         fs::write(&path, bytes).unwrap();
 
         let file = fs::File::open(&path).unwrap();
-        let (mut retained, parsed, size) = prepare_opened_export_manifest(file).unwrap();
+        let (mut retained, parsed, size, digest) = prepare_opened_export_manifest(file).unwrap();
+        assert_eq!(digest, format!("{:x}", Sha256::digest(bytes)));
 
         assert_eq!(parsed.layers.len(), 1);
         assert_eq!(parsed.layers[0].size, 7);

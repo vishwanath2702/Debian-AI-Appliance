@@ -132,6 +132,13 @@ pub fn receive_export_ipc_probe(socket: &std::os::fd::OwnedFd) -> std::io::Resul
 /// The expected values must originate from trusted process supervision,
 /// not from the IPC message or an untrusted client.
 #[cfg(target_os = "linux")]
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "IPC peer verification retained for authenticated broker-worker integration"
+    )
+)]
 fn verify_export_ipc_peer(
     socket: &std::os::fd::OwnedFd,
     expected: rustix::net::UCred,
@@ -323,6 +330,92 @@ fn validate_export_worker_staging_directory_owner(
     }
 
     Ok(())
+}
+
+/// Require an authenticated invoker to differ from the actual worker UID.
+///
+/// `invoking_uid` must originate from a trusted, authorized broker identity,
+/// never from client-controlled request data. This check is deliberately
+/// separate from worker startup because no invoker is authenticated there.
+///
+/// This check alone does not authorize an export or establish process
+/// isolation against a compromised worker identity.
+#[cfg(target_os = "linux")]
+pub fn validate_export_worker_invoker_separation(
+    staging_directory: std::os::fd::BorrowedFd<'_>,
+    invoking_uid: u32,
+) -> std::io::Result<()> {
+    use std::io::{Error, ErrorKind};
+
+    // Reuse the established trusted-worker ownership check.
+    validate_export_worker_staging_directory(staging_directory)?;
+
+    let worker_uid = rustix::process::geteuid().as_raw();
+
+    if invoking_uid == 0 || invoking_uid == worker_uid {
+        return Err(Error::new(
+            ErrorKind::PermissionDenied,
+            "export worker and invoking user must have distinct non-root UIDs",
+        ));
+    }
+
+    Ok(())
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod worker_invoker_separation_tests {
+    use super::*;
+    use std::os::fd::AsFd;
+    use std::os::unix::fs::PermissionsExt;
+
+    #[test]
+    fn rejects_same_uid() {
+        let directory = tempfile::tempdir().unwrap();
+        std::fs::set_permissions(directory.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+
+        let file = std::fs::File::open(directory.path()).unwrap();
+        let uid = rustix::process::geteuid().as_raw();
+
+        assert!(validate_export_worker_invoker_separation(file.as_fd(), uid).is_err());
+    }
+
+    #[test]
+    fn rejects_root_invoker() {
+        let directory = tempfile::tempdir().unwrap();
+        let file = std::fs::File::open(directory.path()).unwrap();
+
+        assert!(validate_export_worker_invoker_separation(file.as_fd(), 0).is_err());
+    }
+
+    #[test]
+    fn accepts_distinct_nonroot_uid_with_private_worker_staging() {
+        let uid = rustix::process::geteuid().as_raw();
+        if uid == 0 || uid == u32::MAX {
+            return;
+        }
+
+        let directory = tempfile::tempdir().unwrap();
+        std::fs::set_permissions(directory.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+
+        let file = std::fs::File::open(directory.path()).unwrap();
+
+        validate_export_worker_invoker_separation(file.as_fd(), uid + 1).unwrap();
+    }
+
+    #[test]
+    fn rejects_insecure_staging_permissions() {
+        let uid = rustix::process::geteuid().as_raw();
+        if uid == 0 || uid == u32::MAX {
+            return;
+        }
+
+        let directory = tempfile::tempdir().unwrap();
+        std::fs::set_permissions(directory.path(), std::fs::Permissions::from_mode(0o750)).unwrap();
+
+        let file = std::fs::File::open(directory.path()).unwrap();
+
+        assert!(validate_export_worker_invoker_separation(file.as_fd(), uid + 1).is_err());
+    }
 }
 
 /// Open DAIA's fixed systemd DynamicUser private state directory.
@@ -671,6 +764,13 @@ fn validate_operation_bound_handoff(
 }
 
 #[cfg(target_os = "linux")]
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "single-file descriptor validation retained for authenticated exporter IPC integration"
+    )
+)]
 fn validate_export_descriptor_handoff(
     payload: &[u8],
     descriptor_count: usize,
@@ -739,6 +839,86 @@ mod directory_handoff_validation_tests {
         bytes.extend_from_slice(&(operation.len() as u64).to_be_bytes());
         bytes.extend_from_slice(operation);
         bytes
+    }
+
+    #[test]
+    fn sender_receiver_roundtrip_preserves_directory_identity() {
+        let (sender, receiver) = create_export_ipc_pair().unwrap();
+        let source = tempfile::tempdir().unwrap();
+        let destination = tempfile::tempdir().unwrap();
+
+        let source_fd = std::fs::File::open(source.path()).unwrap();
+        let destination_fd = std::fs::File::open(destination.path()).unwrap();
+
+        send_export_directory_handoff(
+            sender.as_fd(),
+            OPERATION,
+            source_fd.as_fd(),
+            destination_fd.as_fd(),
+        )
+        .unwrap();
+
+        let (received_source, received_destination) =
+            receive_export_directory_handoff(receiver.as_fd(), OPERATION).unwrap();
+
+        verify_export_directory_identity(
+            received_source.as_fd(),
+            received_destination.as_fd(),
+            source_fd.as_fd(),
+            destination_fd.as_fd(),
+        )
+        .unwrap();
+
+        assert!(
+            verify_export_directory_identity(
+                received_destination.as_fd(),
+                received_source.as_fd(),
+                source_fd.as_fd(),
+                destination_fd.as_fd(),
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn sender_receiver_rejects_operation_mismatch() {
+        let (sender, receiver) = create_export_ipc_pair().unwrap();
+        let source = tempfile::tempdir().unwrap();
+        let destination = tempfile::tempdir().unwrap();
+
+        let source_fd = std::fs::File::open(source.path()).unwrap();
+        let destination_fd = std::fs::File::open(destination.path()).unwrap();
+
+        send_export_directory_handoff(
+            sender.as_fd(),
+            OPERATION,
+            source_fd.as_fd(),
+            destination_fd.as_fd(),
+        )
+        .unwrap();
+
+        let error =
+            receive_export_directory_handoff(receiver.as_fd(), b"different-operation").unwrap_err();
+
+        assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
+    }
+
+    #[test]
+    fn sender_rejects_non_directory_descriptor() {
+        let (sender, _receiver) = create_export_ipc_pair().unwrap();
+        let source = tempfile::tempfile().unwrap();
+        let destination = tempfile::tempdir().unwrap();
+        let destination_fd = std::fs::File::open(destination.path()).unwrap();
+
+        let error = send_export_directory_handoff(
+            sender.as_fd(),
+            OPERATION,
+            source.as_fd(),
+            destination_fd.as_fd(),
+        )
+        .unwrap_err();
+
+        assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
     }
 
     #[test]
@@ -815,6 +995,120 @@ mod directory_handoff_validation_tests {
 /// Construction validates descriptor types but does not establish authorization,
 /// source integrity, destination safety, or hostile same-UID isolation.
 /// Callers must acquire both handles through a separately trusted boundary.
+
+/// Retains an independently verified invoking UID and operation identity.
+///
+/// This is an identity-matching primitive, not an authorization mechanism.
+/// The caller must establish both identity and authorization separately.
+#[cfg(target_os = "linux")]
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "authorized invoker binding retained for trusted broker-worker integration"
+    )
+)]
+#[derive(Debug)]
+pub(crate) struct ExportAuthorizedInvokerBinding {
+    invoking_uid: u32,
+    operation_bytes: Vec<u8>,
+}
+
+#[cfg(target_os = "linux")]
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "invoker identity and operation verification awaits production authorization integration"
+    )
+)]
+impl ExportAuthorizedInvokerBinding {
+    fn from_verified_identity(invoking_uid: u32, operation_bytes: &[u8]) -> std::io::Result<Self> {
+        use std::io::{Error, ErrorKind};
+
+        if invoking_uid == 0 || operation_bytes.is_empty() || operation_bytes.len() > 1024 * 1024 {
+            return Err(Error::new(
+                ErrorKind::PermissionDenied,
+                "invalid export identity binding",
+            ));
+        }
+
+        Ok(Self {
+            invoking_uid,
+            operation_bytes: operation_bytes.to_vec(),
+        })
+    }
+
+    fn verify_operation(&self, invoking_uid: u32, operation_bytes: &[u8]) -> std::io::Result<()> {
+        use std::io::{Error, ErrorKind};
+
+        if self.invoking_uid != invoking_uid || self.operation_bytes != operation_bytes {
+            return Err(Error::new(
+                ErrorKind::PermissionDenied,
+                "export identity or operation mismatch",
+            ));
+        }
+
+        Ok(())
+    }
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod authorized_invoker_binding_tests {
+    use super::*;
+    use std::io::ErrorKind;
+
+    #[test]
+    fn accepts_matching_identity_and_operation() {
+        let binding =
+            ExportAuthorizedInvokerBinding::from_verified_identity(1001, b"operation-a").unwrap();
+
+        binding.verify_operation(1001, b"operation-a").unwrap();
+    }
+
+    #[test]
+    fn rejects_substituted_uid() {
+        let binding =
+            ExportAuthorizedInvokerBinding::from_verified_identity(1001, b"operation-a").unwrap();
+
+        assert_eq!(
+            binding
+                .verify_operation(1002, b"operation-a")
+                .unwrap_err()
+                .kind(),
+            ErrorKind::PermissionDenied
+        );
+    }
+
+    #[test]
+    fn rejects_substituted_operation() {
+        let binding =
+            ExportAuthorizedInvokerBinding::from_verified_identity(1001, b"operation-a").unwrap();
+
+        assert_eq!(
+            binding
+                .verify_operation(1001, b"operation-b")
+                .unwrap_err()
+                .kind(),
+            ErrorKind::PermissionDenied
+        );
+    }
+
+    #[test]
+    fn rejects_root_and_empty_operation() {
+        assert!(ExportAuthorizedInvokerBinding::from_verified_identity(0, b"operation-a").is_err());
+
+        assert!(ExportAuthorizedInvokerBinding::from_verified_identity(1001, b"").is_err());
+    }
+
+    #[test]
+    fn rejects_oversized_operation() {
+        let oversized = vec![0_u8; 1024 * 1024 + 1];
+
+        assert!(ExportAuthorizedInvokerBinding::from_verified_identity(1001, &oversized).is_err());
+    }
+}
+
 #[cfg(target_os = "linux")]
 #[derive(Debug)]
 pub struct ExportDirectoryContext {
@@ -918,6 +1212,330 @@ pub fn verify_export_directory_identity(
                 "export directory identity mismatch",
             ));
         }
+    }
+
+    Ok(())
+}
+
+/// Open a selected absolute directory without following any symlinks.
+///
+/// This establishes descriptor-anchored pathname resolution only.
+/// It does not authorize the requesting user, validate ownership,
+/// or establish isolation against malicious same-UID processes.
+///
+/// The caller must independently authorize the selected resource
+/// before using the returned descriptor for export operations.
+#[cfg(target_os = "linux")]
+pub fn open_selected_export_directory(
+    path: &std::path::Path,
+) -> std::io::Result<std::os::fd::OwnedFd> {
+    use rustix::fs::{Mode, OFlags, ResolveFlags};
+    use std::io::{Error, ErrorKind};
+    use std::path::Component;
+
+    if !path.is_absolute() || path == std::path::Path::new("/") {
+        return Err(Error::new(
+            ErrorKind::InvalidInput,
+            "export resource directory must be absolute and non-root",
+        ));
+    }
+
+    if path
+        .components()
+        .any(|component| !matches!(component, Component::RootDir | Component::Normal(_)))
+    {
+        return Err(Error::new(
+            ErrorKind::InvalidInput,
+            "invalid export resource directory component",
+        ));
+    }
+
+    let root = rustix::fs::openat(
+        rustix::fs::CWD,
+        "/",
+        OFlags::RDONLY | OFlags::DIRECTORY | OFlags::CLOEXEC,
+        Mode::empty(),
+    )?;
+
+    let relative = path
+        .strip_prefix("/")
+        .map_err(|_| Error::new(ErrorKind::InvalidInput, "invalid export resource root"))?;
+
+    let directory = rustix::fs::openat2(
+        &root,
+        relative,
+        OFlags::RDONLY | OFlags::DIRECTORY | OFlags::CLOEXEC,
+        Mode::empty(),
+        ResolveFlags::BENEATH | ResolveFlags::NO_SYMLINKS,
+    )?;
+
+    let metadata = rustix::fs::fstat(&directory)?;
+
+    if rustix::fs::FileType::from_raw_mode(metadata.st_mode) != rustix::fs::FileType::Directory {
+        return Err(Error::new(
+            ErrorKind::InvalidData,
+            "export resource is not a directory",
+        ));
+    }
+
+    Ok(directory)
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod selected_export_directory_tests {
+    use super::*;
+    use std::os::fd::AsFd;
+
+    #[test]
+    fn opens_selected_directory_and_retains_identity() {
+        let temporary = tempfile::tempdir().unwrap();
+        let selected = temporary.path().join("selected");
+        std::fs::create_dir(&selected).unwrap();
+
+        let opened = open_selected_export_directory(&selected).unwrap();
+        let before = rustix::fs::fstat(opened.as_fd()).unwrap();
+
+        let renamed = temporary.path().join("renamed");
+        std::fs::rename(&selected, &renamed).unwrap();
+        std::fs::create_dir(&selected).unwrap();
+
+        let retained = rustix::fs::fstat(opened.as_fd()).unwrap();
+        let replacement = open_selected_export_directory(&selected).unwrap();
+        let replacement_metadata = rustix::fs::fstat(replacement.as_fd()).unwrap();
+
+        assert_eq!(before.st_dev, retained.st_dev);
+        assert_eq!(before.st_ino, retained.st_ino);
+        assert_ne!(before.st_ino, replacement_metadata.st_ino);
+    }
+
+    #[test]
+    fn rejects_symlinked_final_component() {
+        let temporary = tempfile::tempdir().unwrap();
+        let real = temporary.path().join("real");
+        let link = temporary.path().join("link");
+
+        std::fs::create_dir(&real).unwrap();
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+
+        assert!(open_selected_export_directory(&link).is_err());
+    }
+
+    #[test]
+    fn rejects_symlinked_ancestor() {
+        let temporary = tempfile::tempdir().unwrap();
+        let real = temporary.path().join("real");
+        let nested = real.join("nested");
+        let link = temporary.path().join("link");
+
+        std::fs::create_dir_all(&nested).unwrap();
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+
+        assert!(open_selected_export_directory(&link.join("nested")).is_err());
+    }
+
+    #[test]
+    fn rejects_root_relative_and_parent_traversal() {
+        assert!(open_selected_export_directory(std::path::Path::new("/")).is_err());
+        assert!(open_selected_export_directory(std::path::Path::new("relative")).is_err());
+        assert!(open_selected_export_directory(std::path::Path::new("/tmp/../etc")).is_err());
+    }
+
+    #[test]
+    fn rejects_regular_file_as_directory() {
+        let temporary = tempfile::tempdir().unwrap();
+        let file = temporary.path().join("file");
+        std::fs::write(&file, b"not a directory").unwrap();
+
+        assert!(open_selected_export_directory(&file).is_err());
+    }
+}
+
+/// Validate basic ownership and permissions of an opened export destination.
+///
+/// The expected UID must come from an independently authenticated caller.
+/// This check does not establish authorization, writable access, trusted
+/// ancestry, mount safety, or isolation against same-UID processes.
+#[cfg(target_os = "linux")]
+pub fn validate_selected_export_destination(
+    directory: std::os::fd::BorrowedFd<'_>,
+    invoking_uid: u32,
+) -> std::io::Result<()> {
+    use std::io::{Error, ErrorKind};
+
+    if invoking_uid == 0 {
+        return Err(Error::new(
+            ErrorKind::PermissionDenied,
+            "export destination requires a non-root invoking user",
+        ));
+    }
+
+    let metadata = rustix::fs::fstat(directory)?;
+
+    if rustix::fs::FileType::from_raw_mode(metadata.st_mode) != rustix::fs::FileType::Directory
+        || metadata.st_uid != invoking_uid
+        || metadata.st_mode & 0o022 != 0
+    {
+        return Err(Error::new(
+            ErrorKind::PermissionDenied,
+            "export destination is not safely owned by invoking user",
+        ));
+    }
+
+    Ok(())
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod selected_export_destination_tests {
+    use super::*;
+    use std::os::fd::AsFd;
+    use std::os::unix::fs::PermissionsExt;
+
+    fn open_directory(path: &std::path::Path) -> std::os::fd::OwnedFd {
+        open_selected_export_directory(path).unwrap()
+    }
+
+    #[test]
+    fn accepts_non_root_owner_with_private_permissions() {
+        let uid = rustix::process::geteuid().as_raw();
+
+        if uid == 0 {
+            return;
+        }
+
+        let temporary = tempfile::tempdir().unwrap();
+        let directory = temporary.path().join("destination");
+
+        std::fs::create_dir(&directory).unwrap();
+        std::fs::set_permissions(&directory, std::fs::Permissions::from_mode(0o700)).unwrap();
+
+        let opened = open_directory(&directory);
+
+        validate_selected_export_destination(opened.as_fd(), uid).unwrap();
+    }
+
+    #[test]
+    fn rejects_root_invoking_uid() {
+        let temporary = tempfile::tempdir().unwrap();
+        let opened = open_directory(temporary.path());
+
+        assert!(validate_selected_export_destination(opened.as_fd(), 0).is_err());
+    }
+
+    #[test]
+    fn rejects_mismatched_owner() {
+        let uid = rustix::process::geteuid().as_raw();
+
+        if uid == 0 || uid == u32::MAX {
+            return;
+        }
+
+        let temporary = tempfile::tempdir().unwrap();
+        let opened = open_directory(temporary.path());
+
+        assert!(validate_selected_export_destination(opened.as_fd(), uid + 1,).is_err());
+    }
+
+    #[test]
+    fn rejects_group_or_world_writable_destination() {
+        let uid = rustix::process::geteuid().as_raw();
+
+        if uid == 0 {
+            return;
+        }
+
+        let temporary = tempfile::tempdir().unwrap();
+        let directory = temporary.path().join("destination");
+
+        std::fs::create_dir(&directory).unwrap();
+
+        for mode in [0o720, 0o702, 0o777] {
+            std::fs::set_permissions(&directory, std::fs::Permissions::from_mode(mode)).unwrap();
+
+            let opened = open_directory(&directory);
+
+            assert!(
+                validate_selected_export_destination(opened.as_fd(), uid,).is_err(),
+                "unsafe mode {mode:o} was accepted"
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_regular_file_descriptor() {
+        use std::os::fd::AsFd;
+
+        let temporary = tempfile::tempdir().unwrap();
+        let file = temporary.path().join("file");
+
+        std::fs::write(&file, b"not a directory").unwrap();
+
+        let opened = std::fs::File::open(&file).unwrap();
+        let uid = rustix::process::geteuid().as_raw();
+
+        assert!(validate_selected_export_destination(opened.as_fd(), uid,).is_err());
+    }
+}
+
+/// Send exactly two already-authorized directory handles.
+///
+/// Descriptor order is source followed by destination. This function
+/// validates descriptor types and binds the handoff to the operation bytes.
+/// It does not authorize the operation or authenticate the receiver.
+#[cfg(target_os = "linux")]
+pub fn send_export_directory_handoff(
+    socket: std::os::fd::BorrowedFd<'_>,
+    operation: &[u8],
+    source: std::os::fd::BorrowedFd<'_>,
+    destination: std::os::fd::BorrowedFd<'_>,
+) -> std::io::Result<()> {
+    use rustix::io::IoSlice;
+    use rustix::net::{SendAncillaryBuffer, SendAncillaryMessage, SendFlags, sendmsg};
+    use std::io::{Error, ErrorKind};
+    use std::mem::MaybeUninit;
+
+    const PREFIX: &[u8] = b"DAIA-EXPORT-HANDOFF\0";
+    const MAX_HANDOFF_BYTES: usize = 1024 * 1024;
+
+    let envelope_size = PREFIX.len() + 4 + 8;
+    if operation.is_empty() || operation.len() > MAX_HANDOFF_BYTES - envelope_size {
+        return Err(Error::new(
+            ErrorKind::InvalidInput,
+            "invalid export directory handoff operation length",
+        ));
+    }
+
+    let descriptors = [source, destination];
+
+    let mut payload = Vec::with_capacity(envelope_size + operation.len());
+    payload.extend_from_slice(PREFIX);
+    payload.extend_from_slice(&1_u32.to_be_bytes());
+    payload.extend_from_slice(&(operation.len() as u64).to_be_bytes());
+    payload.extend_from_slice(operation);
+
+    validate_export_directory_handoff(&payload, &descriptors, false, operation)?;
+
+    let mut space = [MaybeUninit::uninit(); rustix::cmsg_space!(ScmRights(2))];
+    let mut control = SendAncillaryBuffer::new(&mut space);
+
+    if !control.push(SendAncillaryMessage::ScmRights(&descriptors)) {
+        return Err(Error::new(
+            ErrorKind::InvalidData,
+            "unable to encode export directory descriptors",
+        ));
+    }
+
+    let sent = sendmsg(
+        socket,
+        &[IoSlice::new(&payload)],
+        &mut control,
+        SendFlags::NOSIGNAL,
+    )?;
+
+    if sent != payload.len() {
+        return Err(Error::new(
+            ErrorKind::WriteZero,
+            "incomplete export directory handoff",
+        ));
     }
 
     Ok(())
@@ -1562,6 +2180,13 @@ mod directory_descriptor_transfer_tests {
 }
 
 #[cfg(target_os = "linux")]
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "operation-bound descriptor receiver retained for authenticated exporter IPC integration"
+    )
+)]
 pub(crate) fn receive_export_descriptor_handoff(
     socket: std::os::fd::BorrowedFd<'_>,
     expected_operation: &[u8],

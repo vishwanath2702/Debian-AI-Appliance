@@ -4,6 +4,13 @@
 //! privileged installation. Those checks belong to separate boundaries.
 
 #[cfg(target_os = "linux")]
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "sealed installation snapshot retained for future trusted exporter installation integration"
+    )
+)]
 pub(crate) fn sealed_export_install_snapshot(
     source: &mut std::fs::File,
 ) -> std::io::Result<std::os::fd::OwnedFd> {

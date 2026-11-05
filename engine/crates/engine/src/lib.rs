@@ -6,6 +6,7 @@ mod benchmark_monitoring;
 pub mod benchmark_ollama;
 mod benchmark_ollama_runner;
 mod benchmark_ollama_transport;
+mod export_artifact_verification;
 mod export_install_snapshot;
 pub mod export_ipc;
 pub mod hardware_monitor;

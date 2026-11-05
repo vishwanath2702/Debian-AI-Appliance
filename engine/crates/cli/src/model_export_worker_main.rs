@@ -105,6 +105,74 @@ mod worker_staging_tests {
     }
 }
 
+#[cfg(all(test, target_os = "linux"))]
+mod systemd_worker_state_integration_tests {
+    #[test]
+    fn systemd_worker_state_staging_lifecycle() {
+        use std::os::fd::AsFd;
+
+        let state =
+            std::env::var_os("STATE_DIRECTORY").expect("test requires systemd STATE_DIRECTORY");
+
+        assert_eq!(
+            std::path::Path::new(&state),
+            std::path::Path::new("/var/lib/daia-model-export"),
+            "test requires the production worker state-directory path"
+        );
+
+        let directory = super::validate_worker_state_directory()
+            .expect("systemd worker state directory must validate");
+
+        engine::export_ipc::validate_export_worker_staging_directory(directory.as_fd())
+            .expect("worker staging descriptor must be private");
+
+        let staging = engine::ollama_export::create_worker_private_export_staging(&directory)
+            .expect("worker staging creation must succeed");
+
+        let name = staging.name().to_owned();
+
+        let path = std::path::Path::new("/var/lib/private/daia-model-export").join(&name);
+
+        assert!(path.is_dir(), "worker staging directory must exist");
+
+        // Optional synchronization for an external isolation test.
+        // The normal test path does not wait for an external controller.
+        if std::env::var_os("DAIA_EXPORT_TEST_READY_MARKER").is_some() {
+            let runtime = std::env::var_os("RUNTIME_DIRECTORY")
+                .expect("test requires systemd RUNTIME_DIRECTORY");
+
+            let runtime = std::path::PathBuf::from(runtime);
+
+            assert_eq!(
+                runtime,
+                std::path::Path::new("/run/daia-export-test-3489"),
+                "unexpected test runtime directory"
+            );
+
+            // stdout is observed through systemd-run --pipe.
+            // Do not expose the private directory through permissions.
+            println!("DAIA_TEST_READY:{}", path.display());
+
+            let release = runtime.join("release");
+
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+
+            while !release.exists() {
+                assert!(
+                    std::time::Instant::now() < deadline,
+                    "adversarial test release timed out"
+                );
+
+                std::thread::sleep(std::time::Duration::from_millis(50));
+            }
+        }
+
+        drop(staging);
+
+        assert!(!path.exists(), "worker staging directory must be removed");
+    }
+}
+
 #[cfg(target_os = "linux")]
 fn validate_worker_state_directory_path(
     path: Option<&std::path::Path>,
@@ -136,13 +204,29 @@ fn main() {
     let stdin = std::io::stdin();
 
     #[cfg(target_os = "linux")]
-    let _staging_directory = match validate_worker_state_directory() {
+    let staging_directory = match validate_worker_state_directory() {
         Ok(directory) => directory,
         Err(error) => {
             eprintln!("DAIA Model Export worker: invalid staging directory: {error}");
             std::process::exit(1);
         }
     };
+
+    #[cfg(target_os = "linux")]
+    {
+        // Exercise private staging lifecycle without authorizing exports.
+        // The worker remains fail-closed at the connection boundary.
+        let staging =
+            match engine::ollama_export::create_worker_private_export_staging(&staging_directory) {
+                Ok(staging) => staging,
+                Err(error) => {
+                    eprintln!("DAIA Model Export worker: staging creation failed: {error}");
+                    std::process::exit(1);
+                }
+            };
+
+        drop(staging);
+    }
 
     // Validate systemd activation metadata before accepting a connection.
     // Environment metadata is not independent proof of trusted launch.

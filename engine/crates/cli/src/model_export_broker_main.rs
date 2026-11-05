@@ -255,10 +255,31 @@ fn parse_export_request(input: &[u8]) -> Result<ParsedExportRequest, &'static st
         _ => return Err("unsupported export request version"),
     };
 
+    if let Some(selection) = selection.as_ref() {
+        validate_gguf_artifact_binding(&operation, selection)?;
+    }
+
     Ok(ParsedExportRequest {
         operation,
         selection,
     })
+}
+
+/// Validate GGUF request consistency without authorizing source access.
+fn validate_gguf_artifact_binding(
+    operation: &ModelExportOperation,
+    selection: &ModelExportResourceSelection,
+) -> Result<(), &'static str> {
+    if let ModelExportSourceSelection::Gguf { relative_file, .. } = selection.source() {
+        if !matches!(operation.source(), ModelExportSource::Gguf)
+            || operation.artifacts().len() != 1
+            || operation.artifacts()[0].relative_path() != relative_file
+        {
+            return Err("GGUF artifact does not match selected source");
+        }
+    }
+
+    Ok(())
 }
 
 /// Check the broker's effective identity.
@@ -300,13 +321,17 @@ fn validate_pkexec_invoking_uid(value: Option<&str>) -> Result<u32, &'static str
 /// authorization provider is implemented.
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct VerifiedExportGrant {
+    invoking_uid: u32,
     operation_bytes: Vec<u8>,
 }
 
 #[cfg(test)]
 impl VerifiedExportGrant {
-    fn for_test(operation_bytes: Vec<u8>) -> Self {
-        Self { operation_bytes }
+    fn for_test(invoking_uid: u32, operation_bytes: Vec<u8>) -> Self {
+        Self {
+            invoking_uid,
+            operation_bytes,
+        }
     }
 }
 
@@ -318,6 +343,7 @@ enum AuthorizationDecision {
 
 fn authorize_export(
     decision: &AuthorizationDecision,
+    invoking_uid: u32,
     operation: &ModelExportOperation,
     selection: Option<&ModelExportResourceSelection>,
 ) -> Result<(), &'static str> {
@@ -325,7 +351,10 @@ fn authorize_export(
 
     match decision {
         AuthorizationDecision::VerifiedForOperation(grant)
-            if grant.operation_bytes == canonical_export_request_bytes(operation, selection) =>
+            if invoking_uid != 0
+                && grant.invoking_uid == invoking_uid
+                && grant.operation_bytes
+                    == canonical_export_request_bytes(operation, selection) =>
         {
             Ok(())
         }
@@ -368,6 +397,471 @@ fn validate_export_resources(
             Ok(())
         }
         _ => Err("DAIA Model Export resources are not verified"),
+    }
+}
+
+/// Validate a retained source-directory descriptor against the selected request.
+///
+/// This establishes directory identity only. It does not authorize access,
+/// validate GGUF contents, validate Ollama manifests, or grant export execution.
+#[cfg(target_os = "linux")]
+fn validate_bound_export_source(
+    selection: &ModelExportResourceSelection,
+    source: std::os::fd::BorrowedFd<'_>,
+) -> Result<std::os::fd::OwnedFd, &'static str> {
+    let selected_directory = match selection.source() {
+        ModelExportSourceSelection::Gguf { directory, .. }
+        | ModelExportSourceSelection::Ollama { directory, .. } => directory,
+    };
+
+    let opened = engine::export_ipc::open_selected_export_directory(std::path::Path::new(
+        selected_directory,
+    ))
+    .map_err(|_| "unable to resolve selected export source")?;
+
+    let selected_metadata =
+        rustix::fs::fstat(&opened).map_err(|_| "unable to inspect selected export source")?;
+
+    let retained_metadata =
+        rustix::fs::fstat(source).map_err(|_| "unable to inspect retained export source")?;
+
+    if selected_metadata.st_dev != retained_metadata.st_dev
+        || selected_metadata.st_ino != retained_metadata.st_ino
+    {
+        return Err("export source directory identity mismatch");
+    }
+
+    use rustix::fs::{FileType, Mode, OFlags, ResolveFlags};
+
+    let relative_file = match selection.source() {
+        ModelExportSourceSelection::Gguf { relative_file, .. } => {
+            std::path::Path::new(relative_file)
+        }
+        ModelExportSourceSelection::Ollama {
+            relative_manifest, ..
+        } => {
+            let manifest = std::path::Path::new(relative_manifest);
+
+            if manifest.components().count() != 4 {
+                return Err("invalid Ollama export manifest path");
+            }
+
+            manifest
+        }
+    };
+
+    let relative_path = match selection.source() {
+        ModelExportSourceSelection::Gguf { .. } => relative_file.to_path_buf(),
+        ModelExportSourceSelection::Ollama { .. } => {
+            std::path::Path::new("manifests").join(relative_file)
+        }
+    };
+
+    let file = rustix::fs::openat2(
+        source,
+        &relative_path,
+        OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::CLOEXEC | OFlags::NONBLOCK,
+        Mode::empty(),
+        ResolveFlags::BENEATH | ResolveFlags::NO_SYMLINKS,
+    )
+    .map_err(|_| "unable to open selected export source file")?;
+
+    let metadata =
+        rustix::fs::fstat(&file).map_err(|_| "unable to inspect selected export source file")?;
+
+    if FileType::from_raw_mode(metadata.st_mode) != FileType::RegularFile {
+        return Err("selected export source is not a regular file");
+    }
+
+    Ok(file)
+}
+
+/// Validate a retained destination handle against the selected request.
+///
+/// The invoking UID must come from an independently authenticated identity.
+/// This validates resource identity and basic ownership only; it does not
+/// establish Polkit authorization, user write access, or same-UID isolation.
+#[cfg(target_os = "linux")]
+fn validate_bound_export_destination(
+    selection: &ModelExportResourceSelection,
+    destination: std::os::fd::BorrowedFd<'_>,
+    invoking_uid: u32,
+) -> Result<(), &'static str> {
+    let selected_path = std::path::Path::new(selection.destination().directory());
+
+    let opened = engine::export_ipc::open_selected_export_directory(selected_path)
+        .map_err(|_| "unable to resolve selected export destination")?;
+
+    let selected_metadata =
+        rustix::fs::fstat(&opened).map_err(|_| "unable to inspect selected export destination")?;
+
+    let retained_metadata = rustix::fs::fstat(destination)
+        .map_err(|_| "unable to inspect retained export destination")?;
+
+    if selected_metadata.st_dev != retained_metadata.st_dev
+        || selected_metadata.st_ino != retained_metadata.st_ino
+    {
+        return Err("export destination identity mismatch");
+    }
+
+    engine::export_ipc::validate_selected_export_destination(destination, invoking_uid)
+        .map_err(|_| "export destination ownership validation failed")
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod bound_export_source_tests {
+    use super::*;
+    use std::os::fd::AsFd;
+
+    fn selection(source: ModelExportSourceSelection) -> ModelExportResourceSelection {
+        ModelExportResourceSelection::new(
+            source,
+            ModelExportDestinationSelection::new("/tmp/export").unwrap(),
+        )
+    }
+
+    #[test]
+    fn rejects_missing_gguf_file() {
+        let root = tempfile::tempdir().unwrap();
+        let retained = engine::export_ipc::open_selected_export_directory(root.path()).unwrap();
+        let request = selection(
+            ModelExportSourceSelection::gguf(root.path().to_str().unwrap(), "missing.gguf")
+                .unwrap(),
+        );
+
+        assert!(validate_bound_export_source(&request, retained.as_fd()).is_err());
+    }
+
+    #[test]
+    fn rejects_gguf_symlink() {
+        use std::os::unix::fs::symlink;
+
+        let root = tempfile::tempdir().unwrap();
+        std::fs::write(root.path().join("real.gguf"), b"GGUF").unwrap();
+        symlink("real.gguf", root.path().join("linked.gguf")).unwrap();
+
+        let retained = engine::export_ipc::open_selected_export_directory(root.path()).unwrap();
+        let request = selection(
+            ModelExportSourceSelection::gguf(root.path().to_str().unwrap(), "linked.gguf").unwrap(),
+        );
+
+        assert!(validate_bound_export_source(&request, retained.as_fd()).is_err());
+    }
+
+    #[test]
+    fn rejects_gguf_directory_as_file() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::create_dir(root.path().join("fake.gguf")).unwrap();
+
+        let retained = engine::export_ipc::open_selected_export_directory(root.path()).unwrap();
+        let request = selection(
+            ModelExportSourceSelection::gguf(root.path().to_str().unwrap(), "fake.gguf").unwrap(),
+        );
+
+        assert!(validate_bound_export_source(&request, retained.as_fd()).is_err());
+    }
+
+    #[test]
+    fn rejects_ollama_manifest_symlink() {
+        use std::os::unix::fs::symlink;
+
+        let root = tempfile::tempdir().unwrap();
+        let manifests = root
+            .path()
+            .join("manifests/registry.ollama.ai/library/model");
+        std::fs::create_dir_all(&manifests).unwrap();
+        std::fs::write(manifests.join("real"), b"{}").unwrap();
+        symlink("real", manifests.join("latest")).unwrap();
+
+        let retained = engine::export_ipc::open_selected_export_directory(root.path()).unwrap();
+        let request = selection(
+            ModelExportSourceSelection::ollama(
+                root.path().to_str().unwrap(),
+                "registry.ollama.ai/library/model/latest",
+            )
+            .unwrap(),
+        );
+
+        assert!(validate_bound_export_source(&request, retained.as_fd()).is_err());
+    }
+
+    #[test]
+    fn rejects_ollama_manifest_directory() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(
+            root.path()
+                .join("manifests/registry.ollama.ai/library/model/latest"),
+        )
+        .unwrap();
+
+        let retained = engine::export_ipc::open_selected_export_directory(root.path()).unwrap();
+        let request = selection(
+            ModelExportSourceSelection::ollama(
+                root.path().to_str().unwrap(),
+                "registry.ollama.ai/library/model/latest",
+            )
+            .unwrap(),
+        );
+
+        assert!(validate_bound_export_source(&request, retained.as_fd()).is_err());
+    }
+
+    #[test]
+    fn rejects_replaced_source_directory_path() {
+        let root = tempfile::tempdir().unwrap();
+        let selected = root.path().join("selected");
+        let moved = root.path().join("moved");
+
+        std::fs::create_dir(&selected).unwrap();
+        std::fs::write(selected.join("model.gguf"), b"GGUF").unwrap();
+
+        let retained = engine::export_ipc::open_selected_export_directory(&selected).unwrap();
+
+        std::fs::rename(&selected, &moved).unwrap();
+        std::fs::create_dir(&selected).unwrap();
+        std::fs::write(selected.join("model.gguf"), b"GGUF").unwrap();
+
+        let request = selection(
+            ModelExportSourceSelection::gguf(selected.to_str().unwrap(), "model.gguf").unwrap(),
+        );
+
+        assert_eq!(
+            validate_bound_export_source(&request, retained.as_fd()).unwrap_err(),
+            "export source directory identity mismatch"
+        );
+    }
+
+    #[test]
+    fn retained_gguf_descriptor_does_not_freeze_writable_contents() {
+        use std::io::{Read, Seek, SeekFrom, Write};
+
+        let root = tempfile::tempdir().unwrap();
+        let source = root.path().join("model.gguf");
+
+        std::fs::write(&source, b"GGUF-original").unwrap();
+
+        let retained_directory =
+            engine::export_ipc::open_selected_export_directory(root.path()).unwrap();
+
+        let request = selection(
+            ModelExportSourceSelection::gguf(root.path().to_str().unwrap(), "model.gguf").unwrap(),
+        );
+
+        let retained_file =
+            validate_bound_export_source(&request, retained_directory.as_fd()).unwrap();
+
+        // Simulate another same-UID process retaining write access.
+        let mut attacker = std::fs::OpenOptions::new()
+            .write(true)
+            .open(&source)
+            .unwrap();
+
+        attacker.seek(SeekFrom::Start(0)).unwrap();
+        attacker.write_all(b"GGUF-modified").unwrap();
+        attacker.sync_all().unwrap();
+
+        let mut validated = std::fs::File::from(retained_file);
+        validated.seek(SeekFrom::Start(0)).unwrap();
+
+        let mut contents = Vec::new();
+        validated.read_to_end(&mut contents).unwrap();
+
+        assert_eq!(contents, b"GGUF-modified");
+        assert_ne!(contents, b"GGUF-original");
+    }
+
+    #[test]
+    fn retained_gguf_descriptor_survives_path_replacement() {
+        use std::io::{Read, Seek, SeekFrom};
+
+        let root = tempfile::tempdir().unwrap();
+        let selected = root.path().join("model.gguf");
+        let moved = root.path().join("original.gguf");
+
+        std::fs::write(&selected, b"GGUF-original").unwrap();
+
+        let retained_directory =
+            engine::export_ipc::open_selected_export_directory(root.path()).unwrap();
+
+        let request = selection(
+            ModelExportSourceSelection::gguf(root.path().to_str().unwrap(), "model.gguf").unwrap(),
+        );
+
+        let retained_file =
+            validate_bound_export_source(&request, retained_directory.as_fd()).unwrap();
+
+        std::fs::rename(&selected, &moved).unwrap();
+        std::fs::write(&selected, b"GGUF-replaced").unwrap();
+
+        let mut file = std::fs::File::from(retained_file);
+        file.seek(SeekFrom::Start(0)).unwrap();
+
+        let mut contents = Vec::new();
+        file.read_to_end(&mut contents).unwrap();
+
+        assert_eq!(contents, b"GGUF-original");
+        assert_eq!(std::fs::read(&selected).unwrap(), b"GGUF-replaced");
+    }
+
+    #[test]
+    fn accepts_matching_gguf_source_directory() {
+        let root = tempfile::tempdir().unwrap();
+        let source = root.path().join("models");
+        std::fs::create_dir(&source).unwrap();
+        std::fs::write(source.join("model.gguf"), b"GGUF").unwrap();
+
+        let retained = engine::export_ipc::open_selected_export_directory(&source).unwrap();
+        let request = selection(
+            ModelExportSourceSelection::gguf(source.to_str().unwrap(), "model.gguf").unwrap(),
+        );
+
+        assert!(validate_bound_export_source(&request, retained.as_fd()).is_ok());
+    }
+
+    #[test]
+    fn accepts_matching_ollama_source_directory() {
+        let root = tempfile::tempdir().unwrap();
+        let source = root.path().join("ollama");
+        std::fs::create_dir(&source).unwrap();
+        let manifest = source
+            .join("manifests")
+            .join("registry.ollama.ai/library/model/latest");
+        std::fs::create_dir_all(manifest.parent().unwrap()).unwrap();
+        std::fs::write(&manifest, b"{}").unwrap();
+
+        let retained = engine::export_ipc::open_selected_export_directory(&source).unwrap();
+        let request = selection(
+            ModelExportSourceSelection::ollama(
+                source.to_str().unwrap(),
+                "registry.ollama.ai/library/model/latest",
+            )
+            .unwrap(),
+        );
+
+        assert!(validate_bound_export_source(&request, retained.as_fd()).is_ok());
+    }
+
+    #[test]
+    fn rejects_substituted_gguf_source_directory() {
+        let root = tempfile::tempdir().unwrap();
+        let selected = root.path().join("selected");
+        let substituted = root.path().join("substituted");
+
+        std::fs::create_dir(&selected).unwrap();
+        std::fs::create_dir(&substituted).unwrap();
+
+        let retained = engine::export_ipc::open_selected_export_directory(&substituted).unwrap();
+
+        let request = selection(
+            ModelExportSourceSelection::gguf(selected.to_str().unwrap(), "model.gguf").unwrap(),
+        );
+
+        assert_eq!(
+            validate_bound_export_source(&request, retained.as_fd()).unwrap_err(),
+            "export source directory identity mismatch"
+        );
+    }
+
+    #[test]
+    fn rejects_substituted_ollama_source_directory() {
+        let root = tempfile::tempdir().unwrap();
+        let selected = root.path().join("selected");
+        let substituted = root.path().join("substituted");
+
+        std::fs::create_dir(&selected).unwrap();
+        std::fs::create_dir(&substituted).unwrap();
+
+        let retained = engine::export_ipc::open_selected_export_directory(&substituted).unwrap();
+
+        let request = selection(
+            ModelExportSourceSelection::ollama(
+                selected.to_str().unwrap(),
+                "registry.ollama.ai/library/model/latest",
+            )
+            .unwrap(),
+        );
+
+        assert_eq!(
+            validate_bound_export_source(&request, retained.as_fd()).unwrap_err(),
+            "export source directory identity mismatch"
+        );
+    }
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod bound_export_destination_tests {
+    use super::*;
+    use std::os::fd::AsFd;
+    use std::os::unix::fs::PermissionsExt;
+
+    fn selection(directory: &std::path::Path) -> ModelExportResourceSelection {
+        ModelExportResourceSelection::new(
+            ModelExportSourceSelection::gguf("/tmp", "example.gguf").unwrap(),
+            ModelExportDestinationSelection::new(directory.to_str().unwrap()).unwrap(),
+        )
+    }
+
+    #[test]
+    fn accepts_matching_destination_identity() {
+        let uid = rustix::process::geteuid().as_raw();
+        if uid == 0 {
+            return;
+        }
+
+        let temporary = tempfile::tempdir().unwrap();
+        let destination = temporary.path().join("destination");
+        std::fs::create_dir(&destination).unwrap();
+        std::fs::set_permissions(&destination, std::fs::Permissions::from_mode(0o700)).unwrap();
+
+        let opened = engine::export_ipc::open_selected_export_directory(&destination).unwrap();
+
+        assert!(
+            validate_bound_export_destination(&selection(&destination), opened.as_fd(), uid,)
+                .is_ok()
+        );
+    }
+
+    #[test]
+    fn rejects_replaced_destination_identity() {
+        let uid = rustix::process::geteuid().as_raw();
+        if uid == 0 {
+            return;
+        }
+
+        let temporary = tempfile::tempdir().unwrap();
+        let destination = temporary.path().join("destination");
+        let moved = temporary.path().join("moved");
+
+        std::fs::create_dir(&destination).unwrap();
+
+        let opened = engine::export_ipc::open_selected_export_directory(&destination).unwrap();
+
+        std::fs::rename(&destination, &moved).unwrap();
+        std::fs::create_dir(&destination).unwrap();
+
+        assert!(
+            validate_bound_export_destination(&selection(&destination), opened.as_fd(), uid,)
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn rejects_wrong_invoking_uid() {
+        let uid = rustix::process::geteuid().as_raw();
+        if uid == 0 || uid == u32::MAX {
+            return;
+        }
+
+        let temporary = tempfile::tempdir().unwrap();
+        let destination = temporary.path().join("destination");
+        std::fs::create_dir(&destination).unwrap();
+
+        let opened = engine::export_ipc::open_selected_export_directory(&destination).unwrap();
+
+        assert!(
+            validate_bound_export_destination(&selection(&destination), opened.as_fd(), uid + 1,)
+                .is_err()
+        );
     }
 }
 
@@ -427,6 +921,7 @@ fn main() {
     // provider exists, every valid request must still be denied.
     if let Err(error) = authorize_export(
         &AuthorizationDecision::Denied,
+        invoking_uid,
         &operation.operation,
         operation.selection.as_ref(),
     ) {
@@ -452,6 +947,44 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn authorized_grant_rejects_substituted_invoker_uid() {
+        let requested = operation("export");
+        let selected = authorization_selection();
+
+        let grant = VerifiedExportGrant::for_test(
+            1001,
+            canonical_export_request_bytes(&requested, &selected),
+        );
+
+        let decision = AuthorizationDecision::VerifiedForOperation(grant);
+
+        assert!(authorize_export(&decision, 1001, &requested, Some(&selected)).is_ok());
+
+        for substituted_uid in [0, 1002, u32::MAX] {
+            assert!(
+                authorize_export(&decision, substituted_uid, &requested, Some(&selected)).is_err()
+            );
+        }
+    }
+
+    #[test]
+    fn authorized_grant_rejects_substituted_operation() {
+        let requested = operation("export");
+        let selected = authorization_selection();
+
+        let grant = VerifiedExportGrant::for_test(
+            1001,
+            canonical_export_request_bytes(&requested, &selected),
+        );
+
+        let decision = AuthorizationDecision::VerifiedForOperation(grant);
+
+        assert!(
+            authorize_export(&decision, 1001, &operation("other-export"), Some(&selected)).is_err()
+        );
+    }
 
     #[test]
     fn broker_accepts_no_command_line_arguments() {
@@ -548,6 +1081,7 @@ mod tests {
         assert!(
             authorize_export(
                 &AuthorizationDecision::Denied,
+                1001,
                 &parsed.operation,
                 parsed.selection.as_ref()
             )
@@ -564,12 +1098,61 @@ mod tests {
     }
 
     #[test]
+    fn gguf_artifact_binding_accepts_matching_file() {
+        let input = request()
+            .replacen(r#""source":"ollama""#, r#""source":"gguf""#, 1)
+            .replacen(
+                r#""version":1"#,
+                r#""version":2,"selection":{"source":{"kind":"gguf","directory":"/media/models","relative_file":"model.gguf"},"destination":{"directory":"/media/export"}}"#,
+                1,
+            );
+
+        assert!(parse_export_request(input.as_bytes()).is_ok());
+    }
+
+    #[test]
+    fn gguf_artifact_binding_rejects_mismatched_file() {
+        let input = request()
+            .replacen(r#""source":"ollama""#, r#""source":"gguf""#, 1)
+            .replacen(
+                r#""version":1"#,
+                r#""version":2,"selection":{"source":{"kind":"gguf","directory":"/media/models","relative_file":"other.gguf"},"destination":{"directory":"/media/export"}}"#,
+                1,
+            );
+
+        assert!(parse_export_request(input.as_bytes()).is_err());
+    }
+
+    #[test]
+    fn gguf_artifact_binding_rejects_multiple_artifacts() {
+        let input = request()
+            .replacen(r#""source":"ollama""#, r#""source":"gguf""#, 1)
+            .replacen(
+                r#""version":1"#,
+                r#""version":2,"selection":{"source":{"kind":"gguf","directory":"/media/models","relative_file":"model.gguf"},"destination":{"directory":"/media/export"}}"#,
+                1,
+            );
+
+        let mut value: serde_json::Value = serde_json::from_str(&input).unwrap();
+
+        let mut artifact = value["operation"]["artifacts"][0].clone();
+        artifact["relative_path"] = serde_json::Value::String("extra.gguf".into());
+
+        value["operation"]["artifacts"]
+            .as_array_mut()
+            .unwrap()
+            .push(artifact);
+
+        assert!(parse_export_request(value.to_string().as_bytes()).is_err());
+    }
+
+    #[test]
     fn parser_accepts_version_two_gguf_selection_without_authorizing() {
         let input = request()
             .replacen(r#""source":"ollama""#, r#""source":"gguf""#, 1)
             .replacen(
                 r#""version":1"#,
-                r#""version":2,"selection":{"source":{"kind":"gguf","directory":"/media/models","relative_file":"files/example.gguf"},"destination":{"directory":"/media/export"}}"#,
+                r#""version":2,"selection":{"source":{"kind":"gguf","directory":"/media/models","relative_file":"model.gguf"},"destination":{"directory":"/media/export"}}"#,
                 1,
             );
 
@@ -585,12 +1168,13 @@ mod tests {
                 directory,
                 relative_file
             } if directory == "/media/models"
-                && relative_file == "files/example.gguf"
+                && relative_file == "model.gguf"
         ));
         assert_eq!(selection.destination().directory(), "/media/export");
         assert!(
             authorize_export(
                 &AuthorizationDecision::Denied,
+                1001,
                 &parsed.operation,
                 parsed.selection.as_ref()
             )
@@ -649,6 +1233,7 @@ mod tests {
         assert!(
             authorize_export(
                 &AuthorizationDecision::Denied,
+                1001,
                 &parsed.operation,
                 parsed.selection.as_ref()
             )
@@ -680,6 +1265,7 @@ mod tests {
         assert!(
             authorize_export(
                 &AuthorizationDecision::Denied,
+                1001,
                 &parsed.operation,
                 parsed.selection.as_ref()
             )
@@ -834,7 +1420,13 @@ mod tests {
     #[test]
     fn broker_denies_without_verified_authorization() {
         assert!(
-            authorize_export(&AuthorizationDecision::Denied, &operation("export"), None).is_err()
+            authorize_export(
+                &AuthorizationDecision::Denied,
+                1001,
+                &operation("export"),
+                None
+            )
+            .is_err()
         );
     }
 
@@ -842,13 +1434,23 @@ mod tests {
     fn broker_accepts_only_matching_operation() {
         let requested = operation("export");
         let decision = AuthorizationDecision::VerifiedForOperation(VerifiedExportGrant::for_test(
+            1001,
             canonical_export_request_bytes(&requested, &authorization_selection()),
         ));
 
-        assert!(authorize_export(&decision, &requested, Some(&authorization_selection())).is_ok());
         assert!(
             authorize_export(
                 &decision,
+                1001,
+                &requested,
+                Some(&authorization_selection())
+            )
+            .is_ok()
+        );
+        assert!(
+            authorize_export(
+                &decision,
+                1001,
                 &operation("other-export"),
                 Some(&authorization_selection())
             )
@@ -862,6 +1464,7 @@ mod tests {
         let selected = authorization_selection();
 
         let decision = AuthorizationDecision::VerifiedForOperation(VerifiedExportGrant::for_test(
+            1001,
             canonical_export_request_bytes(&requested, &selected),
         ));
 
@@ -879,10 +1482,10 @@ mod tests {
             ModelExportDestinationSelection::new("/media/other").unwrap(),
         );
 
-        assert!(authorize_export(&decision, &requested, Some(&selected)).is_ok());
-        assert!(authorize_export(&decision, &requested, Some(&changed_source)).is_err());
-        assert!(authorize_export(&decision, &requested, Some(&changed_destination)).is_err());
-        assert!(authorize_export(&decision, &requested, None).is_err());
+        assert!(authorize_export(&decision, 1001, &requested, Some(&selected)).is_ok());
+        assert!(authorize_export(&decision, 1001, &requested, Some(&changed_source)).is_err());
+        assert!(authorize_export(&decision, 1001, &requested, Some(&changed_destination)).is_err());
+        assert!(authorize_export(&decision, 1001, &requested, None).is_err());
     }
 
     #[test]
@@ -898,10 +1501,16 @@ mod tests {
             "--verified",
         ] {
             let decision = AuthorizationDecision::VerifiedForOperation(
-                VerifiedExportGrant::for_test(claim.as_bytes().to_vec()),
+                VerifiedExportGrant::for_test(1001, claim.as_bytes().to_vec()),
             );
             assert!(
-                authorize_export(&decision, &requested, Some(&authorization_selection())).is_err(),
+                authorize_export(
+                    &decision,
+                    1001,
+                    &requested,
+                    Some(&authorization_selection())
+                )
+                .is_err(),
                 "untrusted claim must not authorize: {claim}"
             );
         }
@@ -919,11 +1528,28 @@ mod tests {
         .unwrap();
 
         let decision = AuthorizationDecision::VerifiedForOperation(VerifiedExportGrant::for_test(
+            1001,
             canonical_export_request_bytes(&requested, &authorization_selection()),
         ));
 
-        assert!(authorize_export(&decision, &requested, Some(&authorization_selection())).is_ok());
-        assert!(authorize_export(&decision, &different, Some(&authorization_selection())).is_err());
+        assert!(
+            authorize_export(
+                &decision,
+                1001,
+                &requested,
+                Some(&authorization_selection())
+            )
+            .is_ok()
+        );
+        assert!(
+            authorize_export(
+                &decision,
+                1001,
+                &different,
+                Some(&authorization_selection())
+            )
+            .is_err()
+        );
     }
 
     #[test]
@@ -936,11 +1562,17 @@ mod tests {
             br#"{"uid":0}"#.as_slice(),
         ] {
             let decision = AuthorizationDecision::VerifiedForOperation(
-                VerifiedExportGrant::for_test(claim.to_vec()),
+                VerifiedExportGrant::for_test(1001, claim.to_vec()),
             );
 
             assert!(
-                authorize_export(&decision, &requested, Some(&authorization_selection())).is_err()
+                authorize_export(
+                    &decision,
+                    1001,
+                    &requested,
+                    Some(&authorization_selection())
+                )
+                .is_err()
             );
         }
     }
@@ -952,7 +1584,15 @@ mod tests {
 
         // Parsing validates metadata, but it cannot authorize an export.
         let decision = AuthorizationDecision::Denied;
-        assert!(authorize_export(&decision, &parsed.operation, parsed.selection.as_ref()).is_err());
+        assert!(
+            authorize_export(
+                &decision,
+                1001,
+                &parsed.operation,
+                parsed.selection.as_ref()
+            )
+            .is_err()
+        );
 
         // An untrusted authorization claim must not change that result.
         let claimed = valid.replace(r#""version":1"#, r#""version":1,"authorized":true"#);
@@ -1016,13 +1656,19 @@ mod tests {
         assert!(validate_broker_effective_uid(0).is_ok());
 
         let requested = operation("export");
-        assert!(authorize_export(&AuthorizationDecision::Denied, &requested, None).is_err());
+        assert!(authorize_export(&AuthorizationDecision::Denied, 1001, &requested, None).is_err());
     }
 
     #[test]
     fn broker_denies_without_an_authorization_provider() {
         assert!(
-            authorize_export(&AuthorizationDecision::Denied, &operation("export"), None).is_err()
+            authorize_export(
+                &AuthorizationDecision::Denied,
+                1001,
+                &operation("export"),
+                None
+            )
+            .is_err()
         );
     }
 
@@ -1036,7 +1682,7 @@ mod tests {
         assert_eq!(validate_pkexec_invoking_uid(Some("1000")), Ok(1000));
 
         assert!(
-            authorize_export(&AuthorizationDecision::Denied, &requested, None).is_err(),
+            authorize_export(&AuthorizationDecision::Denied, 1001, &requested, None).is_err(),
             "privileged identity must not authorize an export"
         );
         assert!(
