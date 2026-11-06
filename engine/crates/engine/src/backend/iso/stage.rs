@@ -173,6 +173,59 @@ impl DaiaPayloadStage {
     }
 }
 
+#[cfg(target_os = "linux")]
+fn copy_directory_contents(source: &Path, destination: &Path) -> io::Result<()> {
+    use rustix::fs::{Mode, OFlags};
+    use std::os::unix::ffi::OsStrExt;
+
+    let source_fd = crate::secure_copy::open_source_directory_nofollow(source)?;
+
+    if !destination.is_absolute() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "ISO payload destination must be absolute",
+        ));
+    }
+
+    let mut destination_fd = rustix::fs::open(
+        "/",
+        OFlags::RDONLY | OFlags::DIRECTORY | OFlags::CLOEXEC,
+        Mode::empty(),
+    )?;
+
+    for component in destination.components() {
+        use std::path::Component;
+
+        match component {
+            Component::RootDir => {}
+            Component::Normal(name) => {
+                let name = std::ffi::CString::new(name.as_bytes()).map_err(|_| {
+                    io::Error::new(
+                        io::ErrorKind::InvalidInput,
+                        "ISO destination component contains NUL",
+                    )
+                })?;
+
+                destination_fd =
+                    crate::secure_copy::open_or_create_directory_nofollow(&destination_fd, &name)?;
+            }
+            _ => {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "ISO destination contains an unsupported path component",
+                ));
+            }
+        }
+    }
+
+    crate::secure_copy::copy_directory_contents_at(
+        &source_fd,
+        &destination_fd,
+        &crate::secure_copy::open_or_create_directory_nofollow,
+    )
+}
+
+#[cfg(not(target_os = "linux"))]
 fn copy_directory_contents(source: &Path, destination: &Path) -> io::Result<()> {
     fs::create_dir_all(destination)?;
 
@@ -181,10 +234,23 @@ fn copy_directory_contents(source: &Path, destination: &Path) -> io::Result<()> 
         let source_path = entry.path();
         let destination_path = destination.join(entry.file_name());
 
-        if source_path.is_dir() {
+        let metadata = fs::symlink_metadata(&source_path)?;
+        if metadata.file_type().is_symlink() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "DAIA payload must not contain symbolic links",
+            ));
+        }
+
+        if metadata.is_dir() {
             copy_directory_contents(&source_path, &destination_path)?;
-        } else {
+        } else if metadata.is_file() {
             fs::copy(&source_path, &destination_path)?;
+        } else {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "DAIA payload contains an unsupported filesystem entry",
+            ));
         }
     }
 
@@ -416,7 +482,7 @@ mod tests {
     use inspector::{BootMode, InspectError, IsoInspector, IsoMetadata};
     use std::{
         fs::{self, File},
-        os::unix::fs::PermissionsExt,
+        os::unix::fs::{DirBuilderExt, PermissionsExt},
         path::{Path, PathBuf},
         sync::atomic::{AtomicUsize, Ordering},
     };
@@ -444,7 +510,10 @@ mod tests {
                 std::process::id()
             ));
 
-            fs::create_dir_all(&path).expect("test directory should be created");
+            fs::DirBuilder::new()
+                .mode(0o700)
+                .create(&path)
+                .expect("private test directory should be created");
 
             Self { path }
         }
@@ -534,6 +603,117 @@ mod tests {
         assert!(directory.path().join("live").exists());
         assert!(directory.path().join("boot").exists());
     }
+    #[test]
+    fn rejects_symlink_in_daia_payload() {
+        let directory = TestDirectory::create();
+        let source = directory.path().join("payload");
+        let destination = directory.path().join("published");
+        fs::create_dir_all(&source).expect("payload directory should exist");
+
+        let outside = directory.path().join("outside-secret");
+        fs::write(&outside, b"must-not-copy").expect("outside file should exist");
+
+        std::os::unix::fs::symlink(&outside, source.join("linked-secret"))
+            .expect("payload symlink should be created");
+
+        let error = super::copy_directory_contents(&source, &destination)
+            .expect_err("payload symlink must be rejected");
+
+        assert!(
+            error.kind() == std::io::ErrorKind::InvalidData || error.raw_os_error() == Some(40),
+            "unexpected symlink rejection error: {error}"
+        );
+        assert!(!destination.join("linked-secret").exists());
+    }
+
+    #[test]
+    fn rejects_fifo_in_daia_payload() {
+        let directory = TestDirectory::create();
+        let source = directory.path().join("payload");
+        let destination = directory.path().join("published");
+        fs::create_dir_all(&source).expect("payload directory should exist");
+
+        let fifo = source.join("unexpected-fifo");
+        let status = std::process::Command::new("mkfifo")
+            .arg(&fifo)
+            .status()
+            .expect("mkfifo should execute");
+        assert!(status.success(), "FIFO creation should succeed");
+
+        let error = super::copy_directory_contents(&source, &destination)
+            .expect_err("payload FIFO must be rejected");
+
+        assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
+        assert!(!destination.join("unexpected-fifo").exists());
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn rejects_symlink_at_iso_payload_destination() {
+        let directory = TestDirectory::create();
+        let source = directory.path().join("payload");
+        let destination = directory.path().join("published");
+        let outside = directory.path().join("outside");
+
+        fs::create_dir_all(&source).unwrap();
+        fs::create_dir_all(&outside).unwrap();
+        fs::write(source.join("config"), b"payload-data").unwrap();
+
+        std::os::unix::fs::symlink(&outside, &destination).unwrap();
+
+        super::copy_directory_contents(&source, &destination)
+            .expect_err("destination symlink must be rejected");
+
+        assert!(!outside.join("config").exists());
+        assert!(
+            fs::symlink_metadata(&destination)
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn rejects_symlink_in_iso_workspace_ancestor() {
+        let directory = TestDirectory::create();
+        let source = directory.path().join("payload");
+        let outside = directory.path().join("outside");
+        let workspace_link = directory.path().join("workspace-link");
+        let destination = workspace_link.join("daia");
+
+        fs::create_dir_all(&source).unwrap();
+        fs::create_dir_all(&outside).unwrap();
+        fs::write(source.join("config"), b"payload-data").unwrap();
+
+        std::os::unix::fs::symlink(&outside, &workspace_link).unwrap();
+
+        super::copy_directory_contents(&source, &destination)
+            .expect_err("workspace ancestor symlink must be rejected");
+
+        assert!(!outside.join("daia").exists());
+        assert!(!outside.join("config").exists());
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn rejects_symlink_at_iso_payload_source_root() {
+        let directory = TestDirectory::create();
+        let real_source = directory.path().join("real-payload");
+        let linked_source = directory.path().join("linked-payload");
+        let destination = directory.path().join("published");
+
+        fs::create_dir_all(&real_source).unwrap();
+        fs::write(real_source.join("config"), b"payload-data").unwrap();
+
+        std::os::unix::fs::symlink(&real_source, &linked_source).unwrap();
+
+        super::copy_directory_contents(&linked_source, &destination)
+            .expect_err("source root symlink must be rejected");
+
+        assert!(!destination.join("config").exists());
+    }
+
     #[test]
     fn copies_daia_payload_into_iso_workspace() {
         let directory = TestDirectory::create();

@@ -148,7 +148,7 @@ exit 1
                 privileged_squashfs: false,
                 xorriso_command: xorriso,
                 grub_mkrescue_command: PathBuf::from("grub-mkrescue"),
-                layout: Layout::new(temp),
+                layout: Layout::new(temp.join("iso-workspace")),
                 grub: GrubConfig {
                     menu_title: "Debian AI Appliance".to_owned(),
                     timeout: 5,
@@ -193,6 +193,8 @@ exit 1
     #[test]
     fn pipeline_populates_build_state() {
         let temp = tempdir().expect("temporary directory should be created");
+        fs::set_permissions(temp.path(), fs::Permissions::from_mode(0o700))
+            .expect("temporary ISO workspace parent should be private");
         let mut context = create_test_context(temp.path());
 
         IsoPipeline::run(&mut context, &TestIsoInspector).expect("ISO pipeline should complete");
@@ -217,6 +219,8 @@ exit 1
     #[test]
     fn inspection_failure_stops_pipeline() {
         let temp = tempdir().expect("temporary directory should be created");
+        fs::set_permissions(temp.path(), fs::Permissions::from_mode(0o700))
+            .expect("temporary ISO workspace parent should be private");
         let mut context = create_test_context(temp.path());
 
         let error = IsoPipeline::run(&mut context, &FailingIsoInspector)
@@ -234,6 +238,8 @@ exit 1
     #[test]
     fn squashfs_failure_stops_before_iso_creation() {
         let temp = tempdir().expect("temporary directory should be created");
+        fs::set_permissions(temp.path(), fs::Permissions::from_mode(0o700))
+            .expect("temporary ISO workspace parent should be private");
         let mut context = create_test_context(temp.path());
 
         create_failing_mksquashfs(&context.config.mksquashfs_command);
@@ -253,6 +259,8 @@ exit 1
     #[test]
     fn grub_rescue_failure_stops_pipeline() {
         let temp = tempdir().expect("temporary directory should be created");
+        fs::set_permissions(temp.path(), fs::Permissions::from_mode(0o700))
+            .expect("temporary ISO workspace parent should be private");
         let mut context = create_test_context(temp.path());
 
         let failing_grub = temp.path().join("grub-mkrescue");

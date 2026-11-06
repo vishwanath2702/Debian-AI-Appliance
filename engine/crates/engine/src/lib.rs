@@ -26,6 +26,7 @@ mod iso_refresh;
 mod mmdebstrap;
 mod model_realization;
 mod reconciliation;
+mod secure_copy;
 mod verification;
 mod workflow;
 

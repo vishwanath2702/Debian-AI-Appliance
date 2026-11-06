@@ -505,25 +505,721 @@ pub trait InstallationOperationExecutor {
     /// Returns an executor-specific error if the operation fails.
     fn execute_operation(&mut self, operation: &InstallationOperation) -> Result<(), Self::Error>;
 }
-fn copy_directory_contents(
-    source: &std::path::Path,
-    destination: &std::path::Path,
-) -> io::Result<()> {
-    std::fs::create_dir_all(destination)?;
+#[cfg(target_os = "linux")]
+fn open_runtime_source_directory(source: &std::path::Path) -> io::Result<std::os::fd::OwnedFd> {
+    crate::secure_copy::open_source_directory_nofollow(source)
+}
 
-    for entry in std::fs::read_dir(source)? {
-        let entry = entry?;
-        let source_path = entry.path();
-        let destination_path = destination.join(entry.file_name());
+#[cfg(target_os = "linux")]
+fn inspect_runtime_source_entries(source: &std::os::fd::OwnedFd) -> io::Result<()> {
+    use rustix::fs::{FileType, Mode, OFlags, RawDir};
+    use std::mem::MaybeUninit;
 
-        if source_path.is_dir() {
-            copy_directory_contents(&source_path, &destination_path)?;
-        } else if source_path.is_file() {
-            std::fs::copy(&source_path, &destination_path)?;
+    let mut buffer = [MaybeUninit::<u8>::uninit(); 8192];
+    let mut entries = RawDir::new(source, &mut buffer);
+
+    while let Some(result) = entries.next() {
+        let entry = result?;
+        let name = entry.file_name();
+
+        if name.to_bytes() == b"." || name.to_bytes() == b".." {
+            continue;
+        }
+
+        let descriptor = rustix::fs::openat(
+            source,
+            name,
+            OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::NONBLOCK | OFlags::CLOEXEC,
+            Mode::empty(),
+        )?;
+
+        let metadata = rustix::fs::fstat(&descriptor)?;
+
+        match FileType::from_raw_mode(metadata.st_mode) {
+            FileType::RegularFile | FileType::Directory => {}
+            _ => {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "runtime payload contains an unsupported file type",
+                ));
+            }
         }
     }
 
     Ok(())
+}
+
+#[cfg(target_os = "linux")]
+fn validate_runtime_destination_ancestor(directory: &std::os::fd::OwnedFd) -> io::Result<()> {
+    use rustix::fs::FileType;
+
+    let metadata = rustix::fs::fstat(directory)?;
+    let effective_uid = rustix::process::geteuid().as_raw();
+    let mode = metadata.st_mode;
+
+    let trusted_owner = metadata.st_uid == 0 || metadata.st_uid == effective_uid;
+    let protected_directory = mode & 0o022 == 0;
+    let protected_sticky_directory = metadata.st_uid == 0 && mode & 0o7777 == 0o1777;
+
+    if FileType::from_raw_mode(mode) != FileType::Directory
+        || !trusted_owner
+        || !(protected_directory || protected_sticky_directory)
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "runtime destination ancestor has unsafe ownership or permissions",
+        ));
+    }
+
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+fn validate_runtime_destination_directory(directory: &std::os::fd::OwnedFd) -> io::Result<()> {
+    use rustix::fs::FileType;
+
+    let metadata = rustix::fs::fstat(directory)?;
+    let effective_uid = rustix::process::geteuid().as_raw();
+
+    if FileType::from_raw_mode(metadata.st_mode) != FileType::Directory
+        || metadata.st_uid != effective_uid
+        || metadata.st_mode & 0o022 != 0
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "runtime destination directory has unsafe ownership or permissions",
+        ));
+    }
+
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+fn open_or_create_runtime_destination_directory(
+    parent: &std::os::fd::OwnedFd,
+    name: &std::ffi::CStr,
+) -> io::Result<std::os::fd::OwnedFd> {
+    let directory = crate::secure_copy::open_or_create_directory_nofollow(parent, name)?;
+    validate_runtime_destination_directory(&directory)?;
+    Ok(directory)
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod runtime_destination_directory_helper_tests {
+    use super::open_or_create_runtime_destination_directory;
+    use rustix::fs::{Mode, OFlags};
+
+    #[test]
+    fn runtime_destination_directory_helper_creates_and_reopens_directory() {
+        let temporary = tempfile::tempdir().unwrap();
+
+        let parent = rustix::fs::open(
+            temporary.path(),
+            OFlags::RDONLY | OFlags::DIRECTORY | OFlags::CLOEXEC,
+            Mode::empty(),
+        )
+        .unwrap();
+
+        let name = c"runtime";
+
+        let first = open_or_create_runtime_destination_directory(&parent, name).unwrap();
+        assert!(temporary.path().join("runtime").is_dir());
+
+        let second = open_or_create_runtime_destination_directory(&parent, name).unwrap();
+
+        let first_metadata = rustix::fs::fstat(&first).unwrap();
+        let second_metadata = rustix::fs::fstat(&second).unwrap();
+
+        assert_eq!(first_metadata.st_ino, second_metadata.st_ino);
+        assert_eq!(first_metadata.st_dev, second_metadata.st_dev);
+    }
+
+    #[test]
+    fn runtime_destination_directory_helper_rejects_regular_file() {
+        let temporary = tempfile::tempdir().unwrap();
+
+        let parent = rustix::fs::open(
+            temporary.path(),
+            OFlags::RDONLY | OFlags::DIRECTORY | OFlags::CLOEXEC,
+            Mode::empty(),
+        )
+        .unwrap();
+
+        std::fs::write(temporary.path().join("occupied"), b"keep me").unwrap();
+
+        let result = open_or_create_runtime_destination_directory(&parent, c"occupied");
+
+        assert!(
+            result.is_err(),
+            "existing regular file must not be treated as a directory"
+        );
+
+        assert_eq!(
+            std::fs::read(temporary.path().join("occupied")).unwrap(),
+            b"keep me"
+        );
+    }
+
+    #[test]
+    fn runtime_destination_directory_helper_rejects_symlink() {
+        use std::os::unix::fs::symlink;
+
+        let temporary = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+
+        let parent = rustix::fs::open(
+            temporary.path(),
+            OFlags::RDONLY | OFlags::DIRECTORY | OFlags::CLOEXEC,
+            Mode::empty(),
+        )
+        .unwrap();
+
+        symlink(outside.path(), temporary.path().join("linked")).unwrap();
+
+        let result = open_or_create_runtime_destination_directory(&parent, c"linked");
+
+        assert!(result.is_err(), "destination symlink must be rejected");
+    }
+    #[test]
+    fn runtime_destination_directory_helper_rejects_group_writable_directory() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let temporary = tempfile::tempdir().unwrap();
+        let directory = temporary.path().join("unsafe");
+        std::fs::create_dir(&directory).unwrap();
+        std::fs::set_permissions(&directory, std::fs::Permissions::from_mode(0o775)).unwrap();
+
+        let parent = rustix::fs::open(
+            temporary.path(),
+            OFlags::RDONLY | OFlags::DIRECTORY | OFlags::CLOEXEC,
+            Mode::empty(),
+        )
+        .unwrap();
+
+        let result = super::open_or_create_runtime_destination_directory(&parent, c"unsafe");
+
+        assert!(
+            result.is_err(),
+            "group-writable destination must be rejected"
+        );
+    }
+
+    #[test]
+    fn runtime_destination_directory_helper_rejects_world_writable_directory() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let temporary = tempfile::tempdir().unwrap();
+        let directory = temporary.path().join("unsafe");
+        std::fs::create_dir(&directory).unwrap();
+        std::fs::set_permissions(&directory, std::fs::Permissions::from_mode(0o777)).unwrap();
+
+        let parent = rustix::fs::open(
+            temporary.path(),
+            OFlags::RDONLY | OFlags::DIRECTORY | OFlags::CLOEXEC,
+            Mode::empty(),
+        )
+        .unwrap();
+
+        let result = super::open_or_create_runtime_destination_directory(&parent, c"unsafe");
+
+        assert!(
+            result.is_err(),
+            "world-writable destination must be rejected"
+        );
+    }
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod runtime_destination_ancestor_tests {
+    use super::validate_runtime_destination_ancestor;
+    use rustix::fs::{Mode, OFlags};
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+
+    fn open_directory(path: &std::path::Path) -> std::os::fd::OwnedFd {
+        rustix::fs::open(
+            path,
+            OFlags::RDONLY | OFlags::DIRECTORY | OFlags::CLOEXEC,
+            Mode::empty(),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn ancestor_accepts_secure_owned_directory() {
+        let temporary = tempfile::tempdir().unwrap();
+        std::fs::set_permissions(temporary.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+
+        let directory = open_directory(temporary.path());
+        assert!(validate_runtime_destination_ancestor(&directory).is_ok());
+    }
+
+    #[test]
+    fn ancestor_rejects_group_writable_directory() {
+        let temporary = tempfile::tempdir().unwrap();
+        std::fs::set_permissions(temporary.path(), std::fs::Permissions::from_mode(0o770)).unwrap();
+
+        let directory = open_directory(temporary.path());
+        assert!(validate_runtime_destination_ancestor(&directory).is_err());
+    }
+
+    #[test]
+    fn ancestor_rejects_world_writable_directory() {
+        let temporary = tempfile::tempdir().unwrap();
+        std::fs::set_permissions(temporary.path(), std::fs::Permissions::from_mode(0o777)).unwrap();
+
+        let directory = open_directory(temporary.path());
+        assert!(validate_runtime_destination_ancestor(&directory).is_err());
+    }
+
+    #[test]
+    fn ancestor_rejects_user_owned_world_writable_sticky_directory() {
+        if rustix::process::geteuid().as_raw() == 0 {
+            return;
+        }
+
+        let temporary = tempfile::tempdir().unwrap();
+        std::fs::set_permissions(temporary.path(), std::fs::Permissions::from_mode(0o1777))
+            .unwrap();
+
+        let metadata = std::fs::metadata(temporary.path()).unwrap();
+        assert_ne!(
+            metadata.uid(),
+            0,
+            "this regression requires an unprivileged test user"
+        );
+
+        let directory = open_directory(temporary.path());
+        assert!(
+            validate_runtime_destination_ancestor(&directory).is_err(),
+            "user-owned sticky directory must not bypass ancestor protection"
+        );
+    }
+
+    #[test]
+    fn ancestor_accepts_root_owned_sticky_tmp() {
+        let metadata = std::fs::metadata("/tmp").unwrap();
+
+        if metadata.uid() != 0 || metadata.permissions().mode() & 0o1777 != 0o1777 {
+            return;
+        }
+
+        let directory = open_directory(std::path::Path::new("/tmp"));
+        assert!(validate_runtime_destination_ancestor(&directory).is_ok());
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn copy_runtime_regular_file_at(
+    source_fd: std::os::fd::OwnedFd,
+    destination_directory: &std::os::fd::OwnedFd,
+    name: &std::ffi::CStr,
+) -> io::Result<()> {
+    crate::secure_copy::copy_regular_file_at(source_fd, destination_directory, name)
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod runtime_file_copy_helper_tests {
+    use super::copy_runtime_regular_file_at;
+    use rustix::fs::{Mode, OFlags};
+    use std::os::unix::fs::PermissionsExt;
+
+    fn open_directory(path: &std::path::Path) -> std::os::fd::OwnedFd {
+        rustix::fs::open(
+            path,
+            OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+            Mode::empty(),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn runtime_file_copy_preserves_executable_mode() {
+        let source = tempfile::tempdir().unwrap();
+        let destination = tempfile::tempdir().unwrap();
+
+        let source_path = source.path().join("tool");
+        std::fs::write(&source_path, b"#!/bin/sh\nexit 0\n").unwrap();
+        std::fs::set_permissions(&source_path, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        let source_fd = open_directory(source.path());
+        let destination_fd = open_directory(destination.path());
+
+        let file_fd = rustix::fs::openat(
+            &source_fd,
+            c"tool",
+            OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+            Mode::empty(),
+        )
+        .unwrap();
+
+        copy_runtime_regular_file_at(file_fd, &destination_fd, c"tool").unwrap();
+
+        let destination_path = destination.path().join("tool");
+
+        assert_eq!(
+            std::fs::read(&destination_path).unwrap(),
+            std::fs::read(&source_path).unwrap()
+        );
+
+        assert_eq!(
+            std::fs::metadata(&destination_path)
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
+            0o755
+        );
+    }
+
+    #[test]
+    fn runtime_file_copy_replaces_existing_regular_file() {
+        let source = tempfile::tempdir().unwrap();
+        let destination = tempfile::tempdir().unwrap();
+
+        let source_path = source.path().join("config");
+        let destination_path = destination.path().join("config");
+
+        std::fs::write(&source_path, b"new configuration").unwrap();
+        std::fs::write(&destination_path, b"old configuration").unwrap();
+
+        std::fs::set_permissions(&source_path, std::fs::Permissions::from_mode(0o640)).unwrap();
+
+        let source_fd = open_directory(source.path());
+        let destination_fd = open_directory(destination.path());
+
+        let file_fd = rustix::fs::openat(
+            &source_fd,
+            c"config",
+            OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+            Mode::empty(),
+        )
+        .unwrap();
+
+        copy_runtime_regular_file_at(file_fd, &destination_fd, c"config").unwrap();
+
+        assert_eq!(
+            std::fs::read(&destination_path).unwrap(),
+            b"new configuration"
+        );
+
+        assert_eq!(
+            std::fs::metadata(&destination_path)
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
+            0o640
+        );
+
+        let entries: Vec<_> = std::fs::read_dir(destination.path())
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .collect();
+
+        assert_eq!(entries.len(), 1, "temporary files must not remain");
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn copy_runtime_directory_contents_at(
+    source_directory: &std::os::fd::OwnedFd,
+    destination_directory: &std::os::fd::OwnedFd,
+) -> io::Result<()> {
+    crate::secure_copy::copy_directory_contents_at(
+        source_directory,
+        destination_directory,
+        &open_or_create_runtime_destination_directory,
+    )
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod runtime_recursive_copy_tests {
+    use super::{copy_runtime_directory_contents_at, inspect_runtime_source_entries};
+    use rustix::fs::{Mode, OFlags};
+    use std::os::unix::fs::PermissionsExt;
+
+    fn open_directory(path: &std::path::Path) -> std::os::fd::OwnedFd {
+        rustix::fs::open(
+            path,
+            OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+            Mode::empty(),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn runtime_recursive_copy_preserves_nested_files() {
+        let source = tempfile::tempdir().unwrap();
+        let destination = tempfile::tempdir().unwrap();
+
+        let nested = source.path().join("usr/local/bin");
+        std::fs::create_dir_all(&nested).unwrap();
+
+        let script = nested.join("daia-tool");
+        std::fs::write(&script, b"#!/bin/sh\\nexit 0\\n").unwrap();
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        std::fs::create_dir_all(source.path().join("etc/daia")).unwrap();
+        std::fs::write(source.path().join("etc/daia/runtime.conf"), b"enabled=true").unwrap();
+
+        let source_fd = open_directory(source.path());
+        let destination_fd = open_directory(destination.path());
+
+        copy_runtime_directory_contents_at(&source_fd, &destination_fd).unwrap();
+
+        let copied_script = destination.path().join("usr/local/bin/daia-tool");
+
+        assert_eq!(
+            std::fs::read(&copied_script).unwrap(),
+            std::fs::read(&script).unwrap()
+        );
+
+        assert_eq!(
+            std::fs::metadata(&copied_script)
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
+            0o755
+        );
+
+        assert_eq!(
+            std::fs::read(destination.path().join("etc/daia/runtime.conf")).unwrap(),
+            b"enabled=true"
+        );
+    }
+
+    #[test]
+    fn runtime_recursive_copy_rejects_nested_symlink() {
+        use std::os::unix::fs::symlink;
+
+        let source = tempfile::tempdir().unwrap();
+        let destination = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+
+        std::fs::create_dir_all(source.path().join("nested")).unwrap();
+
+        let secret = outside.path().join("secret");
+        std::fs::write(&secret, b"outside-data").unwrap();
+
+        symlink(&secret, source.path().join("nested/linked")).unwrap();
+
+        let source_fd = open_directory(source.path());
+        let destination_fd = open_directory(destination.path());
+
+        let result = copy_runtime_directory_contents_at(&source_fd, &destination_fd);
+
+        assert!(result.is_err(), "nested source symlink must be rejected");
+
+        assert!(
+            !destination.path().join("nested/linked").exists(),
+            "symlink target must not be copied"
+        );
+
+        assert_eq!(std::fs::read(&secret).unwrap(), b"outside-data");
+    }
+
+    #[test]
+    fn runtime_recursive_copy_after_independent_inspection_preserves_files() {
+        let source = tempfile::tempdir().unwrap();
+        let destination = tempfile::tempdir().unwrap();
+
+        std::fs::write(source.path().join("runtime.txt"), b"runtime-data").unwrap();
+
+        let source_fd = open_directory(source.path());
+        let destination_fd = open_directory(destination.path());
+
+        let inspection_fd = rustix::fs::openat(
+            &source_fd,
+            ".",
+            OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+            Mode::empty(),
+        )
+        .unwrap();
+
+        inspect_runtime_source_entries(&inspection_fd).unwrap();
+
+        copy_runtime_directory_contents_at(&source_fd, &destination_fd).unwrap();
+
+        assert_eq!(
+            std::fs::read(destination.path().join("runtime.txt")).unwrap(),
+            b"runtime-data"
+        );
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn validate_production_runtime_source_mount_flags(
+    flags: rustix::fs::StatVfsMountFlags,
+) -> io::Result<()> {
+    if !flags.contains(rustix::fs::StatVfsMountFlags::RDONLY) {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "production runtime payload filesystem must be mounted read-only",
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod runtime_source_mount_tests {
+    use super::validate_production_runtime_source_mount_flags;
+    use rustix::fs::StatVfsMountFlags;
+
+    #[test]
+    fn production_runtime_source_requires_read_only_mount() {
+        let writable = validate_production_runtime_source_mount_flags(StatVfsMountFlags::empty());
+        assert_eq!(
+            writable.unwrap_err().kind(),
+            std::io::ErrorKind::PermissionDenied
+        );
+
+        validate_production_runtime_source_mount_flags(StatVfsMountFlags::RDONLY)
+            .expect("read-only mount must be accepted");
+    }
+}
+
+fn copy_directory_contents(
+    source: &std::path::Path,
+    destination: &std::path::Path,
+) -> io::Result<()> {
+    #[cfg(target_os = "linux")]
+    {
+        use rustix::fs::{Mode, OFlags};
+        use std::path::Component;
+
+        let source_directory = open_runtime_source_directory(source)?;
+
+        if source == std::path::Path::new(RUNTIME_PAYLOAD_DIRECTORY) {
+            let filesystem_status = rustix::fs::fstatvfs(&source_directory)?;
+            validate_production_runtime_source_mount_flags(filesystem_status.f_flag)?;
+        }
+
+        let inspection_directory = rustix::fs::openat(
+            &source_directory,
+            ".",
+            OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+            Mode::empty(),
+        )?;
+        inspect_runtime_source_entries(&inspection_directory)?;
+
+        if !destination.is_absolute() || destination == std::path::Path::new("/") {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "runtime deployment root must be an absolute non-root path",
+            ));
+        }
+
+        let mut directory = rustix::fs::open(
+            "/",
+            OFlags::RDONLY | OFlags::DIRECTORY | OFlags::CLOEXEC,
+            Mode::empty(),
+        )?;
+
+        validate_runtime_destination_ancestor(&directory)?;
+
+        for component in destination.components() {
+            let Component::Normal(name) = component else {
+                if component == Component::RootDir {
+                    continue;
+                }
+
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "invalid runtime deployment root component",
+                ));
+            };
+
+            let flags = OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC;
+
+            directory = match rustix::fs::openat(&directory, name, flags, Mode::empty()) {
+                Ok(next) => next,
+                Err(rustix::io::Errno::NOENT) => {
+                    match rustix::fs::mkdirat(&directory, name, Mode::from_raw_mode(0o755)) {
+                        Ok(()) | Err(rustix::io::Errno::EXIST) => {}
+                        Err(error) => return Err(error.into()),
+                    }
+
+                    rustix::fs::openat(&directory, name, flags, Mode::empty())?
+                }
+                Err(error) => return Err(error.into()),
+            };
+
+            validate_runtime_destination_ancestor(&directory)?;
+        }
+
+        validate_runtime_destination_directory(&directory)?;
+        return copy_runtime_directory_contents_at(&source_directory, &directory);
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    {
+        match std::fs::symlink_metadata(destination) {
+            Ok(metadata) if metadata.file_type().is_symlink() => {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "runtime deployment root is a symbolic link",
+                ));
+            }
+            Ok(_) => {}
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error),
+        }
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    {
+        std::fs::create_dir_all(destination)?;
+
+        for entry in std::fs::read_dir(source)? {
+            let entry = entry?;
+            let source_path = entry.path();
+            let destination_path = destination.join(entry.file_name());
+
+            let metadata = std::fs::symlink_metadata(&source_path)?;
+
+            match std::fs::symlink_metadata(&destination_path) {
+                Ok(destination_metadata) if destination_metadata.file_type().is_symlink() => {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        format!(
+                            "runtime destination contains a symbolic link: {}",
+                            destination_path.display()
+                        ),
+                    ));
+                }
+                Ok(_) => {}
+                Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+                Err(error) => return Err(error),
+            }
+
+            if metadata.file_type().is_symlink() {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!(
+                        "runtime payload contains a symbolic link: {}",
+                        source_path.display()
+                    ),
+                ));
+            }
+
+            if metadata.is_dir() {
+                copy_directory_contents(&source_path, &destination_path)?;
+            } else if metadata.is_file() {
+                std::fs::copy(&source_path, &destination_path)?;
+            } else {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!(
+                        "runtime payload contains an unsupported file type: {}",
+                        source_path.display()
+                    ),
+                ));
+            }
+        }
+
+        Ok(())
+    }
 }
 
 /// Executes installation operations against the host system.
@@ -2877,6 +3573,11 @@ mod tests {
     fn system_executor_deploys_runtime_file_under_target_root() {
         let temporary_directory =
             tempfile::tempdir().expect("temporary directory should be created");
+        std::fs::set_permissions(
+            temporary_directory.path(),
+            std::os::unix::fs::PermissionsExt::from_mode(0o700),
+        )
+        .expect("temporary parent directory should be secured");
 
         let runtime_payload_directory = temporary_directory.path().join("payload");
         std::fs::create_dir_all(&runtime_payload_directory)
@@ -2890,6 +3591,11 @@ mod tests {
 
         let target_root = temporary_directory.path().join("target");
         std::fs::create_dir_all(&target_root).expect("target root should be created");
+        std::fs::set_permissions(
+            &target_root,
+            std::os::unix::fs::PermissionsExt::from_mode(0o755),
+        )
+        .expect("target root permissions should be secured");
 
         let mut executor = SystemInstallationOperationExecutor::with_dependencies(
             RecordingCommandRunner::default(),
@@ -2913,6 +3619,11 @@ mod tests {
     fn system_executor_deploys_runtime_directories_under_target_root() {
         let temporary_directory =
             tempfile::tempdir().expect("temporary directory should be created");
+        std::fs::set_permissions(
+            temporary_directory.path(),
+            std::os::unix::fs::PermissionsExt::from_mode(0o700),
+        )
+        .expect("temporary parent directory should be secured");
 
         let runtime_payload_directory = temporary_directory.path().join("payload");
         let nested_runtime_directory = runtime_payload_directory.join("opt/daia");
@@ -2927,6 +3638,12 @@ mod tests {
         .expect("nested runtime payload file should be written");
 
         let target_root = temporary_directory.path().join("target");
+        std::fs::create_dir_all(&target_root).expect("target root should be created");
+        std::fs::set_permissions(
+            &target_root,
+            std::os::unix::fs::PermissionsExt::from_mode(0o755),
+        )
+        .expect("target root permissions should be secured");
 
         let mut executor = SystemInstallationOperationExecutor::with_dependencies(
             RecordingCommandRunner::default(),
@@ -2947,12 +3664,368 @@ mod tests {
     }
 
     #[cfg(unix)]
+    #[cfg(unix)]
+    #[test]
+    fn system_executor_rejects_symlinked_runtime_destination_parent() {
+        use std::os::unix::fs::symlink;
+
+        let temporary_directory =
+            tempfile::tempdir().expect("temporary directory should be created");
+
+        let payload = temporary_directory.path().join("payload");
+        let target = temporary_directory.path().join("target");
+        let outside = temporary_directory.path().join("outside");
+
+        std::fs::create_dir_all(payload.join("opt/daia")).unwrap();
+        std::fs::create_dir_all(&target).unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
+
+        std::fs::write(payload.join("opt/daia/runtime.txt"), b"runtime payload").unwrap();
+
+        symlink(&outside, target.join("opt")).unwrap();
+
+        let mut executor = SystemInstallationOperationExecutor::with_dependencies(
+            RecordingCommandRunner::default(),
+        )
+        .with_runtime_payload_directory(payload);
+
+        let result = executor.execute_operation(&InstallationOperation::DeployRuntime {
+            root: target.clone(),
+        });
+
+        assert!(
+            result.is_err(),
+            "runtime deployment must reject symlinked destination parents"
+        );
+
+        assert!(
+            !outside.join("daia/runtime.txt").exists(),
+            "runtime payload must not escape the installation target"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn system_executor_rejects_symlinked_runtime_root_ancestor() {
+        use std::os::unix::fs::symlink;
+
+        let temporary = tempfile::tempdir().unwrap();
+        let payload = temporary.path().join("payload");
+        let outside = temporary.path().join("outside");
+        let link = temporary.path().join("link");
+
+        std::fs::create_dir_all(&payload).unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
+        std::fs::write(payload.join("runtime.txt"), b"runtime payload").unwrap();
+
+        symlink(&outside, &link).unwrap();
+
+        let target = link.join("target");
+
+        let mut executor = SystemInstallationOperationExecutor::with_dependencies(
+            RecordingCommandRunner::default(),
+        )
+        .with_runtime_payload_directory(payload);
+
+        let result =
+            executor.execute_operation(&InstallationOperation::DeployRuntime { root: target });
+
+        assert!(
+            result.is_err(),
+            "runtime deployment must reject symlinked root ancestors"
+        );
+
+        assert!(
+            !outside.join("target/runtime.txt").exists(),
+            "runtime deployment must not escape through a root ancestor"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn system_executor_rejects_symlinked_runtime_root() {
+        use std::os::unix::fs::symlink;
+
+        let temporary_directory =
+            tempfile::tempdir().expect("temporary directory should be created");
+
+        let payload = temporary_directory.path().join("payload");
+        let target = temporary_directory.path().join("target");
+        let outside = temporary_directory.path().join("outside");
+
+        std::fs::create_dir_all(&payload).unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
+
+        std::fs::write(payload.join("runtime.txt"), b"runtime payload").unwrap();
+
+        symlink(&outside, &target).unwrap();
+
+        let mut executor = SystemInstallationOperationExecutor::with_dependencies(
+            RecordingCommandRunner::default(),
+        )
+        .with_runtime_payload_directory(payload);
+
+        let result =
+            executor.execute_operation(&InstallationOperation::DeployRuntime { root: target });
+
+        assert!(
+            result.is_err(),
+            "runtime deployment must reject a symlinked target root"
+        );
+
+        assert!(
+            !outside.join("runtime.txt").exists(),
+            "runtime deployment must not write outside the target root"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn system_executor_rejects_symlinked_runtime_destination_file() {
+        use std::os::unix::fs::symlink;
+
+        let temporary_directory =
+            tempfile::tempdir().expect("temporary directory should be created");
+
+        let payload = temporary_directory.path().join("payload");
+        let target = temporary_directory.path().join("target");
+        let outside = temporary_directory.path().join("outside-secret");
+
+        std::fs::create_dir_all(&payload).unwrap();
+        std::fs::create_dir_all(&target).unwrap();
+
+        std::fs::write(payload.join("runtime.txt"), b"new runtime").unwrap();
+        std::fs::write(&outside, b"original secret").unwrap();
+
+        symlink(&outside, target.join("runtime.txt")).unwrap();
+
+        let mut executor = SystemInstallationOperationExecutor::with_dependencies(
+            RecordingCommandRunner::default(),
+        )
+        .with_runtime_payload_directory(payload);
+
+        let result = executor.execute_operation(&InstallationOperation::DeployRuntime {
+            root: target.clone(),
+        });
+
+        assert!(
+            result.is_err(),
+            "runtime deployment must reject destination symlinks"
+        );
+
+        assert_eq!(
+            std::fs::read(&outside).unwrap(),
+            b"original secret",
+            "outside file must remain unchanged"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn system_executor_rejects_symlinked_runtime_source_file() {
+        use std::os::unix::fs::symlink;
+
+        let temporary_directory =
+            tempfile::tempdir().expect("temporary directory should be created");
+
+        let payload = temporary_directory.path().join("payload");
+        let target = temporary_directory.path().join("target");
+        let outside = temporary_directory.path().join("outside-secret");
+
+        std::fs::create_dir_all(&payload).unwrap();
+        std::fs::create_dir_all(&target).unwrap();
+        std::fs::write(&outside, b"must not be deployed").unwrap();
+
+        symlink(&outside, payload.join("untrusted-file")).unwrap();
+
+        let mut executor = SystemInstallationOperationExecutor::with_dependencies(
+            RecordingCommandRunner::default(),
+        )
+        .with_runtime_payload_directory(payload);
+
+        let result = executor.execute_operation(&InstallationOperation::DeployRuntime {
+            root: target.clone(),
+        });
+
+        assert!(
+            result.is_err(),
+            "runtime deployment must reject source symlinks"
+        );
+
+        assert!(
+            !target.join("untrusted-file").exists(),
+            "symlink target content must not be deployed"
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn system_executor_rejects_runtime_source_fifo() {
+        use rustix::fs::{Mode, OFlags};
+
+        let temporary = tempfile::tempdir().unwrap();
+        let payload = temporary.path().join("payload");
+        let target = temporary.path().join("target");
+
+        std::fs::create_dir_all(&payload).unwrap();
+
+        let directory = rustix::fs::open(
+            &payload,
+            OFlags::RDONLY | OFlags::DIRECTORY | OFlags::CLOEXEC,
+            Mode::empty(),
+        )
+        .unwrap();
+
+        rustix::fs::mkfifoat(&directory, "unsafe-pipe", Mode::from_raw_mode(0o600)).unwrap();
+
+        let mut executor = SystemInstallationOperationExecutor::with_dependencies(
+            RecordingCommandRunner::default(),
+        )
+        .with_runtime_payload_directory(payload);
+
+        let result = executor.execute_operation(&InstallationOperation::DeployRuntime {
+            root: target.clone(),
+        });
+
+        assert!(
+            result.is_err(),
+            "runtime deployment must reject FIFO source entries"
+        );
+
+        assert!(
+            !target.join("unsafe-pipe").exists(),
+            "FIFO must not be deployed"
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn system_executor_rejects_symlinked_runtime_source_directory() {
+        use std::os::unix::fs::symlink;
+
+        let temporary = tempfile::tempdir().unwrap();
+        let payload = temporary.path().join("payload");
+        let outside = temporary.path().join("outside");
+        let target = temporary.path().join("target");
+
+        std::fs::create_dir_all(&payload).unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
+        std::fs::write(outside.join("secret.txt"), b"outside content").unwrap();
+
+        symlink(&outside, payload.join("linked-directory")).unwrap();
+
+        let mut executor = SystemInstallationOperationExecutor::with_dependencies(
+            RecordingCommandRunner::default(),
+        )
+        .with_runtime_payload_directory(payload);
+
+        let result = executor.execute_operation(&InstallationOperation::DeployRuntime {
+            root: target.clone(),
+        });
+
+        assert!(
+            result.is_err(),
+            "deployment must reject symlinked source directories"
+        );
+
+        assert!(
+            !target.join("linked-directory/secret.txt").exists(),
+            "deployment must not copy content outside the source payload"
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn system_executor_rejects_symlinked_runtime_source_root() {
+        use std::os::unix::fs::symlink;
+
+        let temporary = tempfile::tempdir().unwrap();
+        let actual_payload = temporary.path().join("actual-payload");
+        let linked_payload = temporary.path().join("linked-payload");
+        let target = temporary.path().join("target");
+
+        std::fs::create_dir_all(&actual_payload).unwrap();
+        std::fs::write(actual_payload.join("runtime.txt"), b"untrusted").unwrap();
+        symlink(&actual_payload, &linked_payload).unwrap();
+
+        let mut executor = SystemInstallationOperationExecutor::with_dependencies(
+            RecordingCommandRunner::default(),
+        )
+        .with_runtime_payload_directory(linked_payload);
+
+        let result = executor.execute_operation(&InstallationOperation::DeployRuntime {
+            root: target.clone(),
+        });
+
+        assert!(
+            result.is_err(),
+            "runtime deployment must reject a symlinked source root"
+        );
+
+        assert!(
+            !target.join("runtime.txt").exists(),
+            "runtime deployment must not copy from a symlinked source root"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn system_executor_replaces_existing_regular_runtime_file() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let temporary = tempfile::tempdir().unwrap();
+        std::fs::set_permissions(temporary.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+
+        let payload = temporary.path().join("payload");
+        let target = temporary.path().join("target");
+
+        std::fs::create_dir_all(&payload).unwrap();
+        std::fs::create_dir_all(&target).unwrap();
+        std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        let source = payload.join("runtime.sh");
+        let destination = target.join("runtime.sh");
+
+        std::fs::write(&source, b"#!/bin/sh\\necho new\\n").unwrap();
+        std::fs::write(&destination, b"#!/bin/sh\\necho old\\n").unwrap();
+
+        std::fs::set_permissions(&source, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        let mut executor = SystemInstallationOperationExecutor::with_dependencies(
+            RecordingCommandRunner::default(),
+        )
+        .with_runtime_payload_directory(payload);
+
+        executor
+            .execute_operation(&InstallationOperation::DeployRuntime { root: target })
+            .expect("regular runtime file replacement should succeed");
+
+        assert_eq!(
+            std::fs::read(&destination).unwrap(),
+            b"#!/bin/sh\\necho new\\n"
+        );
+
+        assert_eq!(
+            std::fs::metadata(&destination)
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
+            0o755
+        );
+    }
+
     #[test]
     fn system_executor_preserves_runtime_file_permissions() {
         use std::os::unix::fs::PermissionsExt;
 
         let temporary_directory =
             tempfile::tempdir().expect("temporary directory should be created");
+        std::fs::set_permissions(
+            temporary_directory.path(),
+            std::fs::Permissions::from_mode(0o700),
+        )
+        .expect("temporary parent directory should be secured");
 
         let runtime_payload_directory = temporary_directory.path().join("payload");
         let runtime_script = runtime_payload_directory.join("opt/daia/bootstrap.sh");
@@ -2970,6 +4043,9 @@ mod tests {
             .expect("runtime script permissions should be set");
 
         let target_root = temporary_directory.path().join("target");
+        std::fs::create_dir_all(&target_root).expect("target root should be created");
+        std::fs::set_permissions(&target_root, std::fs::Permissions::from_mode(0o755))
+            .expect("target root permissions should be secured");
 
         let mut executor = SystemInstallationOperationExecutor::with_dependencies(
             RecordingCommandRunner::default(),
