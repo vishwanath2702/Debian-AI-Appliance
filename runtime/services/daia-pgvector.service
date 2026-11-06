@@ -1,0 +1,18 @@
+[Unit]
+Description=DAIA PostgreSQL 17 pgvector service
+Requires=docker.service
+After=docker.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/libexec/daia-pgvector-start
+ExecStop=/usr/libexec/daia-pgvector-stop
+TimeoutStartSec=180
+TimeoutStopSec=90
+StandardOutput=journal
+StandardError=journal
+
+# Activation is intentionally deferred until the startup
+# helper, credential isolation, image identity, and persistent
+# storage contracts have been fully verified.

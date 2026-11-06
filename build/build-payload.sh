@@ -406,6 +406,53 @@ stage_runtime()
             "Runtime orchestrator staged successfully."
     fi
 
+    if [[ ! -f "$DAIA_RUNTIME_SOURCE/pgvector_credentials.py" ]]
+    then
+        log_error "Required pgvector credential helper is missing:"
+        log_error "  $DAIA_RUNTIME_SOURCE/pgvector_credentials.py"
+        return 1
+    fi
+
+    copy_file \
+        "$DAIA_RUNTIME_SOURCE/pgvector_credentials.py" \
+        "$DAIA_ROOT_TARGET/pgvector_credentials.py" \
+        0755
+
+    record_staged_component \
+        "PostgreSQL credential helper staged successfully."
+
+    for helper in \
+        pgvector_registration.py \
+        daia-pgvector-verify-registration \
+        daia-pgvector-stop
+    do
+        if [[ ! -f "$DAIA_RUNTIME_SOURCE/$helper" ]] ||
+           [[ -L "$DAIA_RUNTIME_SOURCE/$helper" ]]; then
+            log_error "Required pgvector helper is missing or unsafe: $helper"
+            return 1
+        fi
+    done
+
+    copy_file \
+        "$DAIA_RUNTIME_SOURCE/pgvector_registration.py" \
+        "$DAIA_ROOT_TARGET/pgvector_registration.py" \
+        0644
+
+    ensure_directory "$DAIA_WORKSPACE/usr/libexec"
+
+    copy_file \
+        "$DAIA_RUNTIME_SOURCE/daia-pgvector-verify-registration" \
+        "$DAIA_WORKSPACE/usr/libexec/daia-pgvector-verify-registration" \
+        0755
+
+    copy_file \
+        "$DAIA_RUNTIME_SOURCE/daia-pgvector-stop" \
+        "$DAIA_WORKSPACE/usr/libexec/daia-pgvector-stop" \
+        0755
+
+    record_staged_component \
+        "PostgreSQL registration and shutdown helpers staged successfully."
+
     if [[ -f "$DAIA_RUNTIME_SOURCE/daia-model-importer.sh" ]]
     then
         ensure_directory "$DAIA_WORKSPACE/usr/bin"
@@ -617,6 +664,12 @@ stage_offline_components()
         "$DAIA_ENABLE_OPEN_WEBUI" \
         "$DAIA_OPEN_WEBUI_IMAGE_ABS" \
         "$DAIA_IMAGES_TARGET/open-webui.tar"
+
+    stage_file_component \
+        "PostgreSQL pgvector container image" \
+        "$DAIA_ENABLE_PGVECTOR" \
+        "$DAIA_PGVECTOR_IMAGE_ABS" \
+        "$DAIA_IMAGES_TARGET/pgvector.tar"
 
     stage_directory_component \
         "Default AI model" \

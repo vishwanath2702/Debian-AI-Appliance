@@ -17,6 +17,7 @@ packages:
   # DAIA graphical model importer and manager
   - kdialog
   - qdbus-qt6
+  - python3
   - python3-pyqt6
   - pkexec
   - ntfs-3g

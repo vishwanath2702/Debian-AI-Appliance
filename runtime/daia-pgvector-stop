@@ -1,0 +1,61 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+container_name="daia-pgvector"
+
+if [[ "$EUID" -ne 0 ]]; then
+    echo "DAIA pgvector shutdown requires root" >&2
+    exit 1
+fi
+
+if ! command -v docker >/dev/null 2>&1; then
+    echo "Docker is unavailable" >&2
+    exit 1
+fi
+
+if ! docker info >/dev/null 2>&1; then
+    echo "Docker daemon is unavailable" >&2
+    exit 1
+fi
+
+# Retrieve identity and ownership from one Docker inspection.
+# A container-name reassignment cannot mix results from
+# separate inspection operations.
+if ! inspection="$(docker container inspect \
+    --format '{{.Id}}{{printf "\t"}}{{index .Config.Labels "org.daia.component"}}{{printf "\t"}}{{index .Config.Labels "org.daia.managed"}}' \
+    "$container_name" 2>/dev/null)"; then
+    echo "DAIA pgvector container is missing or cannot be inspected" >&2
+    exit 1
+fi
+
+# Parse exactly three fields without IFS whitespace collapsing.
+# The two labels have fixed expected values, so require the complete
+# inspection response to match the validated ID and those labels.
+if [[ "$inspection" == *$'\n'* ||
+      "$inspection" != *$'\t'* ]]; then
+    echo "DAIA pgvector inspection output is malformed" >&2
+    exit 1
+fi
+
+container_id="${inspection%%$'\t'*}"
+
+if [[ ! "$container_id" =~ ^[0-9a-f]{64}$ ]]; then
+    echo "DAIA pgvector container identity is invalid" >&2
+    exit 1
+fi
+
+expected="${container_id}"$'\t'"pgvector"$'\t'"true"
+
+if [[ "$inspection" != "$expected" ]]; then
+    echo "Refusing to stop an unverified PostgreSQL container" >&2
+    exit 1
+fi
+
+# Require independent root-owned registration before shutdown.
+# Docker labels alone do not authorize stopping a container.
+if ! /usr/libexec/daia-pgvector-verify-registration "$container_id"; then
+    echo "Refusing shutdown without matching trusted registration" >&2
+    exit 1
+fi
+
+docker stop --time 60 "$container_id"

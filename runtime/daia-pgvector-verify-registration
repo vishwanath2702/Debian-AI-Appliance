@@ -1,0 +1,43 @@
+#!/usr/bin/python3
+"""Verify DAIA pgvector container identity before shutdown."""
+
+import os
+import sys
+
+# Load DAIA's packaged registration modules from a fixed location.
+sys.path.insert(0, "/opt/daia")
+
+from pgvector_registration import verify_trusted_registration
+
+
+STATE_DIRECTORY = "/var/lib/daia/pgvector"
+
+
+def main() -> int:
+    if os.geteuid() != 0:
+        print("DAIA pgvector registration verification requires root",
+              file=sys.stderr)
+        return 1
+
+    if len(sys.argv) != 2:
+        print("Expected exactly one Docker container ID",
+              file=sys.stderr)
+        return 1
+
+    try:
+        verify_trusted_registration(
+            STATE_DIRECTORY,
+            sys.argv[1],
+        )
+    except (OSError, ValueError, PermissionError) as error:
+        print(
+            f"DAIA pgvector registration verification failed: {error}",
+            file=sys.stderr,
+        )
+        return 1
+
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

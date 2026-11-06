@@ -98,6 +98,11 @@ then
     RUNTIME_MODULES+=("ai")
 fi
 
+if [[ "${DAIA_ENABLE_PGVECTOR:-false}" == "true" ]]
+then
+    RUNTIME_MODULES+=("pgvector")
+fi
+
 if [[ "${DAIA_ENABLE_OPEN_WEBUI:-false}" == "true" ]]
 then
     RUNTIME_MODULES+=("openwebui")

@@ -54,6 +54,11 @@ then
     check_file "$PAYLOAD_DIR/images/open-webui.tar"
 fi
 
+if [[ "${DAIA_ENABLE_PGVECTOR:-false}" == "true" ]]
+then
+    check_file "$PAYLOAD_DIR/images/pgvector.tar"
+fi
+
 check_directory "$PAYLOAD_DIR/models/default"
 check_directory "$PAYLOAD_DIR/branding/wallpapers"
 check_directory "$PAYLOAD_DIR/branding/icons"
