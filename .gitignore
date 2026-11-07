@@ -15,6 +15,29 @@ build/*
 !/build/fetch-ollama.sh
 !/build/prepare-package-state.sh
 
+# OCI image acquisition source and tests
+!/build/fetch-oci-image.py
+!/build/tests/
+build/tests/*
+!/build/tests/test_oci_digest_reference.py
+!/build/tests/test_oci_manifest_integrity.py
+!/build/tests/test_oci_manifest_bounds.py
+!/build/tests/test_oci_trusted_digest.py
+!/build/tests/test_oci_acquisition_plan.py
+!/build/tests/test_oci_http_policy.py
+!/build/tests/test_oci_redirect_policy.py
+!/build/tests/test_oci_cdn_redirect_contract.py
+!/build/tests/test_oci_cdn_transport.py
+!/build/tests/test_oci_http_response.py
+!/build/tests/test_oci_http_header_security.py
+!/build/tests/test_oci_http_header_syntax.py
+!/build/tests/test_oci_https_transport.py
+!/build/tests/test_oci_https_security.py
+!/build/tests/test_oci_https_canonical_url.py
+!/build/tests/test_oci_verified_https_manifest.py
+!/build/tests/test_oci_bounded_http_reader.py
+!/build/tests/test_oci_https_blob_stream.py
+
 # Generated offline package payloads
 /payload/packages/docker/*.deb
 /payload/packages/ollama/*.tar.zst

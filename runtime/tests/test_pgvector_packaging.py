@@ -23,6 +23,26 @@ class PgvectorPackagingContractTests(unittest.TestCase):
             self.source,
         )
 
+    def test_stages_startup_helper(self):
+        self.assertIn(
+            '"$DAIA_RUNTIME_SOURCE/daia-pgvector-start"',
+            self.source,
+        )
+        self.assertIn(
+            '"$DAIA_WORKSPACE/usr/libexec/daia-pgvector-start"',
+            self.source,
+        )
+
+    def test_stages_start_authorization_helper(self):
+        self.assertIn(
+            '"$DAIA_RUNTIME_SOURCE/daia-pgvector-authorize-start"',
+            self.source,
+        )
+        self.assertIn(
+            '"$DAIA_WORKSPACE/usr/libexec/daia-pgvector-authorize-start"',
+            self.source,
+        )
+
     def test_stages_shutdown_helper(self):
         self.assertIn(
             '"$DAIA_RUNTIME_SOURCE/daia-pgvector-stop"',

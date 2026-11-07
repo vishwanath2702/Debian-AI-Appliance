@@ -1,0 +1,151 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Authorize an existing DAIA pgvector container without starting it.
+# Output its immutable ID only after all checks succeed.
+
+if [[ "$EUID" -ne 0 ]]; then
+    echo "DAIA pgvector startup authorization requires root" >&2
+    exit 1
+fi
+
+if ! command -v docker >/dev/null 2>&1; then
+    echo "Docker is unavailable" >&2
+    exit 1
+fi
+
+if ! docker info >/dev/null 2>&1; then
+    echo "Docker daemon is unavailable" >&2
+    exit 1
+fi
+
+container_name="daia-pgvector"
+expected_image="sha256:366e1863bdeefd735562caf0ebb4c8b05b4cb37bd8eec60d516c9083209746a2"
+
+# One inspection captures the immutable identity and security metadata.
+if ! inspection="$(docker container inspect \
+    --format '{{.Id}}{{printf "\t"}}{{index .Config.Labels "org.daia.component"}}{{printf "\t"}}{{index .Config.Labels "org.daia.managed"}}{{printf "\t"}}{{.Image}}' \
+    "$container_name")"; then
+    echo "Cannot inspect DAIA pgvector container" >&2
+    exit 1
+fi
+
+if [[ "$inspection" == *$'\n'* ]]; then
+    echo "Malformed container inspection" >&2
+    exit 1
+fi
+
+# Extract the ID, then require an exact, four-field response.
+# Do not use IFS whitespace splitting: it collapses empty tab fields.
+container_id="${inspection%%$'\t'*}"
+
+if [[ ! "$container_id" =~ ^[0-9a-f]{64}$ ]]; then
+    echo "Invalid DAIA pgvector container ID" >&2
+    exit 1
+fi
+
+expected_inspection="${container_id}"$'\t'"pgvector"$'\t'"true"$'\t'"${expected_image}"
+
+if [[ "$inspection" != "$expected_inspection" ]]; then
+    echo "DAIA pgvector container identity or image mismatch" >&2
+    exit 1
+fi
+
+# Require the Docker privilege-escalation protection established at creation.
+# Inspect by immutable container ID and reject missing or malformed metadata.
+if ! security="$(docker container inspect \
+    --format '{{join .HostConfig.SecurityOpt ","}}{{printf "|"}}{{.HostConfig.Privileged}}' \
+    "$container_id")"; then
+    echo "Cannot inspect DAIA pgvector security configuration" >&2
+    exit 1
+fi
+
+if [[ "$security" != "no-new-privileges:true|false" ]]; then
+    echo "DAIA pgvector container security contract mismatch" >&2
+    exit 1
+fi
+
+# Subsequent inspections are pinned to the immutable ID.
+if ! mounts="$(docker container inspect \
+    --format '{{range .Mounts}}{{printf "%s|%s|%s|%s|%t\n" .Type .Name .Source .Destination .RW}}{{end}}' \
+    "$container_id")"; then
+    echo "Cannot inspect DAIA pgvector mounts" >&2
+    exit 1
+fi
+
+expected_secret="bind||/var/lib/daia/pgvector/postgres-password|/run/secrets/daia-pgvector-password|false"
+
+volume_count=0
+secret_count=0
+mount_count=0
+
+while IFS= read -r mount; do
+    [[ -z "$mount" ]] && continue
+    mount_count=$((mount_count + 1))
+
+    if [[ "$mount" == "$expected_secret" ]]; then
+        secret_count=$((secret_count + 1))
+    elif [[ "$mount" == volume\|daia-pgvector-data\|* ]]; then
+        # Parse exactly five fields without accepting extra separators.
+        mount_type="${mount%%|*}"
+        remainder="${mount#*|}"
+        mount_name="${remainder%%|*}"
+        remainder="${remainder#*|}"
+        mount_source="${remainder%%|*}"
+        remainder="${remainder#*|}"
+        mount_destination="${remainder%%|*}"
+        mount_writable="${remainder#*|}"
+
+        if [[ "$mount_type" != "volume" ||
+              "$mount_name" != "daia-pgvector-data" ||
+              "$mount_source" != /* ||
+              "$mount_source" == *"|"* ||
+              "$mount_source" == "/" ||
+              "$mount_destination" != "/var/lib/postgresql/data" ||
+              "$mount_writable" != "true" ]]; then
+            echo "Invalid DAIA pgvector volume mount" >&2
+            exit 1
+        fi
+
+        volume_count=$((volume_count + 1))
+    else
+        echo "Unexpected pgvector container mount" >&2
+        exit 1
+    fi
+done <<< "$mounts"
+
+if [[ "$mount_count" -ne 2 ||
+      "$volume_count" -ne 1 ||
+      "$secret_count" -ne 1 ]]; then
+    echo "DAIA pgvector mount contract mismatch" >&2
+    exit 1
+fi
+
+# Verify the immutable-ID inspection resolves to the same container.
+if ! verified_id="$(docker container inspect     --format '{{.Id}}' "$container_id")"; then
+    echo "Cannot revalidate DAIA pgvector container identity" >&2
+    exit 1
+fi
+
+if [[ "$verified_id" != "$container_id" ]]; then
+    echo "DAIA pgvector immutable container identity changed" >&2
+    exit 1
+fi
+
+# The persistent volume must independently belong to DAIA.
+if ! volume_labels="$(docker volume inspect     --format '{{index .Labels "org.daia.component"}}{{printf "\t"}}{{index .Labels "org.daia.managed"}}'     daia-pgvector-data)"; then
+    echo "Cannot verify DAIA pgvector volume ownership" >&2
+    exit 1
+fi
+
+if [[ "$volume_labels" != $'pgvector\ttrue' ]]; then
+    echo "DAIA pgvector volume ownership mismatch" >&2
+    exit 1
+fi
+
+if ! /usr/libexec/daia-pgvector-verify-registration "$container_id"; then
+    echo "DAIA pgvector trusted registration mismatch" >&2
+    exit 1
+fi
+
+printf '%s\n' "$container_id"

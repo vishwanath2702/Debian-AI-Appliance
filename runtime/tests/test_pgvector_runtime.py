@@ -52,12 +52,17 @@ class PgvectorRuntimeContractTests(unittest.TestCase):
 
         self.assertEqual(result.returncode, 0, result.stderr)
 
-    def test_install_fails_closed_while_unimplemented(self):
+    def test_install_fails_closed_without_root(self):
+        import os
+
+        if os.geteuid() == 0:
+            self.skipTest("Non-root guard requires non-root execution")
+
         result = run_module("install")
 
         self.assertNotEqual(result.returncode, 0)
         self.assertIn(
-            "not implemented yet",
+            "PostgreSQL provisioning requires root",
             result.stderr,
         )
 
@@ -806,8 +811,11 @@ class PgvectorContainerMountTests(unittest.TestCase):
 
     def valid_mount(self):
         return (
-            "volume\tdaia-pgvector-data\t"
-            "/var/lib/postgresql/data\ttrue\n"
+            "volume|daia-pgvector-data|"
+            "/var/lib/docker/volumes/daia-pgvector-data/_data|"
+            "/var/lib/postgresql/data|true\n"
+            "bind||/var/lib/daia/pgvector/postgres-password|"
+            "/run/secrets/daia-pgvector-password|false\n"
         )
 
     def test_accepts_expected_writable_volume(self):
@@ -826,123 +834,90 @@ class PgvectorContainerMountTests(unittest.TestCase):
 
     def test_rejects_wrong_volume(self):
         self.mock_docker(
-            "volume\tunrelated-data\t"
-            "/var/lib/postgresql/data\ttrue\n"
+            self.valid_mount().replace(
+                "volume|daia-pgvector-data|",
+                "volume|unrelated-data|",
+                1,
+            )
         )
+        self.assertEqual(self.check_mount().returncode, 1)
 
-        result = self.check_mount()
-
-        self.assertEqual(result.returncode, 1)
-
-    def test_rejects_bind_mount(self):
+    def test_rejects_bind_mount_instead_of_volume(self):
         self.mock_docker(
-            "bind\tunrelated\t"
-            "/var/lib/postgresql/data\ttrue\n"
+            self.valid_mount().replace(
+                "volume|daia-pgvector-data|",
+                "bind|daia-pgvector-data|",
+                1,
+            )
         )
+        self.assertEqual(self.check_mount().returncode, 1)
 
-        result = self.check_mount()
-
-        self.assertEqual(result.returncode, 1)
-
-    def test_rejects_read_only_mount(self):
+    def test_rejects_read_only_data_volume(self):
         self.mock_docker(
-            "volume\tdaia-pgvector-data\t"
-            "/var/lib/postgresql/data\tfalse\n"
+            self.valid_mount().replace(
+                "/var/lib/postgresql/data|true",
+                "/var/lib/postgresql/data|false",
+                1,
+            )
         )
+        self.assertEqual(self.check_mount().returncode, 1)
 
-        result = self.check_mount()
-
-        self.assertEqual(result.returncode, 1)
-
-    def test_rejects_duplicate_destination(self):
+    def test_rejects_duplicate_mounts(self):
         self.mock_docker(self.valid_mount() * 2)
-
-        result = self.check_mount()
-
-        self.assertEqual(result.returncode, 1)
+        self.assertEqual(self.check_mount().returncode, 1)
 
     def test_fails_closed_on_docker_error(self):
         self.mock_docker(self.valid_mount(), exit_code=1)
-
-        result = self.check_mount()
-
-        self.assertEqual(result.returncode, 2)
+        self.assertEqual(self.check_mount().returncode, 2)
 
     def test_rejects_unsafe_volume_name_without_docker(self):
         self.mock_docker(self.valid_mount())
-
-        result = self.check_mount(volume="../unsafe")
-
-        self.assertEqual(result.returncode, 2)
+        self.assertEqual(
+            self.check_mount(volume="../unsafe").returncode, 2
+        )
         self.assertFalse(self.log.exists())
 
+    def test_rejects_missing_secret_mount(self):
+        self.mock_docker(self.valid_mount().splitlines(True)[0])
+        self.assertEqual(self.check_mount().returncode, 1)
 
-    def test_rejects_empty_mount_type(self):
+    def test_rejects_writable_secret_mount(self):
         self.mock_docker(
-            "\tdaia-pgvector-data\t"
-            "/var/lib/postgresql/data\ttrue\n"
+            self.valid_mount().replace(
+                "/run/secrets/daia-pgvector-password|false",
+                "/run/secrets/daia-pgvector-password|true",
+            )
         )
         self.assertEqual(self.check_mount().returncode, 1)
 
-    def test_rejects_empty_mount_name(self):
+    def test_rejects_wrong_secret_source(self):
         self.mock_docker(
-            "volume\t\t/var/lib/postgresql/data\ttrue\n"
+            self.valid_mount().replace(
+                "/var/lib/daia/pgvector/postgres-password",
+                "/tmp/untrusted-password",
+            )
         )
         self.assertEqual(self.check_mount().returncode, 1)
 
-    def test_rejects_empty_mount_destination(self):
-        self.mock_docker(
-            "volume\tdaia-pgvector-data\t\ttrue\n"
-        )
-        self.assertEqual(self.check_mount().returncode, 1)
-
-    def test_rejects_extra_mount_field(self):
-        self.mock_docker(
-            "volume\tdaia-pgvector-data\t"
-            "/var/lib/postgresql/data\ttrue\textra\n"
-        )
-        self.assertEqual(self.check_mount().returncode, 1)
-
-    def test_rejects_volume_at_unexpected_destination(self):
+    def test_rejects_extra_mount(self):
         self.mock_docker(
             self.valid_mount()
-            + "volume\tdaia-pgvector-data\t"
-            "/tmp/other-data\ttrue\n"
+            + "tmpfs||/tmp|/tmp|true\\n"
         )
         self.assertEqual(self.check_mount().returncode, 1)
 
-    def test_rejects_valid_mount_with_malformed_extra_record(self):
+    def test_rejects_malformed_mount_record(self):
         self.mock_docker(
-            self.valid_mount()
-            + "malformed-record\n"
+            self.valid_mount() + "malformed-record\\n"
         )
         self.assertEqual(self.check_mount().returncode, 1)
 
-    def test_rejects_unrelated_volume_mount(self):
+    def test_rejects_empty_volume_source(self):
         self.mock_docker(
-            self.valid_mount()
-            + "volume\\tother-volume\\t/mnt/other\\ttrue\\n"
-        )
-        self.assertEqual(self.check_mount().returncode, 1)
-
-    def test_rejects_additional_bind_mount(self):
-        self.mock_docker(
-            self.valid_mount()
-            + "bind\\tother-bind\\t/mnt/other\\ttrue\\n"
-        )
-        self.assertEqual(self.check_mount().returncode, 1)
-
-    def test_rejects_additional_read_only_mount(self):
-        self.mock_docker(
-            self.valid_mount()
-            + "volume\\tother-volume\\t/mnt/other\\tfalse\\n"
-        )
-        self.assertEqual(self.check_mount().returncode, 1)
-
-    def test_rejects_additional_tmpfs_mount(self):
-        self.mock_docker(
-            self.valid_mount()
-            + "tmpfs\\tother-tmpfs\\t/tmp\\ttrue\\n"
+            self.valid_mount().replace(
+                "/var/lib/docker/volumes/daia-pgvector-data/_data",
+                "",
+            )
         )
         self.assertEqual(self.check_mount().returncode, 1)
 

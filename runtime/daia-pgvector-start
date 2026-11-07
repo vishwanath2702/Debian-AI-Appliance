@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Start only a container whose immutable identity and security
+# configuration have passed the DAIA authorization boundary.
+
+if [[ "$EUID" -ne 0 ]]; then
+    echo "DAIA pgvector startup requires root" >&2
+    exit 1
+fi
+
+if ! container_id="$(/usr/libexec/daia-pgvector-authorize-start)"; then
+    echo "DAIA pgvector startup authorization failed" >&2
+    exit 1
+fi
+
+if [[ ! "$container_id" =~ ^[0-9a-f]{64}$ ]]; then
+    echo "DAIA pgvector authorization returned an invalid ID" >&2
+    exit 1
+fi
+
+# Never start by mutable container name.
+docker start "$container_id" >/dev/null

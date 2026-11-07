@@ -102,14 +102,30 @@ class PgvectorShutdownBehaviorTests(unittest.TestCase):
 
         docker.chmod(0o755)
 
-    def shutdown(self):
+    def shutdown(self, *, registration_success=False):
         import subprocess
 
+        if registration_success:
+            script = """
+function /usr/libexec/daia-pgvector-verify-registration {
+    printf 'VERIFY:%s\\n' "$1" >> "$DAIA_TEST_DOCKER_LOG"
+    return 0
+}
+source "$DAIA_TEST_STOP_HELPER"
+"""
+            environment = self.environment.copy()
+            environment["DAIA_TEST_STOP_HELPER"] = str(STOP_HELPER)
+            command = ["bash", "-c", script]
+        else:
+            environment = self.environment
+            command = ["bash", str(STOP_HELPER)]
+
         return subprocess.run(
-            ["bash", str(STOP_HELPER)],
-            env=self.environment,
+            command,
+            env=environment,
             capture_output=True,
             text=True,
+            timeout=10,
         )
 
     def docker_log(self):
@@ -119,9 +135,10 @@ class PgvectorShutdownBehaviorTests(unittest.TestCase):
 
     def test_stops_owned_container_by_id(self):
         self.mock_docker()
-        result = self.shutdown()
+        result = self.shutdown(registration_success=True)
 
         self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("VERIFY:" + "a" * 64, self.docker_log())
         self.assertIn("stop --time 60 " + "a" * 64,
                       self.docker_log())
 

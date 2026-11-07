@@ -423,7 +423,10 @@ stage_runtime()
 
     for helper in \
         pgvector_registration.py \
+        pgvector_register_container.py \
         daia-pgvector-verify-registration \
+        daia-pgvector-authorize-start \
+        daia-pgvector-start \
         daia-pgvector-stop
     do
         if [[ ! -f "$DAIA_RUNTIME_SOURCE/$helper" ]] ||
@@ -437,6 +440,14 @@ stage_runtime()
         "$DAIA_RUNTIME_SOURCE/pgvector_registration.py" \
         "$DAIA_ROOT_TARGET/pgvector_registration.py" \
         0644
+    copy_file \
+        "$DAIA_RUNTIME_SOURCE/pgvector_register_container.py" \
+        "$DAIA_ROOT_TARGET/pgvector_register_container.py" \
+        0755
+    copy_file \
+        "$DAIA_RUNTIME_SOURCE/pgvector_archive.py" \
+        "$DAIA_ROOT_TARGET/pgvector_archive.py" \
+        0644
 
     ensure_directory "$DAIA_WORKSPACE/usr/libexec"
 
@@ -446,12 +457,22 @@ stage_runtime()
         0755
 
     copy_file \
+        "$DAIA_RUNTIME_SOURCE/daia-pgvector-authorize-start" \
+        "$DAIA_WORKSPACE/usr/libexec/daia-pgvector-authorize-start" \
+        0755
+
+    copy_file \
+        "$DAIA_RUNTIME_SOURCE/daia-pgvector-start" \
+        "$DAIA_WORKSPACE/usr/libexec/daia-pgvector-start" \
+        0755
+
+    copy_file \
         "$DAIA_RUNTIME_SOURCE/daia-pgvector-stop" \
         "$DAIA_WORKSPACE/usr/libexec/daia-pgvector-stop" \
         0755
 
     record_staged_component \
-        "PostgreSQL registration and shutdown helpers staged successfully."
+        "PostgreSQL registration, startup and shutdown helpers staged successfully."
 
     if [[ -f "$DAIA_RUNTIME_SOURCE/daia-model-importer.sh" ]]
     then
@@ -665,11 +686,94 @@ stage_offline_components()
         "$DAIA_OPEN_WEBUI_IMAGE_ABS" \
         "$DAIA_IMAGES_TARGET/open-webui.tar"
 
-    stage_file_component \
-        "PostgreSQL pgvector container image" \
-        "$DAIA_ENABLE_PGVECTOR" \
-        "$DAIA_PGVECTOR_IMAGE_ABS" \
-        "$DAIA_IMAGES_TARGET/pgvector.tar"
+    if [[ "$DAIA_ENABLE_PGVECTOR" == "true" ]] &&
+       ! validate_nonempty_file "$DAIA_PGVECTOR_IMAGE_ABS"
+    then
+        stage_warning \
+            "PostgreSQL pgvector is enabled but its offline image is missing or empty: $DAIA_PGVECTOR_IMAGE_ABS"
+        return 1
+    fi
+
+    if [[ "$DAIA_ENABLE_PGVECTOR" == "true" ]]
+    then
+        if [[ ! "${DAIA_PGVECTOR_ARCHIVE_SHA256:-}" =~ ^[0-9a-f]{64}$ ]]
+        then
+            stage_warning "Missing or invalid trusted pgvector archive SHA-256"
+            return 1
+        fi
+
+        local source_sha256
+        if ! source_sha256="$(sha256sum -- "$DAIA_PGVECTOR_IMAGE_ABS")"
+        then
+            stage_warning "Unable to hash pgvector source archive"
+            return 1
+        fi
+        source_sha256="${source_sha256%% *}"
+
+        if [[ "$source_sha256" != "$DAIA_PGVECTOR_ARCHIVE_SHA256" ]]
+        then
+            stage_warning "Pgvector source archive SHA-256 mismatch"
+            return 1
+        fi
+    fi
+
+    if [[ "$DAIA_ENABLE_PGVECTOR" == "true" ]]
+    then
+        local pgvector_destination="$DAIA_IMAGES_TARGET/pgvector.tar"
+        local pgvector_temporary
+        local staged_sha256
+
+        if [[ -e "$pgvector_destination" || -L "$pgvector_destination" ]]
+        then
+            stage_warning "Pgvector staging destination already exists"
+            return 1
+        fi
+
+        if ! pgvector_temporary="$(mktemp "$DAIA_IMAGES_TARGET/.pgvector.XXXXXXXX")"
+        then
+            stage_warning "Unable to create pgvector staging temporary file"
+            return 1
+        fi
+
+        if ! cp -- "$DAIA_PGVECTOR_IMAGE_ABS" "$pgvector_temporary"
+        then
+            rm -f -- "$pgvector_temporary"
+            stage_warning "Unable to copy pgvector archive"
+            return 1
+        fi
+
+        if ! staged_sha256="$(sha256sum -- "$pgvector_temporary")"
+        then
+            rm -f -- "$pgvector_temporary"
+            stage_warning "Unable to hash staged pgvector archive"
+            return 1
+        fi
+        staged_sha256="${staged_sha256%% *}"
+
+        if [[ "$staged_sha256" != "$DAIA_PGVECTOR_ARCHIVE_SHA256" ]]
+        then
+            rm -f -- "$pgvector_temporary"
+            stage_warning "Staged pgvector archive SHA-256 mismatch"
+            return 1
+        fi
+
+        if ! chmod 0644 "$pgvector_temporary"
+        then
+            rm -f -- "$pgvector_temporary"
+            stage_warning "Unable to set pgvector archive permissions"
+            return 1
+        fi
+
+        if ! ln -- "$pgvector_temporary" "$pgvector_destination"
+        then
+            rm -f -- "$pgvector_temporary"
+            stage_warning "Unable to publish verified pgvector archive"
+            return 1
+        fi
+
+        rm -f -- "$pgvector_temporary"
+        record_staged_component "PostgreSQL pgvector container image staged successfully."
+    fi
 
     stage_directory_component \
         "Default AI model" \

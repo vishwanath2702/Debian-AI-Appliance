@@ -136,6 +136,34 @@ pgvector_container_image_matches() {
 
 
 
+
+# Verify the immutable image ID actually used by an existing container.
+# A matching image tag alone is insufficient.
+pgvector_container_image_id_matches() {
+    local container_name="${DAIA_PGVECTOR_CONTAINER:-daia-pgvector}"
+    local expected_id="${DAIA_PGVECTOR_DOCKER_IMAGE_ID:-}"
+    local actual_id
+
+    if [[ ! "$container_name" =~ ^[a-zA-Z0-9][a-zA-Z0-9_.-]*$ ]] ||
+       [[ ! "$expected_id" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+        echo "Invalid pgvector container image identity configuration" >&2
+        return 2
+    fi
+
+    if ! actual_id="$(docker container inspect         --format '{{.Image}}' "$container_name")"; then
+        echo "Unable to inspect pgvector container image ID" >&2
+        return 2
+    fi
+
+    if [[ "$actual_id" != "$expected_id" ]]; then
+        echo "Pgvector container immutable image ID mismatch" >&2
+        return 1
+    fi
+
+    return 0
+}
+
+
 # Read-only volume ownership verification.
 # Return 0 for matching DAIA labels, 1 for mismatch,
 # and 2 for invalid configuration or Docker inspection failure.
@@ -173,94 +201,93 @@ pgvector_volume_owned() {
 
 
 
-# Read-only PostgreSQL persistent-volume mount verification.
-# Return 0 for exactly one matching writable volume mount,
-# 1 for configuration mismatch, 2 for inspection failure.
+# Verify the two explicitly authorized PostgreSQL mounts.
+# No additional mounts are permitted.
 pgvector_container_mount_matches() {
     local container_name="${DAIA_PGVECTOR_CONTAINER:-daia-pgvector}"
     local volume_name="${DAIA_PGVECTOR_VOLUME:-daia-pgvector-data}"
-    local expected_destination="/var/lib/postgresql/data"
     local mounts
     local entry
-    local mount_type
-    local mount_name
-    local destination
-    local writable
-    local extra
+    local expected_volume=0
+    local expected_secret=0
     local count=0
 
-    if [[ ! "$container_name" =~ ^[a-zA-Z0-9][a-zA-Z0-9_.-]*$ ]] ||
-       [[ ! "$volume_name" =~ ^[a-zA-Z0-9][a-zA-Z0-9_.-]*$ ]]; then
-        echo "Invalid pgvector container or volume name" >&2
-        return 2
-    fi
+    [[ "$container_name" =~ ^[a-zA-Z0-9][a-zA-Z0-9_.-]*$ ]] || return 2
+    [[ "$volume_name" =~ ^[a-zA-Z0-9][a-zA-Z0-9_.-]*$ ]] || return 2
 
     if ! mounts="$(docker container inspect \
-        --format '{{range .Mounts}}{{printf "%s\t%s\t%s\t%t\n" .Type .Name .Destination .RW}}{{end}}' \
+        --format '{{range .Mounts}}{{printf "%s|%s|%s|%s|%t\n" .Type .Name .Source .Destination .RW}}{{end}}' \
         "$container_name")"; then
-        echo "Unable to inspect pgvector container mounts" >&2
         return 2
     fi
 
     while IFS= read -r entry; do
         [[ -z "$entry" ]] && continue
-
-        # Require exactly four nonempty tab-separated fields.
-        # Avoid IFS whitespace collapsing consecutive delimiters.
-        if [[ "$entry" != *$'\t'* ]]; then
-            echo "Malformed pgvector mount inspection record" >&2
-            return 1
-        fi
-
-        mount_type="${entry%%$'\t'*}"
-        entry="${entry#*$'\t'}"
-
-        if [[ "$entry" != *$'\t'* ]]; then
-            echo "Malformed pgvector mount inspection record" >&2
-            return 1
-        fi
-
-        mount_name="${entry%%$'\t'*}"
-        entry="${entry#*$'\t'}"
-
-        if [[ "$entry" != *$'\t'* ]]; then
-            echo "Malformed pgvector mount inspection record" >&2
-            return 1
-        fi
-
-        destination="${entry%%$'\t'*}"
-        writable="${entry#*$'\t'}"
-
-        if [[ -z "$mount_type" ]] ||
-           [[ -z "$mount_name" ]] ||
-           [[ -z "$destination" ]] ||
-           [[ "$writable" != "true" && "$writable" != "false" ]]; then
-            echo "Malformed pgvector mount inspection record" >&2
-            return 1
-        fi
-
-        # The expected volume must never be mounted elsewhere.
-        if [[ "$mount_name" == "$volume_name" &&
-              "$destination" != "$expected_destination" ]]; then
-            echo "Pgvector volume mounted at unexpected destination" >&2
-            return 1
-        fi
-
-        # Initial DAIA contract permits exactly one mount.
-        # Reject unrelated mounts until explicitly reviewed.
         count=$((count + 1))
 
-        if [[ "$mount_type" != "volume" ]] ||
-           [[ "$mount_name" != "$volume_name" ]] ||
-           [[ "$destination" != "$expected_destination" ]] ||
-           [[ "$writable" != "true" ]]; then
-            echo "Pgvector persistent mount configuration mismatch" >&2
-            return 1
-        fi
+        case "$entry" in
+            "volume|${volume_name}|"*"|/var/lib/postgresql/data|true")
+                # Docker must report a nonempty absolute volume source.
+                # Reject malformed and ambiguous mount records.
+                local mount_type mount_name mount_source
+                local mount_destination mount_writable mount_extra
+
+                IFS='|' read -r mount_type mount_name mount_source \
+                    mount_destination mount_writable mount_extra <<< "$entry"
+
+                if [[ -z "$mount_source" ||
+                      "$mount_source" != /* ||
+                      -n "$mount_extra" ]]; then
+                    echo "Invalid PostgreSQL volume mount source" >&2
+                    return 1
+                fi
+
+                expected_volume=$((expected_volume + 1))
+                ;;
+            "bind||/var/lib/daia/pgvector/postgres-password|/run/secrets/daia-pgvector-password|false")
+                expected_secret=$((expected_secret + 1))
+                ;;
+            *)
+                echo "Unexpected PostgreSQL container mount" >&2
+                return 1
+                ;;
+        esac
     done <<< "$mounts"
 
-    if [[ "$count" -ne 1 ]]; then
-        echo "Expected exactly one PostgreSQL persistent mount" >&2
+    if [[ "$count" -ne 2 ||
+          "$expected_volume" -ne 1 ||
+          "$expected_secret" -ne 1 ]]; then
+        echo "PostgreSQL container mount contract mismatch" >&2
+        return 1
+    fi
+}
+
+# Verify the actual Docker image ID, not merely its mutable tag.
+# Return 0 for an exact match, 1 for mismatch, 2 for inspection
+# or configuration failure. This function never mutates Docker.
+pgvector_docker_image_id_matches() {
+    local expected_id="${DAIA_PGVECTOR_DOCKER_IMAGE_ID:-}"
+    local image_reference="${DAIA_PGVECTOR_IMAGE_REF:-}"
+    local actual_id
+
+    if [[ ! "$expected_id" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+        echo "Invalid configured pgvector Docker image ID" >&2
+        return 2
+    fi
+
+    if [[ "$image_reference" != "pgvector/pgvector:pg17" ]]; then
+        echo "Unexpected configured pgvector image reference" >&2
+        return 2
+    fi
+
+    if ! actual_id="$(docker image inspect \
+        --format '{{.Id}}' "$image_reference")"; then
+        echo "Unable to inspect pgvector Docker image" >&2
+        return 2
+    fi
+
+    if [[ "$actual_id" != "$expected_id" ]]; then
+        echo "Pgvector Docker image ID mismatch" >&2
         return 1
     fi
 
@@ -268,12 +295,270 @@ pgvector_container_mount_matches() {
 }
 
 
+
+# Load the pinned offline image without replacing an existing image tag.
+# This function must not create, start, stop, or remove containers.
+pgvector_load_verified_offline_image() {
+    local payload_root="${DAIA_PAYLOAD_ROOT:-/opt/daia/payload}"
+    local archive="${payload_root}/images/pgvector.tar"
+    local expected_id="${DAIA_PGVECTOR_DOCKER_IMAGE_ID:-}"
+    local expected_sha="${DAIA_PGVECTOR_ARCHIVE_SHA256:-}"
+    local image_reference="${DAIA_PGVECTOR_IMAGE_REF:-}"
+    local actual_sha
+    local inspection
+    local inspection_status
+
+    if [[ "$expected_id" != "sha256:366e1863bdeefd735562caf0ebb4c8b05b4cb37bd8eec60d516c9083209746a2" ]] ||
+       [[ "$expected_sha" != "5d903322c843abad607f7fa9349b0b7a1c1a53c02b1306eada13451d2a367228" ]] ||
+       [[ "$image_reference" != "pgvector/pgvector:pg17" ]]; then
+        echo "Unexpected pgvector image configuration" >&2
+        return 1
+    fi
+
+    # The Python helper verifies the archive through descriptor-relative
+    # O_NOFOLLOW traversal, snapshots the bytes and hashes that snapshot.
+    # Do not reopen the archive pathname for Docker consumption.
+    if [[ ! -f "$archive" || -L "$archive" ]]; then
+        echo "Pgvector offline archive is missing or unsafe" >&2
+        return 1
+    fi
+    if [[ ! -f /opt/daia/pgvector_archive.py ]]; then
+        echo "Pgvector archive verifier is not installed" >&2
+        return 1
+    fi
+
+    if ! command -v docker >/dev/null 2>&1; then
+        echo "Docker is unavailable" >&2
+        return 1
+    fi
+
+    if ! docker info >/dev/null 2>&1; then
+        echo "Docker daemon is unavailable" >&2
+        return 1
+    fi
+
+    # Inventory distinguishes a genuinely absent tag from inspection errors.
+    if ! inspection="$(docker image ls --format '{{.Repository}}:{{.Tag}}')"; then
+        echo "Unable to inspect Docker image inventory" >&2
+        return 1
+    fi
+
+    if printf '%s\n' "$inspection" | grep -Fxq -- "$image_reference"; then
+        pgvector_docker_image_id_matches
+        return $?
+    fi
+
+    # No existing image tag is overwritten or removed.
+    if ! /usr/bin/python3 /opt/daia/pgvector_archive.py load "$archive"; then
+        echo "Unable to load verified pgvector offline image" >&2
+        return 1
+    fi
+
+    pgvector_docker_image_id_matches
+}
+
+
+# Create or reuse the persistent PostgreSQL volume.
+# Existing volumes are reused only after DAIA ownership verification.
+# No existing volume is deleted or modified.
+pgvector_ensure_volume() {
+    local volume_name="${DAIA_PGVECTOR_VOLUME:-daia-pgvector-data}"
+    local inventory
+    local entry
+    local found=false
+
+    if [[ ! "$volume_name" =~ ^[a-zA-Z0-9][a-zA-Z0-9_.-]*$ ]]; then
+        echo "Invalid pgvector volume name" >&2
+        return 2
+    fi
+
+    if ! inventory="$(docker volume ls --format '{{.Name}}')"; then
+        echo "Unable to inspect Docker volume inventory" >&2
+        return 2
+    fi
+
+    while IFS= read -r entry; do
+        if [[ "$entry" == "$volume_name" ]]; then
+            found=true
+            break
+        fi
+    done <<< "$inventory"
+
+    if [[ "$found" == "true" ]]; then
+        pgvector_volume_owned
+        return $?
+    fi
+
+    if ! docker volume create \
+        --label org.daia.component=pgvector \
+        --label org.daia.managed=true \
+        "$volume_name" >/dev/null; then
+        echo "Unable to create pgvector persistent volume" >&2
+        return 1
+    fi
+
+    if ! pgvector_volume_owned; then
+        echo "Created pgvector volume failed ownership verification" >&2
+        return 1
+    fi
+
+    return 0
+}
+
 pgvector_install() {
-    echo "PostgreSQL pgvector provisioning is not implemented yet" >&2
-    return 1
+    local container_name="${DAIA_PGVECTOR_CONTAINER:-daia-pgvector}"
+    local volume_name="${DAIA_PGVECTOR_VOLUME:-daia-pgvector-data}"
+    local expected_id="${DAIA_PGVECTOR_DOCKER_IMAGE_ID:-}"
+
+    if [[ "$EUID" -ne 0 ]]; then
+        echo "PostgreSQL provisioning requires root" >&2
+        return 1
+    fi
+
+    if [[ "$container_name" != "daia-pgvector" ||
+          "$volume_name" != "daia-pgvector-data" ||
+          "$expected_id" != "sha256:366e1863bdeefd735562caf0ebb4c8b05b4cb37bd8eec60d516c9083209746a2" ]]; then
+        echo "Unexpected PostgreSQL provisioning configuration" >&2
+        return 1
+    fi
+
+    pgvector_load_verified_offline_image || return 1
+
+    /usr/bin/python3 /opt/daia/pgvector_credentials.py \
+        --state-directory /var/lib/daia/pgvector || return 1
+
+    pgvector_ensure_volume || return 1
+
+    pgvector_provision_container
+}
+
+# Verify the immutable container's Docker security configuration.
+# Return failure for missing, unexpected, or privileged settings.
+pgvector_container_security_matches() {
+    local container_id="${1:-}"
+    local security
+
+    if [[ ! "$container_id" =~ ^[0-9a-f]{64}$ ]]; then
+        echo "Invalid PostgreSQL container identity for security check" >&2
+        return 1
+    fi
+
+    if ! security="$(docker container inspect \
+        --format '{{join .HostConfig.SecurityOpt ","}}{{printf "|"}}{{.HostConfig.Privileged}}' \
+        "$container_id")"; then
+        echo "Cannot inspect PostgreSQL container security" >&2
+        return 1
+    fi
+
+    if [[ "$security" != "no-new-privileges:true|false" ]]; then
+        echo "PostgreSQL container security contract mismatch" >&2
+        return 1
+    fi
+
+    return 0
+}
+
+
+# Container-only provisioning boundary. Called after the privileged
+# installation prerequisites have succeeded.
+pgvector_provision_container() {
+    local container_name="${DAIA_PGVECTOR_CONTAINER:-daia-pgvector}"
+    local volume_name="${DAIA_PGVECTOR_VOLUME:-daia-pgvector-data}"
+    local expected_id="${DAIA_PGVECTOR_DOCKER_IMAGE_ID:-}"
+    local container_id
+    local status
+
+    # Keep the immutable production configuration contract.
+    if [[ "$container_name" != "daia-pgvector" ||
+          "$volume_name" != "daia-pgvector-data" ||
+          "$expected_id" != "sha256:366e1863bdeefd735562caf0ebb4c8b05b4cb37bd8eec60d516c9083209746a2" ]]; then
+        echo "Unexpected PostgreSQL provisioning configuration" >&2
+        return 1
+    fi
+
+    status=0
+    pgvector_container_status || status=$?
+
+    if [[ "$status" -ne 0 && "$status" -ne 1 ]]; then
+        echo "Cannot safely inspect existing PostgreSQL containers" >&2
+        return 1
+    fi
+
+    if [[ "$status" -eq 0 ]]; then
+        # An existing container is never enrolled automatically.
+        # DAIA must already have registered its immutable identity.
+        if ! container_id="$(docker container inspect \
+            --format '{{.Id}}' "$container_name")"; then
+            return 1
+        fi
+
+        [[ "$container_id" =~ ^[0-9a-f]{64}$ ]] || return 1
+
+        /usr/libexec/daia-pgvector-verify-registration \
+            "$container_id" || return 1
+    fi
+
+    if [[ "$status" -eq 1 ]]; then
+        # Never expose the password through Docker arguments or environment.
+        # The container is created but not started.
+        if ! container_id="$(docker container create \
+            --name "$container_name" \
+            --label org.daia.component=pgvector \
+            --label org.daia.managed=true \
+            --restart no \
+            --security-opt no-new-privileges:true \
+            --network none \
+            --mount "type=volume,src=${volume_name},dst=/var/lib/postgresql/data" \
+            --mount "type=bind,src=/var/lib/daia/pgvector/postgres-password,dst=/run/secrets/daia-pgvector-password,readonly" \
+            --env POSTGRES_USER=daia_rag \
+            --env POSTGRES_DB=daia_rag \
+            --env POSTGRES_PASSWORD_FILE=/run/secrets/daia-pgvector-password \
+            "$expected_id")"; then
+            echo "Unable to create PostgreSQL container" >&2
+            return 1
+        fi
+
+        [[ "$container_id" =~ ^[0-9a-f]{64}$ ]] || {
+            echo "Docker returned an invalid container ID" >&2
+            return 1
+        }
+    fi
+
+    pgvector_container_owned || return 1
+    pgvector_container_image_id_matches || return 1
+    pgvector_container_mount_matches || return 1
+    pgvector_volume_owned || return 1
+    pgvector_container_security_matches "$container_id" || return 1
+
+    # Preserve the ID obtained from creation or trusted pre-verification.
+    # Never overwrite it with the result of a later name-based lookup.
+    local verified_id
+    if ! verified_id="$(docker container inspect \
+        --format '{{.Id}}' "$container_name")"; then
+        return 1
+    fi
+
+    if [[ ! "$verified_id" =~ ^[0-9a-f]{64}$ ]]; then
+        echo "Invalid inspected PostgreSQL container identity" >&2
+        return 1
+    fi
+
+    if [[ "$verified_id" != "$container_id" ]]; then
+        echo "PostgreSQL container identity changed during provisioning" >&2
+        return 1
+    fi
+
+    if [[ "$status" -eq 0 ]]; then
+        /usr/libexec/daia-pgvector-verify-registration \
+            "$container_id"
+        return $?
+    fi
+
+    /usr/bin/python3 /opt/daia/pgvector_register_container.py \
+        "$container_id"
 }
 
 pgvector_verify() {
-    echo "PostgreSQL pgvector verification is not implemented yet" >&2
+    echo "PostgreSQL runtime readiness verification is not implemented yet" >&2
     return 1
 }
