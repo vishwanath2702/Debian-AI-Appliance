@@ -42,18 +42,46 @@ class InstalledTab(QWidget):
             ["Model", "Size", "Parameters", "Quantization", "Family", "Modified"]
         )
         self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self.table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        self.table.setSelectionMode(QTableWidget.SelectionMode.SingleSelection)
+        self.table.itemSelectionChanged.connect(self._selection_changed)
         self.output = QTextEdit()
         self.output.setReadOnly(True)
         self.output.hide()
 
         self.refresh_button = QPushButton("Refresh")
         self.refresh_button.clicked.connect(self.refresh)
+        self.benchmark_button = QPushButton("Benchmark Selected Model")
+        self.benchmark_button.setEnabled(False)
+        self.benchmark_button.clicked.connect(self.benchmark_selected)
+        self.benchmark_tab = None
 
         layout = QVBoxLayout(self)
         layout.addWidget(self.status)
         layout.addWidget(self.table)
         layout.addWidget(self.output)
         layout.addWidget(self.refresh_button)
+        layout.addWidget(self.benchmark_button)
+
+    def _selection_changed(self):
+        self.benchmark_button.setEnabled(
+            self.benchmark_tab is not None
+            and self.process.state() == QProcess.ProcessState.NotRunning
+            and bool(self.selected_model_name())
+        )
+
+    def selected_model_name(self):
+        row = self.table.currentRow()
+        if row < 0 or not self.table.selectionModel().isRowSelected(row):
+            return None
+        item = self.table.item(row, 0)
+        return item.text() if item and item.text().strip() else None
+
+    def benchmark_selected(self):
+        name = self.selected_model_name()
+        if name and self.benchmark_tab is not None:
+            self.benchmark_tab.model_name.setText(name)
+            self.benchmark_tab.parent_tabs.setCurrentWidget(self.benchmark_tab)
 
     def refresh(self):
         if self.process.state() != QProcess.ProcessState.NotRunning:
@@ -62,6 +90,7 @@ class InstalledTab(QWidget):
         self.output.clear()
         self.output.hide()
         self.table.setRowCount(0)
+        self._selection_changed()
         self.status.setText("Loading installed Ollama models...")
         self.refresh_button.setEnabled(False)
 
@@ -1017,10 +1046,14 @@ class ModelManager(QMainWindow):
         self.resize(850, 560)
 
         tabs = QTabWidget()
-        tabs.addTab(InstalledTab(), "Installed")
+        installed = InstalledTab()
+        benchmark = BenchmarkTab()
+        benchmark.parent_tabs = tabs
+        installed.benchmark_tab = benchmark
+        tabs.addTab(installed, "Installed")
         tabs.addTab(ImportTab(), "Import")
 
-        tabs.addTab(BenchmarkTab(), "Benchmark")
+        tabs.addTab(benchmark, "Benchmark")
 
         tabs.addTab(ExportTab(), "Export")
 

@@ -37,6 +37,8 @@ pub struct BenchmarkHardwareWorker {
     maximum_samples: usize,
     gpus: Vec<GpuFacts>,
     drm_root: PathBuf,
+    live_samples: Option<mpsc::Sender<HardwareSampleWithGpus>>,
+    bounded_live_samples: Option<mpsc::SyncSender<HardwareSampleWithGpus>>,
 }
 
 impl BenchmarkHardwareWorker {
@@ -54,7 +56,29 @@ impl BenchmarkHardwareWorker {
             maximum_samples: 3600,
             gpus,
             drm_root: PathBuf::from("/sys/class/drm"),
+            live_samples: None,
+            bounded_live_samples: None,
         })
+    }
+
+    /// Configures optional live delivery of hardware observations.
+    /// A disconnected receiver does not interrupt benchmark execution.
+    pub fn local_with_live_samples(
+        sender: mpsc::Sender<HardwareSampleWithGpus>,
+    ) -> Result<Self, BenchmarkError> {
+        let mut worker = Self::local()?;
+        worker.live_samples = Some(sender);
+        Ok(worker)
+    }
+
+    /// Configures bounded, nonblocking live sample delivery.
+    /// Slow or disconnected consumers do not delay monitoring.
+    pub fn local_with_bounded_live_samples(
+        sender: mpsc::SyncSender<HardwareSampleWithGpus>,
+    ) -> Result<Self, BenchmarkError> {
+        let mut worker = Self::local()?;
+        worker.bounded_live_samples = Some(sender);
+        Ok(worker)
     }
 }
 
@@ -82,6 +106,8 @@ impl BenchmarkMonitoringWorker for BenchmarkHardwareWorker {
             self.drm_root,
             self.interval,
             self.maximum_samples,
+            self.live_samples,
+            self.bounded_live_samples,
         )
     }
 }
@@ -93,6 +119,8 @@ fn start_monitoring_thread<S, R>(
     drm_root: PathBuf,
     interval: Duration,
     maximum_samples: usize,
+    live_samples: Option<mpsc::Sender<HardwareSampleWithGpus>>,
+    bounded_live_samples: Option<mpsc::SyncSender<HardwareSampleWithGpus>>,
 ) -> Result<BenchmarkHardwareSession, BenchmarkError>
 where
     S: HardwareTelemetrySource + Send + 'static,
@@ -114,6 +142,8 @@ where
                 maximum_samples,
                 &worker_cancellation,
                 startup_sender,
+                live_samples,
+                bounded_live_samples,
             )
         })
         .map_err(|error| {
@@ -162,6 +192,8 @@ fn collect_hardware_observations<S, R>(
     maximum_samples: usize,
     cancellation: &MonitoringCancellation,
     startup_sender: mpsc::SyncSender<Result<(), BenchmarkError>>,
+    live_samples: Option<mpsc::Sender<HardwareSampleWithGpus>>,
+    bounded_live_samples: Option<mpsc::SyncSender<HardwareSampleWithGpus>>,
 ) -> Result<BenchmarkHardwareObservations, BenchmarkError>
 where
     S: HardwareTelemetrySource,
@@ -198,6 +230,12 @@ where
             }
         },
         |sample| {
+            if let Some(sender) = &live_samples {
+                let _ = sender.send(sample.clone());
+            }
+            if let Some(sender) = &bounded_live_samples {
+                let _ = sender.try_send(sample.clone());
+            }
             samples.push(sample);
 
             if let Some(sender) = startup_sender.take() {
@@ -352,6 +390,8 @@ mod collector_tests {
             1,
             &cancellation,
             sender,
+            None,
+            None,
         )
         .expect("collect hardware");
 
@@ -383,6 +423,8 @@ mod collector_tests {
             1,
             &cancellation,
             sender,
+            None,
+            None,
         )
         .unwrap_err();
 
@@ -414,12 +456,129 @@ mod collector_tests {
             10,
             &cancellation,
             sender,
+            None,
+            None,
         )
         .expect("cancelled collector");
 
         assert!(observations.samples.is_empty());
         assert_eq!(reads.load(std::sync::atomic::Ordering::SeqCst), 0);
         assert!(receiver.recv().unwrap().is_err());
+    }
+
+    #[test]
+    fn live_samples_arrive_before_monitoring_finishes() {
+        let reads = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let monitor = HardwareMonitor::new(FakeSource { fail: false, reads });
+
+        let (sender, receiver) = mpsc::channel();
+
+        let mut session = start_monitoring_thread(
+            monitor,
+            FakeNvidia,
+            vec![],
+            PathBuf::from("/nonexistent-daia-drm"),
+            Duration::from_secs(60),
+            100,
+            Some(sender),
+            None,
+        )
+        .expect("monitor startup");
+
+        let sample = receiver
+            .recv_timeout(Duration::from_secs(2))
+            .expect("live sample must arrive before monitoring finishes");
+
+        assert_eq!(sample.hardware.memory.used_bytes(), 4096);
+        assert!(sample.gpus.devices.is_empty());
+
+        session.cancel();
+        let observations = session.join().expect("monitor join");
+
+        assert_eq!(observations.samples.len(), 1);
+        assert_eq!(observations.samples[0], sample);
+    }
+
+    #[test]
+    fn disconnected_live_receiver_does_not_interrupt_monitoring() {
+        let reads = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let monitor = HardwareMonitor::new(FakeSource { fail: false, reads });
+
+        let (sender, receiver) = mpsc::channel();
+        drop(receiver);
+
+        let session = start_monitoring_thread(
+            monitor,
+            FakeNvidia,
+            vec![],
+            PathBuf::from("/nonexistent-daia-drm"),
+            Duration::from_millis(1),
+            2,
+            Some(sender),
+            None,
+        )
+        .expect("monitor startup");
+
+        let observations = session.join().expect("monitor completes");
+
+        assert_eq!(observations.samples.len(), 2);
+        assert_eq!(observations.samples[0].hardware.memory.used_bytes(), 4096);
+        assert_eq!(observations.samples[1].hardware.memory.used_bytes(), 4096);
+    }
+
+    #[test]
+    fn full_bounded_queue_does_not_block_monitoring() {
+        let reads = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let monitor = HardwareMonitor::new(FakeSource { fail: false, reads });
+        let (sender, receiver) = mpsc::sync_channel(1);
+
+        let session = start_monitoring_thread(
+            monitor,
+            FakeNvidia,
+            vec![],
+            PathBuf::from("/nonexistent-daia-drm"),
+            Duration::from_millis(1),
+            3,
+            None,
+            Some(sender),
+        )
+        .expect("monitor startup");
+
+        let observations = session.join().expect("monitor completion");
+
+        assert_eq!(observations.samples.len(), 3);
+        assert_eq!(receiver.try_recv().unwrap(), observations.samples[0]);
+        assert!(receiver.try_recv().is_err());
+    }
+
+    #[test]
+    fn disconnected_bounded_receiver_preserves_final_observations() {
+        let reads = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let monitor = HardwareMonitor::new(FakeSource { fail: false, reads });
+        let (sender, receiver) = mpsc::sync_channel(1);
+        drop(receiver);
+
+        let session = start_monitoring_thread(
+            monitor,
+            FakeNvidia,
+            vec![],
+            PathBuf::from("/nonexistent-daia-drm"),
+            Duration::from_millis(1),
+            3,
+            None,
+            Some(sender),
+        )
+        .expect("monitor startup");
+
+        let observations = session.join().expect("monitor completion");
+
+        assert_eq!(observations.samples.len(), 3);
+        assert!(
+            observations
+                .samples
+                .iter()
+                .all(|sample| sample.hardware.memory.used_bytes() == 4096)
+        );
     }
 
     #[test]
@@ -439,6 +598,8 @@ mod collector_tests {
             PathBuf::from("/nonexistent-daia-drm"),
             Duration::from_secs(60),
             100,
+            None,
+            None,
         )
         .expect("monitor must produce its first sample before startup completes");
 
@@ -469,6 +630,8 @@ mod collector_tests {
             PathBuf::from("/nonexistent-daia-drm"),
             Duration::from_secs(60),
             100,
+            None,
+            None,
         )
         .expect("monitor startup");
 
@@ -500,6 +663,8 @@ mod collector_tests {
             PathBuf::from("/nonexistent-daia-drm"),
             Duration::from_secs(60),
             100,
+            None,
+            None,
         );
 
         assert!(matches!(
@@ -527,6 +692,8 @@ mod collector_tests {
             PathBuf::from("/nonexistent-daia-drm"),
             Duration::from_millis(1),
             2,
+            None,
+            None,
         )
         .expect("monitor startup");
 

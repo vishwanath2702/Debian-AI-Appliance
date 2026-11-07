@@ -20,6 +20,7 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::process::ExitCode;
 mod appliance_profile_repository;
+mod benchmark_events;
 mod model_benchmark;
 mod model_installed;
 mod provider_registry;
@@ -701,6 +702,11 @@ fn run(arguments: &[String]) -> ExitCode {
         }
         [command, subcommand, model_name] if command == "model" && subcommand == "benchmark" => {
             model_benchmark::run(model_name)
+        }
+        [command, subcommand, model_name, option]
+            if command == "model" && subcommand == "benchmark" && option == "--events-jsonl" =>
+        {
+            model_benchmark::run_events_jsonl(model_name)
         }
         [command, subcommand] if command == "model" && subcommand == "discover" => {
             run_model_volume_discovery()

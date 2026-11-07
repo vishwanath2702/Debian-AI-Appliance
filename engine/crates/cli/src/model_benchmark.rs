@@ -6,7 +6,12 @@ use model::{
     BenchmarkConfiguration, BenchmarkError, BenchmarkRequest, BenchmarkResult, BenchmarkRunKind,
     InferenceEngineId,
 };
+use std::io::{self, Write};
 use std::process::ExitCode;
+use std::sync::mpsc;
+use std::thread;
+
+use crate::benchmark_events;
 
 const DEFAULT_PROMPT: &str = "Explain how a computer operating system manages CPU scheduling, memory, and storage. Use three short paragraphs.";
 
@@ -261,6 +266,110 @@ pub fn run(model_name: &str) -> ExitCode {
     }
 }
 
+/// Writes one JSON event per line and flushes for live consumers.
+fn write_event<W: Write>(writer: &mut W, event: &serde_json::Value) -> io::Result<()> {
+    serde_json::to_writer(&mut *writer, event)?;
+    writer.write_all(b"\n")?;
+    writer.flush()
+}
+
+/// Runs a benchmark with bounded, nonblocking live hardware telemetry.
+pub fn run_events_jsonl(model_name: &str) -> ExitCode {
+    let stdout = io::stdout();
+    let mut output = stdout.lock();
+
+    let request = benchmark_request(model_name);
+    if let Err(error) = request.validate() {
+        let _ = write_event(
+            &mut output,
+            &benchmark_events::failed(&format!("{error:?}")),
+        );
+        return ExitCode::FAILURE;
+    }
+
+    let port = match benchmark_port(std::env::var("DAIA_BENCHMARK_OLLAMA_PORT").ok().as_deref()) {
+        Ok(port) => port,
+        Err(error) => {
+            let _ = write_event(
+                &mut output,
+                &benchmark_events::failed(&format!("{error:?}")),
+            );
+            return ExitCode::FAILURE;
+        }
+    };
+
+    let (sender, receiver) = mpsc::sync_channel(16);
+    let worker = match BenchmarkHardwareWorker::local_with_bounded_live_samples(sender) {
+        Ok(worker) => worker,
+        Err(error) => {
+            let _ = write_event(
+                &mut output,
+                &benchmark_events::failed(&format!("{error:?}")),
+            );
+            return ExitCode::FAILURE;
+        }
+    };
+
+    if write_event(&mut output, &benchmark_events::started(model_name)).is_err() {
+        return ExitCode::FAILURE;
+    }
+
+    let inference = thread::scope(|scope| {
+        let task = scope.spawn(move || {
+            let mut executor = BenchmarkExecutor::new(OllamaBenchmarkRunner::local_port(port));
+            executor.execute_with_monitoring(&request, worker)
+        });
+
+        let mut output_failed = false;
+
+        for sample in receiver {
+            if !output_failed
+                && write_event(&mut output, &benchmark_events::hardware_sample(&sample)).is_err()
+            {
+                // Keep draining until monitoring finishes. Never retain
+                // an unbounded backlog when the consumer disconnects.
+                output_failed = true;
+            }
+        }
+
+        (task.join(), output_failed)
+    });
+
+    let (execution, output_failed) = inference;
+    if output_failed {
+        return ExitCode::FAILURE;
+    }
+
+    match execution {
+        Ok(Ok((result, observations))) => {
+            if write_event(
+                &mut output,
+                &benchmark_events::completed(&result, observations.samples.len()),
+            )
+            .is_ok()
+            {
+                ExitCode::SUCCESS
+            } else {
+                ExitCode::FAILURE
+            }
+        }
+        Ok(Err(error)) => {
+            let _ = write_event(
+                &mut output,
+                &benchmark_events::failed(&format!("{error:?}")),
+            );
+            ExitCode::FAILURE
+        }
+        Err(_) => {
+            let _ = write_event(
+                &mut output,
+                &benchmark_events::failed("benchmark execution thread panicked"),
+            );
+            ExitCode::FAILURE
+        }
+    }
+}
+
 fn benchmark_port(value: Option<&str>) -> Result<u16, BenchmarkError> {
     match value {
         None => Ok(11434),
@@ -280,6 +389,93 @@ fn print_error(error: &BenchmarkError) {
 mod tests {
     use super::*;
     use model::BenchmarkRun;
+
+    #[test]
+    fn jsonl_writer_emits_one_valid_line_and_flushes() {
+        struct RecordingWriter {
+            bytes: Vec<u8>,
+            flushes: usize,
+        }
+
+        impl std::io::Write for RecordingWriter {
+            fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+                self.bytes.extend_from_slice(bytes);
+                Ok(bytes.len())
+            }
+
+            fn flush(&mut self) -> std::io::Result<()> {
+                self.flushes += 1;
+                Ok(())
+            }
+        }
+
+        let mut writer = RecordingWriter {
+            bytes: Vec::new(),
+            flushes: 0,
+        };
+
+        write_event(
+            &mut writer,
+            &benchmark_events::started("namespace/model:tag"),
+        )
+        .unwrap();
+
+        assert_eq!(writer.flushes, 1);
+        assert_eq!(writer.bytes.last(), Some(&10));
+        assert_eq!(writer.bytes.iter().filter(|byte| **byte == 10).count(), 1);
+
+        let event: serde_json::Value = serde_json::from_slice(&writer.bytes).unwrap();
+
+        assert_eq!(event["schema_version"], 1);
+        assert_eq!(event["event"], "started");
+        assert_eq!(event["model"], "namespace/model:tag");
+    }
+
+    #[test]
+    fn jsonl_writer_propagates_broken_pipe() {
+        struct BrokenPipeWriter;
+
+        impl std::io::Write for BrokenPipeWriter {
+            fn write(&mut self, _bytes: &[u8]) -> std::io::Result<usize> {
+                Err(std::io::Error::from(std::io::ErrorKind::BrokenPipe))
+            }
+
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+
+        let error = write_event(
+            &mut BrokenPipeWriter,
+            &benchmark_events::started("test:latest"),
+        )
+        .unwrap_err();
+
+        assert_eq!(error.kind(), std::io::ErrorKind::BrokenPipe);
+    }
+
+    #[test]
+    fn jsonl_writer_propagates_flush_failure() {
+        struct FlushFailureWriter;
+
+        impl std::io::Write for FlushFailureWriter {
+            fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+                Ok(bytes.len())
+            }
+
+            fn flush(&mut self) -> std::io::Result<()> {
+                Err(std::io::Error::from(std::io::ErrorKind::BrokenPipe))
+            }
+        }
+
+        let error = write_event(
+            &mut FlushFailureWriter,
+            &benchmark_events::started("test:latest"),
+        )
+        .unwrap_err();
+
+        assert_eq!(error.kind(), std::io::ErrorKind::BrokenPipe);
+    }
 
     #[test]
     fn hardware_formatter_selects_latest_available_metrics_per_gpu() {
