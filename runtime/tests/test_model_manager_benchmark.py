@@ -34,8 +34,8 @@ class BenchmarkTabTests(unittest.TestCase):
             'printf "%s\\n" "$@" > "$DAIA_TEST_ARGS"\n'
             'case "$DAIA_TEST_MODE" in\n'
             '  success)\n'
-            '    printf "DAIA Model Benchmark\\nModel: example:latest\\n"\n'
-            '    printf "Measured average generation throughput: 28.24 tok/s\\n"\n'
+            '    printf \'%s\\n\' \'{"schema_version":1,"event":"started","model":"example:latest"}\'\n'
+            '    printf \'%s\\n\' \'{"schema_version":1,"event":"completed","model":"example:latest","runs":[{"kind":"measured","eval_count":100,"eval_duration_ns":4000000000,"total_duration_ns":5000000000}]}\'\n'
             '    ;;\n'
             '  failure)\n'
             '    echo "Model benchmark failed: synthetic failure" >&2\n'
@@ -80,22 +80,30 @@ class BenchmarkTabTests(unittest.TestCase):
         )
         self.assertFalse(self.args.exists())
 
-    def test_success_uses_exact_cli_arguments_and_shows_results(self):
+    def test_success_uses_jsonl_and_opens_completed_browser_report(self):
         self.tab.model_name.setText(" example:latest ")
         self.assertTrue(self.tab.run_button.isEnabled())
 
-        self.tab.run_benchmark()
-        self.finish()
+        with patch.object(MODULE.webbrowser, "open", return_value=True) as browser:
+            self.tab.run_benchmark()
+            self.finish()
+            browser.assert_called_once()
+            report_uri = browser.call_args.args[0]
 
         self.assertEqual(
             self.args.read_text().splitlines(),
-            ["model", "benchmark", "example:latest"],
+            ["model", "benchmark", "example:latest", "--events-jsonl"],
         )
-        self.assertEqual(self.tab.status.text(), "Benchmark completed.")
-        self.assertIn(
-            "Measured average generation throughput: 28.24 tok/s",
-            self.tab.output.toPlainText(),
+        self.assertEqual(
+            self.tab.status.text(),
+            "Benchmark completed. Browser report opened.",
         )
+        self.assertTrue(report_uri.startswith("file:"))
+        report_path = Path(__import__("urllib.parse", fromlist=["urlparse"]).urlparse(report_uri).path)
+        html = report_path.read_text(encoding="utf-8")
+        self.assertIn("example:latest", html)
+        self.assertIn("Performance", html)
+        self.assertIn("Hardware", html)
         self.assertTrue(self.tab.model_name.isEnabled())
         self.assertTrue(self.tab.run_button.isEnabled())
 
@@ -129,7 +137,7 @@ class BenchmarkTabTests(unittest.TestCase):
         self.finish()
         self.assertEqual(
             self.args.read_text().splitlines(),
-            ["model", "benchmark", "example:latest"],
+            ["model", "benchmark", "example:latest", "--events-jsonl"],
         )
         self.assertTrue(self.tab.run_button.isEnabled())
 
@@ -162,14 +170,11 @@ class BenchmarkTabTests(unittest.TestCase):
         self.addCleanup(window.close)
 
         tabs = window.centralWidget()
-        benchmark = next(
-            (
-                tabs.widget(index)
-                for index in range(tabs.count())
-                if tabs.tabText(index) == "Benchmark"
-            ),
-            None,
+        self.assertEqual(
+            [tabs.tabText(i) for i in range(tabs.count())],
+            ["Installed", "Import", "Export"],
         )
+        benchmark = tabs.widget(0).benchmark_tab
         self.assertIsNotNone(benchmark)
 
         benchmark.model_name.setText("example:latest")
@@ -212,6 +217,57 @@ class BenchmarkTabTests(unittest.TestCase):
         )
         self.assertTrue(self.tab.model_name.isEnabled())
         self.assertTrue(self.tab.run_button.isEnabled())
+
+
+    def test_browser_failure_removes_report(self):
+        from pathlib import Path
+        from unittest.mock import patch
+
+        events = (
+            '{"schema_version":1,"event":"started","model":"example:latest"}\n'
+            '{"schema_version":1,"event":"completed","model":"example:latest",'
+            '"runs":[{"kind":"measured","eval_count":100,'
+            '"eval_duration_ns":4000000000,"total_duration_ns":5000000000}]}\n'
+        )
+
+        class FakeProcess:
+            def readAllStandardOutput(self):
+                return events.encode()
+
+            def readAllStandardError(self):
+                return b""
+
+        original_process = self.tab.process
+        self.tab.process = FakeProcess()
+        successful_path = None
+
+        try:
+            with patch.object(MODULE.webbrowser, "open", return_value=False) as browser:
+                self.tab._finished(0, MODULE.QProcess.ExitStatus.NormalExit)
+                self.assertEqual(browser.call_count, 1)
+                failed_url = browser.call_args.args[0]
+                from urllib.parse import urlparse, unquote
+                failed_path = Path(unquote(urlparse(failed_url).path))
+                self.assertFalse(failed_path.exists())
+                self.assertEqual(
+                    self.tab.status.text(), "Benchmark report unavailable."
+                )
+
+            with patch.object(MODULE.webbrowser, "open", return_value=True):
+                self.tab._finished(0, MODULE.QProcess.ExitStatus.NormalExit)
+                successful_path = Path(self.tab.output.toPlainText())
+                self.assertTrue(successful_path.is_file())
+                self.assertEqual(
+                    successful_path.stat().st_mode & 0o777, 0o600
+                )
+                self.assertEqual(
+                    self.tab.status.text(),
+                    "Benchmark completed. Browser report opened.",
+                )
+        finally:
+            self.tab.process = original_process
+            if successful_path is not None:
+                successful_path.unlink(missing_ok=True)
 
 
 if __name__ == "__main__":

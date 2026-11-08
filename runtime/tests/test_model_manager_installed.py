@@ -29,10 +29,10 @@ class InstalledSelectionTests(unittest.TestCase):
         self.tabs = self.window.centralWidget()
         self.installed = self.tabs.widget(0)
 
-        self.benchmark = next(
-            self.tabs.widget(i)
-            for i in range(self.tabs.count())
-            if self.tabs.tabText(i) == "Benchmark"
+        self.benchmark = self.installed.benchmark_tab
+        self.assertEqual(
+            [self.tabs.tabText(i) for i in range(self.tabs.count())],
+            ["Installed", "Import", "Export"],
         )
 
     def inventory(self, payload):
@@ -65,18 +65,22 @@ class InstalledSelectionTests(unittest.TestCase):
         )
         self.assertTrue(self.installed.benchmark_button.isEnabled())
 
-    def test_exact_name_transfer_does_not_execute_benchmark(self):
+    def test_exact_name_transfer_launches_benchmark_without_embedded_ui(self):
         self.inventory(
             b'[{"name":"example:q4_k_m","size_bytes":1024}]'
         )
         self.installed.table.selectRow(0)
-        self.installed.benchmark_selected()
+
+        with patch.object(self.benchmark, "run_benchmark") as launch:
+            self.installed.benchmark_selected()
+            launch.assert_called_once_with()
 
         self.assertEqual(
             self.benchmark.model_name.text(),
             "example:q4_k_m",
         )
-        self.assertIs(self.tabs.currentWidget(), self.benchmark)
+        self.assertIs(self.tabs.currentWidget(), self.installed)
+        self.assertFalse(self.benchmark.isVisibleTo(self.installed))
         self.assertEqual(
             self.benchmark.process.state(),
             QProcess.ProcessState.NotRunning,
@@ -110,6 +114,21 @@ class InstalledSelectionTests(unittest.TestCase):
         self.assertEqual(self.installed.table.rowCount(), 0)
         self.assertIsNone(self.installed.selected_model_name())
         self.assertFalse(self.installed.benchmark_button.isEnabled())
+
+
+    def test_benchmark_status_visible_in_installed_tab(self):
+        cases = (
+            "Benchmarking example:latest...",
+            "Benchmark failed.",
+            "Benchmark report unavailable.",
+            "Benchmark completed. Browser report opened.",
+        )
+        for message in cases:
+            with self.subTest(message=message):
+                self.benchmark._set_benchmark_status(message)
+                self.assertEqual(self.installed.status.text(), message)
+
+        self.assertFalse(self.benchmark.isVisibleTo(self.installed))
 
 
 if __name__ == "__main__":

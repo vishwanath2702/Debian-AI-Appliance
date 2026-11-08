@@ -1,10 +1,14 @@
 #!/usr/bin/env python3
 """DAIA graphical Model Manager."""
 
+import importlib.util
 import json
 import os
 import re
 import sys
+import tempfile
+import webbrowser
+from pathlib import Path
 
 from PyQt6.QtCore import QProcess
 from PyQt6.QtWidgets import (
@@ -63,6 +67,13 @@ class InstalledTab(QWidget):
         layout.addWidget(self.refresh_button)
         layout.addWidget(self.benchmark_button)
 
+    def attach_benchmark(self, benchmark):
+        self.benchmark_tab = benchmark
+        # Benchmark runner is retained without an embedded UI.
+        benchmark.hide()
+        benchmark.status_target = self.status
+        self._selection_changed()
+
     def _selection_changed(self):
         self.benchmark_button.setEnabled(
             self.benchmark_tab is not None
@@ -81,7 +92,7 @@ class InstalledTab(QWidget):
         name = self.selected_model_name()
         if name and self.benchmark_tab is not None:
             self.benchmark_tab.model_name.setText(name)
-            self.benchmark_tab.parent_tabs.setCurrentWidget(self.benchmark_tab)
+            self.benchmark_tab.run_benchmark()
 
     def refresh(self):
         if self.process.state() != QProcess.ProcessState.NotRunning:
@@ -874,11 +885,18 @@ class BenchmarkTab(QWidget):
         self.output = QTextEdit()
         self.output.setReadOnly(True)
 
-        layout = QVBoxLayout(self)
-        layout.addWidget(self.status)
-        layout.addWidget(self.model_name)
-        layout.addWidget(self.run_button)
-        layout.addWidget(self.output)
+        # The Installed tab launches this runner directly.
+        # Results are displayed only in the browser.
+        self.status.hide()
+        self.model_name.hide()
+        self.run_button.hide()
+        self.output.hide()
+
+    def _set_benchmark_status(self, message):
+        self.status.setText(message)
+        target = getattr(self, "status_target", None)
+        if target is not None:
+            target.setText(message)
 
     def _update_button(self):
         self.run_button.setEnabled(
@@ -895,12 +913,14 @@ class BenchmarkTab(QWidget):
             return
 
         self.output.clear()
-        self.status.setText(f"Benchmarking {name}...")
+        self._set_benchmark_status(f"Benchmarking {name}...")
         self.model_name.setEnabled(False)
         self.run_button.setEnabled(False)
 
         command = os.environ.get("DAIA_COMMAND", "/usr/bin/daia")
-        self.process.start(command, ["model", "benchmark", name])
+        self.process.start(
+            command, ["model", "benchmark", name, "--events-jsonl"]
+        )
 
     def _finished(self, exit_code, exit_status):
         stdout = bytes(self.process.readAllStandardOutput()).decode(
@@ -917,15 +937,67 @@ class BenchmarkTab(QWidget):
             exit_status == QProcess.ExitStatus.NormalExit
             and exit_code == 0
         ):
-            self.status.setText("Benchmark completed.")
-            self.output.setPlainText(stdout)
+            try:
+                manager_path = Path(__file__).resolve()
+                if manager_path.parent == Path("/usr/bin"):
+                    renderer_path = Path(
+                        "/usr/libexec/daia/daia-benchmark-report.py"
+                    )
+                else:
+                    renderer_path = manager_path.with_name(
+                        "daia-benchmark-report.py"
+                    )
+
+                if not renderer_path.is_file() or renderer_path.is_symlink():
+                    raise OSError("Benchmark report renderer unavailable")
+
+                spec = importlib.util.spec_from_file_location(
+                    "daia_benchmark_report", renderer_path
+                )
+                if spec is None or spec.loader is None:
+                    raise ImportError("Unable to load benchmark renderer")
+
+                renderer = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(renderer)
+
+                page = renderer.render_jsonl(stdout)
+
+                with tempfile.NamedTemporaryFile(
+                    mode="w",
+                    encoding="utf-8",
+                    suffix=".html",
+                    prefix="daia-benchmark-",
+                    delete=False,
+                ) as report_file:
+                    report_file.write(page)
+                    report_path = Path(report_file.name)
+
+                try:
+                    browser_opened = webbrowser.open(report_path.as_uri())
+                except Exception as error:
+                    report_path.unlink(missing_ok=True)
+                    raise OSError(
+                        "Default browser launch failed"
+                    ) from error
+                if not browser_opened:
+                    report_path.unlink(missing_ok=True)
+                    raise OSError("Default browser could not be opened")
+
+                self._set_benchmark_status(
+                    "Benchmark completed. Browser report opened."
+                )
+                self.output.setPlainText(str(report_path))
+
+            except (OSError, ValueError, ImportError) as error:
+                self._set_benchmark_status("Benchmark report unavailable.")
+                self.output.setPlainText(str(error))
         else:
-            self.status.setText("Benchmark failed.")
+            self._set_benchmark_status("Benchmark failed.")
             self.output.setPlainText(stderr or stdout or "Unknown CLI error.")
 
     def _process_error(self, error):
         if error == QProcess.ProcessError.FailedToStart:
-            self.status.setText("Unable to start DAIA benchmark CLI.")
+            self._set_benchmark_status("Unable to start DAIA benchmark CLI.")
             self.output.setPlainText(self.process.errorString())
             self.model_name.setEnabled(True)
             self._update_button()
@@ -1047,37 +1119,20 @@ class ModelManager(QMainWindow):
 
         tabs = QTabWidget()
         installed = InstalledTab()
-        benchmark = BenchmarkTab()
-        benchmark.parent_tabs = tabs
-        installed.benchmark_tab = benchmark
+        benchmark = BenchmarkTab(installed)
+        installed.attach_benchmark(benchmark)
         tabs.addTab(installed, "Installed")
         tabs.addTab(ImportTab(), "Import")
-
-        tabs.addTab(benchmark, "Benchmark")
-
         tabs.addTab(ExportTab(), "Export")
 
         self.setCentralWidget(tabs)
 
     def closeEvent(self, event):
-        tabs = self.centralWidget()
-
-        for index in range(tabs.count()):
-            if tabs.tabText(index) != "Benchmark":
-                continue
-
-            benchmark = tabs.widget(index)
-
+        benchmark = self.centralWidget().widget(0).benchmark_tab
+        if benchmark is not None:
             if not benchmark.close():
                 event.ignore()
                 return
-
-            if benchmark.process.state() != QProcess.ProcessState.NotRunning:
-                event.ignore()
-                return
-
-            break
-
         super().closeEvent(event)
 
 

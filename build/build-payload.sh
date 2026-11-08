@@ -521,6 +521,46 @@ stage_runtime()
     record_staged_component \
         "Graphical model manager desktop launcher staged successfully."
 
+    # Benchmark web files are installed together because the server
+    # loads its controller and JavaScript relative to its own location.
+    for benchmark_file in \
+        daia-benchmark-web.py \
+        daia-benchmark-controller.py \
+        daia-benchmark-report.py \
+        benchmark.js
+    do
+        if [[ ! -f "$DAIA_RUNTIME_SOURCE/$benchmark_file" ]]; then
+            log_error "Required benchmark web source is missing:"
+            log_error "  $DAIA_RUNTIME_SOURCE/$benchmark_file"
+            return 1
+        fi
+    done
+
+    ensure_directory "$DAIA_WORKSPACE/usr/libexec/daia"
+
+    copy_file \
+        "$DAIA_RUNTIME_SOURCE/daia-benchmark-web.py" \
+        "$DAIA_WORKSPACE/usr/libexec/daia/daia-benchmark-web.py" \
+        0755
+
+    copy_file \
+        "$DAIA_RUNTIME_SOURCE/daia-benchmark-controller.py" \
+        "$DAIA_WORKSPACE/usr/libexec/daia/daia-benchmark-controller.py" \
+        0644
+
+    copy_file \
+        "$DAIA_RUNTIME_SOURCE/daia-benchmark-report.py" \
+        "$DAIA_WORKSPACE/usr/libexec/daia/daia-benchmark-report.py" \
+        0644
+
+    copy_file \
+        "$DAIA_RUNTIME_SOURCE/benchmark.js" \
+        "$DAIA_WORKSPACE/usr/libexec/daia/benchmark.js" \
+        0644
+
+    record_staged_component \
+        "Local benchmark web interface staged successfully."
+
     if [[ -f "$DAIA_RUNTIME_SOURCE/firstboot.sh" ]]
     then
         copy_file \
