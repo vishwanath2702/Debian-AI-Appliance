@@ -511,6 +511,18 @@ stage_runtime()
     record_staged_component \
         "Graphical model manager staged successfully."
 
+    if [[ ! -f "$DAIA_RUNTIME_SOURCE/daia-whichllm-offline.py" ]]; then
+        log_error "Required offline recommendation helper is missing"
+        return 1
+    fi
+    ensure_directory "$DAIA_WORKSPACE/usr/libexec/daia"
+    copy_file \
+        "$DAIA_RUNTIME_SOURCE/daia-whichllm-offline.py" \
+        "$DAIA_WORKSPACE/usr/libexec/daia/daia-whichllm-offline.py" \
+        0755
+    # The upstream WhichLLM runtime and signed/index-checksummed data are
+    # deliberately NOT staged until separately supplied and verified.
+
     ensure_directory "$DAIA_WORKSPACE/usr/share/applications"
 
     copy_file \
@@ -708,11 +720,35 @@ stage_offline_components()
         "$DAIA_DOCKER_SOURCE_ABS" \
         "$DAIA_PACKAGES_TARGET/docker"
 
-    stage_directory_component \
-        "Ollama runtime" \
-        "$DAIA_ENABLE_OLLAMA" \
-        "$DAIA_OLLAMA_SOURCE_ABS" \
-        "$DAIA_PACKAGES_TARGET/ollama"
+    if [[ "$DAIA_ENABLE_OLLAMA" == "true" ]]
+    then
+        local ollama_checker="$PROJECT_ROOT/build/check-ollama-release.py"
+        local ollama_manifest="$PROJECT_ROOT/build/ollama-release.json"
+        local ollama_fetch_script="$PROJECT_ROOT/build/fetch-ollama.sh"
+
+        python3 "$ollama_checker" \
+            --release-manifest "$ollama_manifest" \
+            --fetch-script "$ollama_fetch_script" \
+            --archive-directory "$DAIA_OLLAMA_SOURCE_ABS" \
+            --approved-offline || return 1
+
+        stage_directory_component \
+            "Ollama runtime" \
+            "true" \
+            "$DAIA_OLLAMA_SOURCE_ABS" \
+            "$DAIA_PACKAGES_TARGET/ollama" || return 1
+
+        copy_file \
+            "$ollama_manifest" \
+            "$DAIA_PACKAGES_TARGET/ollama/ollama-release.json" \
+            0644 || return 1
+
+        python3 "$ollama_checker" \
+            --release-manifest "$DAIA_PACKAGES_TARGET/ollama/ollama-release.json" \
+            --fetch-script "$ollama_fetch_script" \
+            --archive-directory "$DAIA_PACKAGES_TARGET/ollama" \
+            --approved-offline || return 1
+    fi
 
     stage_directory_component \
         "Package dependencies" \

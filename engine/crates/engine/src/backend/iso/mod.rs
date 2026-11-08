@@ -2,6 +2,7 @@
 
 mod context;
 mod layout;
+mod ollama_release;
 mod pipeline;
 mod stage;
 
@@ -28,6 +29,7 @@ pub struct IsoBackend {
     work_directory: PathBuf,
     output_path: PathBuf,
     daia_payload_directory: Option<PathBuf>,
+    ollama_offline_approved: bool,
     mksquashfs_command: PathBuf,
     privileged_squashfs: bool,
     xorriso_command: PathBuf,
@@ -51,6 +53,7 @@ impl IsoBackend {
             work_directory: work_directory.into(),
             output_path: output_path.into(),
             daia_payload_directory: None,
+            ollama_offline_approved: false,
             mksquashfs_command: PathBuf::from("mksquashfs"),
             privileged_squashfs: true,
             xorriso_command: PathBuf::from("xorriso"),
@@ -80,6 +83,7 @@ kernel_command_line:
         );
 
         backend.daia_payload_directory = context.daia_payload_directory().map(Path::to_path_buf);
+        backend.ollama_offline_approved = context.ollama_offline_approved();
 
         backend
     }
@@ -147,6 +151,13 @@ kernel_command_line:
     }
     /// Includes a prepared DAIA payload directory in the generated ISO.
     #[must_use]
+    /// Explicitly approves skipping the live Ollama release lookup.
+    /// Local archive integrity verification remains mandatory.
+    pub fn with_ollama_offline_approval(mut self, approved: bool) -> Self {
+        self.ollama_offline_approved = approved;
+        self
+    }
+
     pub fn with_daia_payload_directory(mut self, directory: impl Into<PathBuf>) -> Self {
         self.daia_payload_directory = Some(directory.into());
         self
@@ -170,6 +181,7 @@ impl BuildBackend for IsoBackend {
                 source_iso: self.source_iso.clone(),
                 output_iso: self.output_path.clone(),
                 daia_payload_directory: self.daia_payload_directory.clone(),
+                ollama_offline_approved: self.ollama_offline_approved,
                 mksquashfs_command: self.mksquashfs_command.clone(),
                 privileged_squashfs: self.privileged_squashfs,
                 xorriso_command: self.xorriso_command.clone(),

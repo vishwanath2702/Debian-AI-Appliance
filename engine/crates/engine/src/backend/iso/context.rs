@@ -25,6 +25,7 @@ pub struct IsoConfig {
     pub source_iso: PathBuf,
     pub output_iso: PathBuf,
     pub daia_payload_directory: Option<PathBuf>,
+    pub ollama_offline_approved: bool,
     pub mksquashfs_command: PathBuf,
     pub privileged_squashfs: bool,
     pub xorriso_command: PathBuf,

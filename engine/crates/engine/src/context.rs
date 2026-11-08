@@ -19,6 +19,7 @@ pub struct BuildContext {
     daia_model_export_broker_binary: Option<PathBuf>,
     daia_model_export_worker_binary: Option<PathBuf>,
     daia_payload_directory: Option<PathBuf>,
+    ollama_offline_approved: bool,
 }
 
 impl BuildContext {
@@ -45,6 +46,7 @@ impl BuildContext {
             daia_model_export_broker_binary: None,
             daia_model_export_worker_binary: None,
             daia_payload_directory: None,
+            ollama_offline_approved: false,
         }
     }
 
@@ -162,6 +164,19 @@ impl BuildContext {
     #[must_use]
     pub fn daia_payload_directory(&self) -> Option<&Path> {
         self.daia_payload_directory.as_deref()
+    }
+
+    /// Explicitly approves skipping the live Ollama release lookup.
+    #[must_use]
+    pub fn with_ollama_offline_approval(mut self, approved: bool) -> Self {
+        self.ollama_offline_approved = approved;
+        self
+    }
+
+    /// Whether offline Ollama verification was explicitly approved.
+    #[must_use]
+    pub fn ollama_offline_approved(&self) -> bool {
+        self.ollama_offline_approved
     }
 }
 

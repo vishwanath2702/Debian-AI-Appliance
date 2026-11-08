@@ -31,6 +31,7 @@ struct BuildOptions {
     work_directory: PathBuf,
     output_iso: PathBuf,
     daia_payload_directory: PathBuf,
+    ollama_offline_approved: bool,
 }
 
 fn daia_data_directory() -> PathBuf {
@@ -681,7 +682,22 @@ fn run(arguments: &[String]) -> ExitCode {
             output_iso,
             source_iso,
         ] if command == "iso-refresh" && operation == "package" => {
-            run_iso_refresh_package(rootfs, payload, workspace, output_iso, source_iso)
+            run_iso_refresh_package(rootfs, payload, workspace, output_iso, source_iso, false)
+        }
+        [
+            command,
+            operation,
+            rootfs,
+            payload,
+            workspace,
+            output_iso,
+            source_iso,
+            approval,
+        ] if command == "iso-refresh"
+            && operation == "package"
+            && approval == "--ollama-approved-offline" =>
+        {
+            run_iso_refresh_package(rootfs, payload, workspace, output_iso, source_iso, true)
         }
         [command, rootfs, package] if command == "query-package" => {
             run_query_package(rootfs, package)
@@ -748,6 +764,27 @@ fn run(arguments: &[String]) -> ExitCode {
                 work_directory: PathBuf::from(work_directory),
                 output_iso: PathBuf::from(output_iso),
                 daia_payload_directory: PathBuf::from(daia_payload_directory),
+                ollama_offline_approved: false,
+            },
+        ),
+        [
+            command,
+            capability_name,
+            rootfs,
+            source_iso,
+            work_directory,
+            output_iso,
+            daia_payload_directory,
+            approval,
+        ] if command == "build-iso" && approval == "--ollama-approved-offline" => run_iso_build(
+            capability_name,
+            &BuildOptions {
+                rootfs: PathBuf::from(rootfs),
+                source_iso: PathBuf::from(source_iso),
+                work_directory: PathBuf::from(work_directory),
+                output_iso: PathBuf::from(output_iso),
+                daia_payload_directory: PathBuf::from(daia_payload_directory),
+                ollama_offline_approved: true,
             },
         ),
         _ => {
@@ -821,6 +858,7 @@ fn run_iso_refresh_package(
     workspace: &str,
     output_iso: &str,
     source_iso: &str,
+    approved_offline: bool,
 ) -> ExitCode {
     let inputs = engine::IsoRefreshInputs {
         rootfs: PathBuf::from(rootfs),
@@ -829,7 +867,9 @@ fn run_iso_refresh_package(
         output_iso: PathBuf::from(output_iso),
     };
 
-    if let Err(error) = inputs.package_candidate(Path::new(source_iso)) {
+    if let Err(error) =
+        inputs.package_candidate_with_ollama_approval(Path::new(source_iso), approved_offline)
+    {
         eprintln!("ISO refresh packaging failed: {error}");
         return ExitCode::FAILURE;
     }
@@ -1006,7 +1046,8 @@ fn create_build_context(
     .with_daia_model_import_binary(model_import_binary)
     .with_daia_model_export_broker_binary(model_export_broker_binary)
     .with_daia_model_export_worker_binary(model_export_worker_binary)
-    .with_daia_payload_directory(options.daia_payload_directory.clone()))
+    .with_daia_payload_directory(options.daia_payload_directory.clone())
+    .with_ollama_offline_approval(options.ollama_offline_approved))
 }
 
 fn print_plan(plan: &Plan) {
@@ -3814,6 +3855,67 @@ mod tests {
     }
 
     #[test]
+    fn rejects_unrecognized_ollama_approval_flags() {
+        let cases = [
+            vec![
+                "build-iso",
+                "desktop",
+                "rootfs",
+                "source.iso",
+                "work",
+                "output.iso",
+                "payload",
+                "--offline",
+            ],
+            vec![
+                "build-iso",
+                "desktop",
+                "rootfs",
+                "source.iso",
+                "work",
+                "output.iso",
+                "payload",
+                "--ollama-approved-offline=true",
+            ],
+            vec![
+                "iso-refresh",
+                "package",
+                "rootfs",
+                "payload",
+                "workspace",
+                "output.iso",
+                "source.iso",
+                "--offline",
+            ],
+            vec![
+                "iso-refresh",
+                "package",
+                "rootfs",
+                "payload",
+                "workspace",
+                "output.iso",
+                "source.iso",
+                "--ollama-approved-offline=true",
+            ],
+        ];
+
+        for case in cases {
+            let arguments = case.into_iter().map(str::to_owned).collect::<Vec<_>>();
+            assert_eq!(run(&arguments), ExitCode::FAILURE);
+        }
+    }
+
+    #[test]
+    fn ollama_offline_approval_requires_exact_trailing_flag() {
+        let source = include_str!("main.rs");
+
+        assert!(source.contains("approval == \"--ollama-approved-offline\""));
+        assert!(source.contains("ollama_offline_approved: false"));
+        assert!(source.contains("ollama_offline_approved: true"));
+        assert!(source.contains("package_candidate_with_ollama_approval"));
+    }
+
+    #[test]
     fn rejects_incomplete_iso_build_arguments() {
         let arguments = vec!["build-iso".to_owned(), "desktop".to_owned()];
 
@@ -3829,6 +3931,7 @@ mod tests {
             work_directory: PathBuf::from("work"),
             output_iso: PathBuf::from("output.iso"),
             daia_payload_directory: PathBuf::from("payload"),
+            ollama_offline_approved: false,
         };
 
         assert_eq!(options.rootfs, PathBuf::from("rootfs"));

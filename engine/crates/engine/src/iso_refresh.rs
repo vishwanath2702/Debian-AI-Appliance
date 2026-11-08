@@ -59,9 +59,18 @@ impl IsoRefreshInputs {
     ///
     /// This does not stage inputs or deploy refreshed artifacts.
     pub fn package_candidate(&self, source_iso: &Path) -> io::Result<()> {
+        self.package_candidate_with_ollama_approval(source_iso, false)
+    }
+
+    /// Packages a candidate with explicit offline Ollama release approval.
+    pub fn package_candidate_with_ollama_approval(
+        &self,
+        source_iso: &Path,
+        approved_offline: bool,
+    ) -> io::Result<()> {
         use crate::IsoBackend;
         use crate::backend::BuildBackend;
-        use inspector::DaiaLiveIsoInspector;
+        use inspector::DebianIsoInspector;
         use model::{Capability, Plan, ProviderId};
 
         let rootfs = self.workspace.join("rootfs");
@@ -140,7 +149,8 @@ impl IsoRefreshInputs {
 
         let mut backend = IsoBackend::new(&rootfs, source_iso, &iso_work, &self.output_iso)
             .with_daia_payload_directory(&payload)
-            .with_iso_inspector(DaiaLiveIsoInspector::new(&rootfs));
+            .with_ollama_offline_approval(approved_offline)
+            .with_iso_inspector(DebianIsoInspector::new());
 
         backend
             .build(&plan)

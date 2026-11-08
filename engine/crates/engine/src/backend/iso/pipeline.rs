@@ -24,8 +24,18 @@ impl IsoPipeline {
         context.state.metadata = Some(metadata);
         MetadataValidationStage::run(context)?;
         ToolValidationStage::run(context)?;
+        super::ollama_release::preflight_ollama_release(
+            context.config.daia_payload_directory.as_deref(),
+            context.config.ollama_offline_approved,
+        )?;
         WorkspaceStage::run(context)?;
         DaiaPayloadStage::run(context)?;
+
+        if context.config.daia_payload_directory.is_some() {
+            super::ollama_release::preflight_daia_payload(Some(
+                &context.config.layout.daia_payload(),
+            ))?;
+        }
 
         let kernel = KernelStage::run(context)?;
         let initramfs = InitramfsStage::run(context)?;
@@ -144,6 +154,7 @@ exit 1
                 source_iso,
                 output_iso,
                 daia_payload_directory: None,
+                ollama_offline_approved: false,
                 mksquashfs_command: mksquashfs,
                 privileged_squashfs: false,
                 xorriso_command: xorriso,
@@ -190,6 +201,60 @@ exit 1
 "#,
         );
     }
+
+    #[test]
+    fn ollama_preflight_rejects_payload_before_workspace_creation() {
+        let temp = tempdir().expect("temporary directory should be created");
+
+        fs::set_permissions(temp.path(), fs::Permissions::from_mode(0o700))
+            .expect("temporary directory should be private");
+
+        let mut context = create_test_context(temp.path());
+
+        let payload = temp.path().join("daia-payload");
+        let config_directory = payload.join("opt/daia/config");
+
+        fs::create_dir_all(&config_directory)
+            .expect("DAIA configuration directory should be created");
+
+        fs::write(
+            config_directory.join("pragna.conf"),
+            "DAIA_ENABLE_OLLAMA=\"true\"\n",
+        )
+        .expect("DAIA configuration should be written");
+
+        context.config.daia_payload_directory = Some(payload);
+
+        let workspace = context.config.layout.root().to_path_buf();
+        let output_iso = context.config.output_iso.clone();
+
+        assert!(!workspace.exists());
+        assert!(!output_iso.exists());
+
+        let error = IsoPipeline::run(&mut context, &TestIsoInspector)
+            .expect_err("missing Ollama release manifest must reject ISO build");
+
+        assert!(
+            !workspace.exists(),
+            "ISO workspace was created despite failed Ollama preflight"
+        );
+
+        assert!(
+            !output_iso.exists(),
+            "ISO output was created despite failed Ollama preflight"
+        );
+
+        assert!(
+            context.state.iso_image.is_none(),
+            "ISO image state must remain unset"
+        );
+
+        assert!(
+            error.kind() == io::ErrorKind::NotFound || error.kind() == io::ErrorKind::InvalidData,
+            "unexpected preflight error: {error}"
+        );
+    }
+
     #[test]
     fn pipeline_populates_build_state() {
         let temp = tempdir().expect("temporary directory should be created");

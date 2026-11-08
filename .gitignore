@@ -11,6 +11,8 @@
 build/
 !/build/
 build/*
+!build/check-ollama-release.py
+!build/ollama-release.json
 !/build/fetch-docker-packages.sh
 !/build/fetch-ollama.sh
 !/build/prepare-package-state.sh

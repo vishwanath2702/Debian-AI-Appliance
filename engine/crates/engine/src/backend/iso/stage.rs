@@ -564,6 +564,7 @@ mod tests {
                 source_iso: source_iso.to_path_buf(),
                 output_iso: PathBuf::from("build/output.iso"),
                 daia_payload_directory: None,
+                ollama_offline_approved: false,
                 mksquashfs_command: PathBuf::from("mksquashfs"),
                 privileged_squashfs: false,
                 xorriso_command: PathBuf::from("xorriso"),

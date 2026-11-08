@@ -5,13 +5,13 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
-OLLAMA_VERSION="v0.40.14"
+OLLAMA_VERSION="v0.40.15"
 OLLAMA_ARCHITECTURE="amd64"
 OLLAMA_ARCHIVE_NAME="ollama-linux-${OLLAMA_ARCHITECTURE}.tar.zst"
 OLLAMA_URL_SCHEME="https"
 OLLAMA_URL_HOST="github.com"
 OLLAMA_DOWNLOAD_URL="${OLLAMA_URL_SCHEME}://${OLLAMA_URL_HOST}/ollama/ollama/releases/download/${OLLAMA_VERSION}/${OLLAMA_ARCHIVE_NAME}"
-OLLAMA_SHA256="993e83d08c3d13d17c55009a3e2664c8a25445e644aec3a68bef5abb6abce67d"
+OLLAMA_SHA256="628c018404a4206493efd38e46251c154ede5141b8b8dc85c659b3b027c47379"
 
 OLLAMA_PAYLOAD_DIR="$PROJECT_ROOT/payload/packages/ollama"
 OLLAMA_ARCHIVE_PATH="$OLLAMA_PAYLOAD_DIR/$OLLAMA_ARCHIVE_NAME"
@@ -30,6 +30,26 @@ if [[ -s "$OLLAMA_ARCHIVE_PATH" ]]; then
 
     echo "Existing Ollama payload has an unexpected checksum:" >&2
     echo "  $OLLAMA_ARCHIVE_PATH" >&2
+    exit 1
+fi
+
+OLLAMA_VERSIONED_ARCHIVE_PATH="$OLLAMA_PAYLOAD_DIR/ollama-linux-${OLLAMA_ARCHITECTURE}-${OLLAMA_VERSION}.tar.zst"
+
+if [[ -s "$OLLAMA_VERSIONED_ARCHIVE_PATH" ]]; then
+    if printf '%s  %s\n' "$OLLAMA_SHA256" "$OLLAMA_VERSIONED_ARCHIVE_PATH" |
+        sha256sum --check --status
+    then
+        if [[ -e "$OLLAMA_ARCHIVE_PATH" ]]; then
+            echo "Existing unversioned Ollama archive requires controlled replacement" >&2
+            exit 1
+        fi
+
+        cp "$OLLAMA_VERSIONED_ARCHIVE_PATH" "$OLLAMA_ARCHIVE_PATH"
+        echo "Verified Ollama ${OLLAMA_VERSION} archive installed into payload"
+        exit 0
+    fi
+
+    echo "Versioned Ollama archive checksum mismatch" >&2
     exit 1
 fi
 
