@@ -1,9 +1,40 @@
 # Loom & DAIA — Technical Glossary
 
-**Version:** 0.1  
+**Version:** 0.2  
 **Purpose:** Explain technical terms used in Loom and DAIA development in everyday language.
 
 This glossary is intended for developers, contributors, and anyone following the project without needing to know every technical term in advance.
+
+## Guarded Edits — Highest-Priority Development Practice
+
+**Guarded edits are our default safety procedure for changing Loom and DAIA.** The goal is to make changes predictable, easy to verify, and safe to stop. The user should not need to debug code or command syntax to follow the development process.
+
+| Term | Plain-English meaning | DAIA example |
+|---|---|---|
+| **Guarded edit** | A change that proceeds only after verifying that the expected file and code are present. | Check the exact function and expected text before replacing it. |
+| **Read-only inspection** | Looking at files and system state without changing anything. | Inspect a Rust module and Git status before editing. |
+| **Precondition** | A requirement that must be true before an action can run. | Confirm the file contains exactly one expected section. |
+| **Fail safely / guard stop** | Stop without making a change when an assumption or check fails. | If the expected code is missing or duplicated, report the mismatch instead of guessing. |
+| **Scoped change** | An edit restricted to the files and behavior agreed upon. | Update only the relevant hardware manifest and its focused tests. |
+| **Atomic change** | A change applied as one complete operation, avoiding a half-written result. | Write a replacement file safely, then move it into place only after validation. |
+| **Idempotent edit** | An edit that does not repeat or duplicate its changes when run again. | Re-running a patch does not add a second configuration block. |
+| **Targeted test** | A test focused on the behavior that changed. | Test USB hot-plug handling after editing the device integration. |
+| **Verification report** | A saved record of what was checked, changed, and tested. | Save the result as a numbered DAIA step report. |
+| **Approval gate** | A point where work must wait for explicit permission before proceeding. | Do not build an ISO, start services, or push a checkpoint without approval. |
+| **Rollback plan** | A known way to restore the previous state if a change fails. | Preserve the original content or use the recorded Git version to recover. |
+
+### Our guarded-edit workflow
+
+1. **Establish the baseline.** Check the relevant Git commit, working-tree changes, and exact files involved.
+2. **Inspect only what is needed.** Prefer focused read-only inspection rather than repeatedly scanning the entire repository.
+3. **Check preconditions.** Confirm the expected code, file paths, and assumptions before writing.
+4. **Make one meaningful, scoped change.** Use a guarded Python edit where practical; avoid manual syntax-heavy editing.
+5. **Test and verify.** Run focused checks for the changed behavior and inspect the resulting diff.
+6. **Save a concise report.** Record the outcome and any remaining issues.
+7. **Stop on unexpected results.** Do not silently improvise a replacement edit or continue after a failed guard.
+8. **Respect approval gates.** Do not commit, push, build an ISO, start services, or perform destructive operations unless specifically approved.
+
+**Priority rule:** Correctness and preservation of the working project take precedence over speed. A failed guard is a successful safety check, not a reason to bypass it.
 
 ## Testing and Verification
 
