@@ -10,7 +10,7 @@ That's what DAIA aims to make possible.
 
 Instead of building a different operating system for every purpose, DAIA lets you choose the capabilities you need and brings them together into a dedicated appliance.
 
-## What Can You Build with DAIA?
+## What Can Loom Build?
 
 DAIA is designed to support a growing family of appliances:
 
