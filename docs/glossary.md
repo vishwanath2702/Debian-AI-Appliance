@@ -38,6 +38,9 @@ This glossary is intended for developers, contributors, and anyone following the
 
 ### Copy-and-paste example: guarded hardware diagnostics and CPU benchmark
 
+**Runnable GitHub version:** [Guarded hardware benchmark script](examples/guarded-hardware-benchmark.sh). This preserves the command used for the Pragna laptop baseline, with the OpenSSL timeout increased to allow all block-size tests to finish and clearer timeout/failure reporting.
+
+
 This is a **guarded diagnostic command**, not a source-code edit. It demonstrates the same discipline: check prerequisites, limit what commands can do, avoid configuration changes, show the results, and save a report. It works on many Linux machines with common tools installed; missing tools are reported rather than installed.
 
 **Copy the whole block into a Bash terminal.** The CPU test measures SHA-256 throughput; the other sections identify hardware rather than measure its speed.
