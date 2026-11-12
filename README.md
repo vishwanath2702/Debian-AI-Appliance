@@ -18,9 +18,11 @@ Loom is designed to support a family of distinct appliances, each with its own p
 - **Security and networking — Raksha:** A planned Kali Linux-style security assessment appliance for authorized penetration testing, vulnerability analysis, digital forensics, reverse engineering, and security research, with additional network infrastructure capabilities such as DNS, DHCP, VPN, firewall, and network services.
 - **Development — Srijana:** Development tools and environments.
 - **Media — Taranga:** Media-focused services and workflows.
-- **Backup and recovery — Smriti:** Backup, restoration, and recovery capabilities.
+- **Backup, recovery, and disaster recovery — Sharan (ಶರಣ):** A planned universal recovery system for all Loom appliances, combining backup and preservation, file and configuration restoration, boot and filesystem repair, and complete appliance rebuilding. Its emergency Live USB will be as small as practical, offline-first, and independently bootable even if the installed operating system fails.
 
 **Project status matters:** DAIA/Pragna is under active development and hardware testing. The other named appliance families are planned; listing them here does **not** mean their ISOs or capabilities are implemented or released.
+
+**Sharan recovery principle:** Every Loom appliance should support a common backup and recovery contract. The minimal recovery ISO carries essential tools; larger backups and appliance payloads may live on external or network storage. Recovery begins with read-only inspection and requires explicit confirmation before destructive operations. Sharan absorbs the previously proposed Smriti role; Smriti is not a separate planned appliance.
 
 ## One Engine. Many Appliances.
 
