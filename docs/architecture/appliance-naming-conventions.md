@@ -20,6 +20,7 @@ The AI appliance's established codename is **Pragna (ಪ್ರಜ್ಞಾ)**. I
 | Development appliance | **Srijana** | Creation | Reserved for future use |
 | Media appliance | **Taranga** | Wave | Reserved for future use |
 | Backup and recovery appliance | **Smriti** | Memory / remembrance | Reserved for future use |
+| Wanderer — offline exploration and rescue-support appliance | **Sanchari (ಸಂಚಾರಿ)** | Traveller / wanderer | Reserved for future use |
 
 The English glosses are intended naming associations, not formal linguistic definitions. Kannada spelling and usage for the future names should be reviewed before preparing public-facing branding.
 
