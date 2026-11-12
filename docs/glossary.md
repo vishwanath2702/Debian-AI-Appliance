@@ -5,7 +5,7 @@
 
 This glossary is intended for developers, contributors, and anyone following the project without needing to know every technical term in advance.
 
-## Guarded Edits — Highest-Priority Development Practice
+## Guarded Edits
 
 **Guarded edits are our default safety procedure for changing Loom and DAIA.** The goal is to make changes predictable, easy to verify, and safe to stop. The user should not need to debug code or command syntax to follow the development process.
 
