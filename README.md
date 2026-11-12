@@ -1,8 +1,8 @@
 ![Loom weaving shuttle logo](branding/loom-shuttle.png)
 
-# Debian AI Appliance (Loom)
+# Loom
 
-DAIA is an open-source platform for creating ready-to-use, Debian-based appliances.
+Loom is a Rust-based package manager for creating ready-to-use, Debian-based appliances.
 
 Imagine having a computer that does exactly what you need—whether it's a personal AI assistant, an offline knowledge library, a mail server, or a home storage system—without having to install and configure everything yourself.
 
