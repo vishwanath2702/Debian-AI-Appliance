@@ -1,6 +1,6 @@
 # Loom & DAIA — Technical Glossary
 
-**Version:** 0.3.1  
+**Version:** 0.3.2  
 **Purpose:** Explain technical terms used in Loom and DAIA development in everyday language.
 
 This glossary is intended for developers, contributors, and anyone following the project without needing to know every technical term in advance.
@@ -35,6 +35,72 @@ This glossary is intended for developers, contributors, and anyone following the
 8. **Respect approval gates.** Do not commit, push, build an ISO, start services, or perform destructive operations unless specifically approved.
 
 **Priority rule:** Correctness and preservation of the working project take precedence over speed. A failed guard is a successful safety check, not a reason to bypass it.
+
+### Copy-and-paste example: guarded hardware diagnostics and CPU benchmark
+
+This is a **guarded diagnostic command**, not a source-code edit. It demonstrates the same discipline: check prerequisites, limit what commands can do, avoid configuration changes, show the results, and save a report. It works on many Linux machines with common tools installed; missing tools are reported rather than installed.
+
+**Copy the whole block into a Bash terminal.** The CPU test measures SHA-256 throughput; the other sections identify hardware rather than measure its speed.
+
+```bash
+(
+set -u
+set -o pipefail
+umask 077
+REPORT="$(mktemp /tmp/daia-hardware-benchmark-XXXXXXXX.txt)" || exit 1
+section() { printf '\n========== %s ==========\n' "$1"; }
+check() {
+    local label="$1"
+    shift
+    printf '\n--- %s ---\n' "$label"
+    if ! command -v "$1" >/dev/null 2>&1; then
+        printf 'Tool unavailable: %s\n' "$1"
+    elif ! command -v timeout >/dev/null 2>&1; then
+        printf 'GUARD STOP: timeout utility unavailable\n'
+    else
+        timeout 15 "$@" 2>&1 || printf '[Check failed or timed out]\n'
+    fi
+}
+{
+    section "DAIA HARDWARE REPORT"
+    printf 'Date: %s\nKernel: %s\n' "$(date -Is)" "$(uname -sr)"
+    section "CPU"; check "Processor" lscpu
+    section "MEMORY"; check "RAM" free -h
+    section "STORAGE"; check "Disks" lsblk -o NAME,SIZE,TYPE,MODEL,TRAN,ROTA
+    section "GPU"; check "Graphics devices" lspci -nn
+    section "NETWORK"; check "Interfaces" ip -brief link
+    check "NetworkManager" nmcli device status
+    section "BLUETOOTH"; check "Controllers" bluetoothctl list
+    section "USB AND SDR"; check "USB devices" lsusb
+    section "CPU BENCHMARK"
+    if command -v openssl >/dev/null 2>&1 &&
+       command -v timeout >/dev/null 2>&1; then
+        timeout 10 openssl speed -seconds 3 sha256 2>&1 ||
+            printf '[Benchmark failed or timed out]\n'
+    else
+        printf 'Benchmark skipped: openssl or timeout unavailable\n'
+    fi
+    section "SAFETY"
+    printf 'No package installs, driver changes, service restarts, or disk-write benchmark.\n'
+    section "COMPLETE"
+} 2>&1 | tee "$REPORT"
+printf '\nReport saved to: %s\n' "$REPORT"
+)
+```
+
+**How to read the guards:**
+
+- `umask 077` and `mktemp` create a new report with restricted access and a unique name; an existing report is not overwritten.
+- `command -v` checks whether a tool exists before attempting to run it.
+- `timeout` limits external checks so an unavailable or stuck tool does not run indefinitely.
+- The script **does not** use `sudo`, install packages, change configuration, or restart services. It does create a report under `/tmp`.
+- `tee` displays results in the terminal while writing the report.
+
+**What success looks like:** The terminal displays the sections, OpenSSL prints a CPU throughput table if available, and the final line gives the report path. **What failure looks like:** An unavailable or timed-out command is reported and the other checks continue. If the initial report file cannot be created, the command stops immediately.
+
+**Important limits:** This is a lightweight CPU microbenchmark plus hardware inventory, not a comprehensive performance or device-readiness test. A listed SDR, Wi-Fi, or Bluetooth device is not necessarily functional. The report may include machine and device identifiers; review it before sharing. If the user interrupts the pipeline or the report filesystem fills, the displayed output and saved report may be incomplete.
+
+**How this relates to a guarded edit:** The hardware command *observes* the system and writes only a report. A guarded **edit** adds stricter checks that the expected source code matches, changes only the agreed files, verifies the diff and tests, and stops or rolls back safely on unexpected results. Both use the same **check → act within limits → verify → report** principle.
 
 ### Worked example: guarded LLM benchmarking integration in Model Manager
 
