@@ -15,8 +15,7 @@ The AI appliance's established codename is **Pragna (ಪ್ರಜ್ಞಾ)**. I
 |---|---|---|---|
 | Debian AI Appliance (DAIA) | **Pragna** | Aware | Existing DAIA identity |
 | Storage appliance | **Nidhi** | Treasure | Reserved for future use |
-| Network appliance | **Setu** | Bridge | Reserved for future use |
-| Penetration testing and security auditing appliance | **Raksha** | Protection | Reserved for future use |
+| Security assessment and network infrastructure appliance | **Raksha** | Protection | Reserved for future use |
 | Development appliance | **Srijana** | Creation | Reserved for future use |
 | Media appliance | **Taranga** | Wave | Reserved for future use |
 | Backup and recovery appliance | **Smriti** | Memory / remembrance | Reserved for future use |
@@ -24,7 +23,7 @@ The AI appliance's established codename is **Pragna (ಪ್ರಜ್ಞಾ)**. I
 
 The English glosses are intended naming associations, not formal linguistic definitions. Kannada spelling and usage for the future names should be reviewed before preparing public-facing branding.
 
-**Raksha scope:** Inspired by Kali Linux's professional security assessment use cases: authorized penetration testing, security auditing, vulnerability analysis, digital forensics, reverse engineering, and security research. Raksha remains an independent, planned Loom-built Debian appliance; this definition does not imply Kali Linux compatibility, its full tool catalog, or an existing Raksha ISO. See [Kali Linux's official overview](https://www.kali.org/docs/introduction/what-is-kali-linux/) for the reference scope.
+**Raksha scope:** Inspired by Kali Linux's professional security assessment use cases: authorized penetration testing, security auditing, vulnerability analysis, digital forensics, reverse engineering, and security research. Raksha also incorporates the previously planned Setu network infrastructure scope: DNS, DHCP, VPN, firewall, and network services. These server/infrastructure roles are additional Loom goals, not a claim that Kali Linux itself provides a turnkey network server. Raksha remains an independent, planned Loom-built Debian appliance; this definition does not imply Kali Linux compatibility, its full tool catalog, or an existing Raksha ISO. See [Kali Linux's official overview](https://www.kali.org/docs/introduction/what-is-kali-linux/) for the reference scope.
 
 ## Naming rules
 
