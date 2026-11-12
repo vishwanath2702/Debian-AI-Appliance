@@ -1,6 +1,6 @@
 # Loom & DAIA — Technical Glossary
 
-**Version:** 0.2  
+**Version:** 0.3  
 **Purpose:** Explain technical terms used in Loom and DAIA development in everyday language.
 
 This glossary is intended for developers, contributors, and anyone following the project without needing to know every technical term in advance.
@@ -35,6 +35,42 @@ This glossary is intended for developers, contributors, and anyone following the
 8. **Respect approval gates.** Do not commit, push, build an ISO, start services, or perform destructive operations unless specifically approved.
 
 **Priority rule:** Correctness and preservation of the working project take precedence over speed. A failed guard is a successful safety check, not a reason to bypass it.
+
+### Worked example: a guarded edit that succeeds or stops safely
+
+**Scenario:** We want to change a single setting in a Loom hardware manifest. This is a *teaching example*, not a command to run against the real repository.
+
+**Before editing**, the script checks that the file exists and contains the exact expected text once. It never guesses where to edit.
+
+```python
+from pathlib import Path
+
+path = Path("example-hardware.yaml")  # Illustrative file
+old = "bluetooth: disabled"
+new = "bluetooth: enabled"
+
+if not path.is_file():
+    raise SystemExit("GUARD STOP: expected file is missing")
+
+original = path.read_text(encoding="utf-8")
+if original.count(old) != 1:
+    raise SystemExit("GUARD STOP: expected setting is missing or repeated")
+
+updated = original.replace(old, new, 1)
+if updated == original:
+    raise SystemExit("GUARD STOP: nothing changed")
+
+# Demonstration only: actual project edits also verify Git state,
+# preserve permissions, write atomically, and run focused tests.
+print("Guard passed. Proposed change:")
+print(updated)
+```
+
+**Successful path:** The expected setting appears exactly once. The script prepares the change, then a real guarded workflow would apply it safely, inspect the diff, run focused tests, and save a report. **This example only prints the proposed result; it does not write a file.**
+
+**Guard-stop path:** The file is absent, or the expected setting appears zero or multiple times. The script exits with a clear message and makes **no change**. We inspect the mismatch before trying again; we do not bypass the guard.
+
+**Why it matters:** This avoids accidental edits to the wrong file, duplicated settings, and guesswork when code has changed since the last inspection. Approval is still required for commits, pushes, ISO builds, services, and destructive operations.
 
 ## Testing and Verification
 
@@ -81,7 +117,7 @@ This glossary is intended for developers, contributors, and anyone following the
 | **Pull** | Bring remote changes into a local working copy. | Update the laptop's repository with GitHub changes. |
 | **Checkpoint** | A known point where progress has been recorded and can be reviewed. | Commit a verified installer improvement before beginning another feature. |
 | **Baseline** | A known starting state used for comparison. | Record the current Git commit and test results before making changes. |
-| **Guarded edit** | A change made only after checking specific conditions, to avoid modifying unexpected files. | Confirm the expected code exists before replacing it. |
+
 
 ## Architecture and Software Design
 
@@ -100,6 +136,20 @@ This glossary is intended for developers, contributors, and anyone following the
 | **Idempotent** | Safe to repeat without creating additional unintended changes. | Re-running a configuration step does not duplicate entries. |
 | **State** | Information describing the current condition of a system. | Whether first-boot provisioning has completed. |
 | **Contract** | A clearly defined agreement about inputs, outputs, and behavior between components. | The pgvector startup helper must verify identity before starting a container. |
+
+## Hardware and Offline Support
+
+| Term | Plain-English meaning | Practical Loom example |
+|---|---|---|
+| **Debian Stable** | Debian's main supported release, prioritizing reliability and security updates. | Loom uses Stable packages by default when preparing Pragna's Wi-Fi and Bluetooth support. |
+| **Debian Backports** | Selected newer software rebuilt for a supported Debian Stable release. | If a newer supported kernel or firmware package is needed for an SDR or Wi-Fi adapter, Loom evaluates the relevant Backports package rather than upgrading everything indiscriminately. |
+| **Firmware** | Device-specific software that helps hardware operate. | A wireless adapter is visible over USB but cannot connect until its compatible firmware is installed. |
+| **Driver** | Software that lets the operating system communicate with hardware. | Linux needs an appropriate driver to operate an RTL-SDR receiver. |
+| **Hot-plug** | Connecting or disconnecting hardware while the computer is running. | Wanderer detects a GPS receiver connected after startup and makes it available without requiring a reboot when supported. |
+| **Plug-and-play** | Hardware being detected and made usable with little or no manual setup. | Pragna identifies a supported Bluetooth dongle, loads the needed support, and confirms it can scan for devices. |
+| **Device readiness** | Confirming a device can actually perform its job, not merely that it appears in a device list. | Loom checks that an SDR application can open the receiver before reporting it as ready. |
+| **SDR** | Software-Defined Radio: radio equipment whose signal processing is largely handled by software. | Wanderer uses a compatible USB receiver to examine permitted radio signals offline; a receive-only SDR cannot transmit rescue calls. |
+| **Offline repository** | A locally stored collection of packages or content usable without internet access. | Wanderer's installation media includes verified firmware packages for supported field devices. |
 
 ## Building and Installing DAIA
 
@@ -134,10 +184,16 @@ This glossary is intended for developers, contributors, and anyone following the
 
 ---
 
+## Reading the examples
+
+Every term above includes a project-specific example. Read each example as a **scenario**, not a claim that the feature has already shipped. To apply a term in practice, ask: *What triggers this situation? What does Loom or DAIA do? How would we verify the result?*
+
+For example, **regression testing** begins after a change, reruns checks for previously working behavior, and succeeds only if those checks still pass. **Device readiness** begins when hardware is detected, verifies that an application can use it, and reports a clear failure if detection alone is insufficient. **Guarded editing** begins with expected source content, changes only what matches, and stops without writing when the expectation is false.
+
 ## How to use this glossary
 
 When a technical term appears in documentation, explanations should use the term consistently and link to this glossary where helpful.
 
 The glossary should grow as the project introduces new concepts. Definitions should remain accessible without sacrificing technical accuracy.
 
-**Document status:** Initial draft. Examples illustrate concepts; they do not independently certify that every mentioned DAIA feature is fully implemented.
+**Document status:** Living reference, version 0.3. Examples illustrate concepts; they do not independently certify that every mentioned DAIA feature is fully implemented.
