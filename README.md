@@ -16,7 +16,7 @@ Loom is designed to support a family of distinct appliances, each with its own p
 - **Wanderer — Sanchari (offline exploration):** Offline maps and reference material, navigation, software-defined radio (SDR) reception, and exploration or rescue-support tools.
 - **Storage — Nidhi:** File sharing, storage management, and related services.
 - **Networking — Setu:** DNS, DHCP, VPN, and network services.
-- **Security — Raksha:** Monitoring, intrusion detection, and auditing.
+- **Security — Raksha:** A planned penetration-testing and security-auditing appliance, with a Kali Linux-like scope covering authorized security assessments, vulnerability analysis, digital forensics, reverse engineering, and security research.
 - **Development — Srijana:** Development tools and environments.
 - **Media — Taranga:** Media-focused services and workflows.
 - **Backup and recovery — Smriti:** Backup, restoration, and recovery capabilities.
