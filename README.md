@@ -29,6 +29,12 @@ Instead of hardcoding a separate operating-system builder for every purpose, Loo
 
 Appliance-specific requirements should be expressed through separate declarative manifests and profiles. This lets each appliance remain distinct while sharing infrastructure where appropriate.
 
+## Shared Foundations. Independent Appliances.
+
+Loom's technology choices should complement the entire appliance family without forcing every appliance to use the same software stack. Shared capabilities should expose clear, documented interfaces, use open standards and portable data formats where practical, and remain optional when an appliance does not need them.
+
+Appliances should operate independently of other appliances and optional shared services. Different hardware and use cases may require different inference engines, interfaces, databases, or deployment methods; Pragna's current choices (including Ollama, Open WebUI, and Docker) are not mandatory Loom-wide dependencies or predetermined choices for a future AI server. Alternatives should be evaluated through compatibility, performance, security, maintainability, and recovery testing.
+
 ## Built on Debian. Powered by Rust.
 
 Loom builds on Debian and its established package, boot, and system-management tools. Rust coordinates appliance modeling, capability selection, planning, execution, and installation; targeted system-integration scripts remain useful where needed.
