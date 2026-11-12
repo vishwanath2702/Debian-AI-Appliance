@@ -105,40 +105,6 @@ printf '\nReport saved to: %s\n' "$REPORT"
 
 **How this relates to a guarded edit:** The hardware command *observes* the system and writes only a report. A guarded **edit** adds stricter checks that the expected source code matches, changes only the agreed files, verifies the diff and tests, and stops or rolls back safely on unexpected results. Both use the same **check → act within limits → verify → report** principle.
 
-### Worked example: guarded LLM benchmarking integration in Model Manager
-
-**Real project scenario:** We moved LLM benchmarking into Model Manager's **Installed** tab. A user selects an installed model, chooses **Benchmark Selected Model**, and the existing benchmark engine runs for that exact model. The successful run opens a standalone HTML report in the browser. This example describes the guarded editing method used for that integration; the short Python snippet below is an **illustration of the guard**, not a verbatim historical patch or a command to execute.
-
-**Before editing:** Inspect the relevant source and tests, record Git HEAD and any existing working-tree changes, and identify the exact code anchors. The target was `runtime/daia-model-manager.py`; the related test suites covered the GUI, Installed tab, and benchmarking.
-
-```python
-from pathlib import Path
-
-source = Path("runtime/daia-model-manager.py")
-expected = "Benchmark Selected Model"
-
-if not source.is_file():
-    raise SystemExit("GUARD STOP: Model Manager source is missing")
-
-content = source.read_text(encoding="utf-8")
-if content.count(expected) != 1:
-    raise SystemExit(
-        "GUARD STOP: benchmark button anchor is missing or duplicated"
-    )
-
-print("Guard passed: expected benchmark button anchor found once")
-# Inspection only. A real edit separately checks the exact old code,
-# performs a scoped replacement, and verifies the resulting diff.
-```
-
-**Successful path:** The actual guarded workflow checks its expected source anchors before editing, makes the scoped change, checks Python syntax and the Git diff, and runs focused GUI/Installed/benchmark tests. The intended behavior is: **Installed → select model → Benchmark Selected Model → existing Rust benchmark → standalone browser report after success**. The standalone top-level Benchmark tab is removed only after its functionality is integrated and verified.
-
-**Guard-stop path:** If a source anchor is missing, repeated, or different from the expected baseline, the edit stops instead of guessing. If a test or verification fails after an edit, the guarded workflow restores only its own changes while preserving unrelated work, and reports the failure for inspection.
-
-**Why it matters:** We can change Model Manager without accidentally breaking model importing, exporting, or an already working benchmark. The user receives a concise result and does not have to repair Python syntax manually. An ISO build, commit, or push remains subject to its own approval gate.
-
-**Verification example from this workstream:** The Model Manager GUI, Installed-tab, and benchmark/browser-handoff suites were run together; a reported checkpoint passed **33 regression tests**, including **7 benchmark/browser-handoff tests**. These results describe that checkpoint, not a claim that every future appliance build has been tested.
-
 
 ## Testing and Verification
 
