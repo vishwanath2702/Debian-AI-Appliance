@@ -15,8 +15,7 @@ Loom is designed to support a family of distinct appliances, each with its own p
 - **DAIA — Pragna (AI):** Local AI assistants, Ollama, Open WebUI, model management, and offline knowledge workflows.
 - **Wanderer — Sanchari (offline exploration):** Offline maps and reference material, navigation, software-defined radio (SDR) reception, and exploration or rescue-support tools.
 - **Storage — Nidhi:** File sharing, storage management, and related services.
-- **Networking — Setu:** DNS, DHCP, VPN, and network services.
-- **Security — Raksha:** A planned penetration-testing and security-auditing appliance, with a Kali Linux-like scope covering authorized security assessments, vulnerability analysis, digital forensics, reverse engineering, and security research.
+- **Security and networking — Raksha:** A planned Kali Linux-style security assessment appliance for authorized penetration testing, vulnerability analysis, digital forensics, reverse engineering, and security research, with additional network infrastructure capabilities such as DNS, DHCP, VPN, firewall, and network services.
 - **Development — Srijana:** Development tools and environments.
 - **Media — Taranga:** Media-focused services and workflows.
 - **Backup and recovery — Smriti:** Backup, restoration, and recovery capabilities.
