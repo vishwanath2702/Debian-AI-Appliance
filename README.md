@@ -1,4 +1,6 @@
-# DAIA — Debian AI Appliance
+![Loom weaving shuttle logo](branding/loom-shuttle.png)
+
+# Debian AI Appliance (Loom)
 
 DAIA is an open-source platform for creating ready-to-use, Debian-based appliances.
 
