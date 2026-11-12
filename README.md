@@ -35,6 +35,17 @@ Loom's technology choices should complement the entire appliance family without 
 
 Appliances should operate independently of other appliances and optional shared services. Different hardware and use cases may require different inference engines, interfaces, databases, or deployment methods; Pragna's current choices (including Ollama, Open WebUI, and Docker) are not mandatory Loom-wide dependencies or predetermined choices for a future AI server. Alternatives should be evaluated through compatibility, performance, security, maintainability, and recovery testing.
 
+## Package Version Policy
+
+Loom aims to let each appliance select a declarative package freshness policy rather than always accepting the default Debian stable versions:
+
+- **Stable:** Packages from Debian stable.
+- **Stable + Backports:** Debian stable with selected newer backported packages.
+- **Latest Compatible:** The newest versions verified to work together from trusted, authenticated repositories and supported vendor sources.
+- **Experimental:** Explicitly opted-in testing or unstable packages, with clear compatibility and security warnings.
+
+Package selection must validate dependencies, repository trust, compatibility, and appliance-specific constraints. Loom should record exact package versions and sources in a reproducible manifest for auditing, rebuilding, and recovery. These are planned policy capabilities, not a claim that all modes are implemented today.
+
 ## Built on Debian. Powered by Rust.
 
 Loom builds on Debian and its established package, boot, and system-management tools. Rust coordinates appliance modeling, capability selection, planning, execution, and installation; targeted system-integration scripts remain useful where needed.
