@@ -2,52 +2,54 @@
 
 # Loom
 
-Loom is a Rust-based package manager for creating ready-to-use, Debian-based appliances.
+**Loom is a Rust-based package manager and appliance-building platform for creating purpose-built, Debian-based operating systems.**
 
-Imagine having a computer that does exactly what you need—whether it's a personal AI assistant, an offline knowledge library, a mail server, or a home storage system—without having to install and configure everything yourself.
+Loom brings together appliance definitions, packages, services, configuration, and installation workflows. Its aim is to make specialized systems reproducible and easier to build, install, and maintain without creating a separate build engine for every appliance.
 
-That's what DAIA aims to make possible.
-
-Instead of building a different operating system for every purpose, DAIA lets you choose the capabilities you need and brings them together into a dedicated appliance.
+**Loom is the builder. The appliances are what it builds.** The first appliance under development is **DAIA (Debian AI Appliance)**, codename **Pragna**.
 
 ## What Can Loom Build?
 
-DAIA is designed to support a growing family of appliances:
+Loom is designed to support a family of distinct appliances, each with its own purpose and declarative capability and payload definitions:
 
-- **AI:** Local AI assistants, Ollama, Open WebUI, speech recognition, and computer vision.
-- **Wanderer:** Offline maps, Wikipedia, navigation, software-defined radio (SDR), and AI—useful even without an internet connection.
-- **Mail:** Your own email server with Postfix, Dovecot, OpenLDAP, administration, and monitoring.
-- **Storage:** Personal or business storage with Samba, NFS, RAID, ZFS, and backups.
-- **Cloud:** Private cloud services with Nextcloud, file synchronization, and collaboration.
-- **Networking:** DNS, DHCP, VPN, and firewall appliances.
-- **Security:** System monitoring, intrusion detection, and auditing.
+- **DAIA — Pragna (AI):** Local AI assistants, Ollama, Open WebUI, model management, and offline knowledge workflows.
+- **Wanderer — Sanchari (offline exploration):** Offline maps and reference material, navigation, software-defined radio (SDR) reception, and exploration or rescue-support tools.
+- **Storage — Nidhi:** File sharing, storage management, and related services.
+- **Networking — Setu:** DNS, DHCP, VPN, and network services.
+- **Security — Raksha:** Monitoring, intrusion detection, and auditing.
+- **Development — Srijana:** Development tools and environments.
+- **Media — Taranga:** Media-focused services and workflows.
+- **Backup and recovery — Smriti:** Backup, restoration, and recovery capabilities.
 
-These are examples of DAIA's intended capabilities. Not all are implemented yet.
+**Project status matters:** DAIA/Pragna is under active development and hardware testing. The other named appliance families are planned; listing them here does **not** mean their ISOs or capabilities are implemented or released.
 
-## One Platform. Many Possibilities.
+## One Engine. Many Appliances.
 
-The idea behind DAIA is simple: **you decide what your appliance should do, and DAIA takes care of putting the pieces together.**
+Instead of hardcoding a separate operating-system builder for every purpose, Loom aims to reuse a common Rust engine, capability registry, dependency resolution, planning, installer, and hardware-support foundation.
 
-Want an AI workstation? A private family cloud? An offline travel companion? Or a combination of several capabilities?
-
-DAIA is being built to make these possible without maintaining a separate project for each appliance.
-
-And as new technologies become available, new capabilities can be added and reused across different appliances.
+Appliance-specific requirements should be expressed through separate declarative manifests and profiles. This lets each appliance remain distinct while sharing infrastructure where appropriate.
 
 ## Built on Debian. Powered by Rust.
 
-DAIA combines Debian's stability with a modular, Rust-based engine and installer.
+Loom builds on Debian and its established package, boot, and system-management tools. Rust coordinates appliance modeling, capability selection, planning, execution, and installation; targeted system-integration scripts remain useful where needed.
 
-Its goal is to make building and installing specialized systems simpler, more consistent, and easier to reproduce.
+The project follows an **offline-first** approach. Another core requirement is **recoverability**: the operating system should be replaceable while user data and configuration can be restored. These are design goals, not claims that every recovery workflow is already complete.
 
 ## Project Status
 
-DAIA is under active development. Its Debian-based image builder, Rust engine, capability framework, and installer are being developed and tested. Additional appliance capabilities will be introduced progressively.
+Loom's Rust engine, capability framework, ISO workflow, and installer have implementations in the repository and are under development and verification. DAIA/Pragna is the current physical-laptop validation platform.
+
+Not every planned integration or appliance capability is operational. Source availability, passing tests, and successful real-hardware operation are separate verification milestones.
+
+## Documentation
+
+- [Product overview and architecture](docs/architecture/loom-daia-product-overview.md)
+- [Capability inventory and verification status](docs/architecture/loom-daia-capability-inventory.md)
+- [Appliance naming conventions](docs/architecture/appliance-naming-conventions.md)
+- [Technical glossary and guarded hardware benchmark example](docs/glossary.md)
 
 ## Our Vision
 
-**One engine. One installer. Many appliances.**
+**One Loom engine. One shared installation foundation. Many independent appliances.**
 
-DAIA isn't about creating yet another Linux distribution.
-
-It's about making it easier for anyone to turn an idea into a purpose-built appliance.
+The goal is not another general-purpose Linux distribution, but a practical way to build reproducible, purpose-built Debian appliances.
