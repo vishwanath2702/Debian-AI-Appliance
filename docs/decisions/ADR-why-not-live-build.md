@@ -1,4 +1,4 @@
-# Architecture Decision: Why DAIA Does Not Use Debian Live-Build as Its Core Build Engine
+# Architecture Decision: Why Loom Does Not Use Debian Live-Build as Its Core Build Engine
 
 ## Status
 
@@ -6,7 +6,7 @@ Accepted
 
 ## Context
 
-DAIA is designed to produce Debian-based AI appliances. During the architecture phase, we evaluated whether Debian's `live-build` tooling should be used as the primary ISO generation engine.
+Loom is the Rust-based construction and lifecycle engine for Debian-based appliances. DAIA/Pragna is an appliance built using Loom, not the name of the build engine. During the architecture phase, we evaluated whether Debian's `live-build` tooling should be used as the primary ISO generation engine.
 
 `live-build` is a mature Debian project that already provides many capabilities required for generating bootable Debian Live images, including:
 
@@ -18,25 +18,25 @@ DAIA is designed to produce Debian-based AI appliances. During the architecture 
 * BIOS and UEFI boot support
 * ISO generation
 
-From a purely functional perspective, DAIA could have been implemented as a layer of configuration and automation around `live-build`.
+From a purely functional perspective, Loom could have been implemented as a layer of configuration and automation around `live-build`.
 
 The decision was made not to use `live-build` as the core engine.
 
-This was not because `live-build` is insufficient. It was because the goals and abstractions of DAIA are different.
+This was not because `live-build` is insufficient. It was because the goals and abstractions of Loom are different.
 
 ---
 
 # Decision
 
-DAIA will maintain its own appliance build engine and treat ISO creation as one backend capability rather than making Debian Live generation the foundation of the system.
+Loom will maintain its own appliance build engine and treat ISO creation as one backend capability rather than making Debian Live generation the foundation of the system.
 
-Existing Linux image-building tools may still be integrated as optional backends in the future, but DAIA's internal model will remain independent.
+Existing Linux image-building tools may still be integrated as optional backends in the future, but Loom's internal model will remain independent.
 
 ---
 
 # Rationale
 
-## 1. DAIA transforms artifacts; live-build creates artifacts
+## 1. Loom supports controlled artifact transformation; live-build creates live images
 
 The primary workflow difference is:
 
@@ -54,7 +54,7 @@ Debian Live ISO
 
 The user describes what should exist, and live-build produces the ISO.
 
-### DAIA model
+### Loom source-ISO workflow
 
 ```
 Existing Debian Source ISO
@@ -69,12 +69,10 @@ Existing Debian Source ISO
        Transformation
              |
              v
-       AI Appliance ISO
+         Appliance ISO
 ```
 
-DAIA begins with an existing artifact and produces a controlled derivative.
-
-The source ISO is not merely a base image. It is an input that must be inspected, validated, and tracked.
+In Loom's source-ISO workflow, an existing image is inspected and transformed into a controlled derivative. The source ISO is a tracked, validated input rather than an opaque implementation detail. Other Loom backends may start from different sources.
 
 ---
 
@@ -82,7 +80,7 @@ The source ISO is not merely a base image. It is an input that must be inspected
 
 A general live image builder can treat the base distribution as an implementation detail.
 
-DAIA cannot.
+Loom cannot.
 
 An appliance build must answer questions such as:
 
@@ -100,11 +98,11 @@ This requires concepts such as:
 * reproducible transformation stages
 * build provenance
 
-These concepts belong in the DAIA engine.
+These concepts belong in the Loom engine.
 
 ---
 
-# 3. AI appliances have requirements beyond traditional live images
+# 3. Purpose-specific appliances have requirements beyond traditional live images
 
 A traditional Debian Live image focuses on:
 
@@ -116,27 +114,27 @@ Packages
 Configuration
 ```
 
-An AI appliance requires:
+A purpose-specific appliance may require:
 
 ```
 Debian base
 +
-AI runtime
+Selected capabilities and providers
 +
-Model registry
+Application services and content
 +
-Model artifacts
+Hardware and firmware integration
 +
-Inference services
-+
-Hardware acceleration
-+
-Security policy
+Security and isolation policies
 +
 Offline operation
 +
+Data and configuration recovery
++
 Lifecycle management
 ```
+
+For example, DAIA/Pragna can add local inference, model management, and RAG services; other appliances can select storage, networking, media, or recovery capabilities without inheriting an AI stack.
 
 The build process becomes closer to:
 
@@ -149,9 +147,9 @@ rather than a traditional Live CD workflow.
 
 ---
 
-# 4. DAIA requires a programmable build graph
+# 4. Loom requires a programmable build graph
 
-The DAIA architecture is built around independent components:
+The Loom architecture is built around independent components:
 
 ```
 model
@@ -200,7 +198,7 @@ A wrapper around live-build would inherit:
 * external tool assumptions
 * Debian Live specific lifecycle
 
-A native DAIA engine provides:
+A native Loom engine provides:
 
 * explicit stages
 * controlled inputs and outputs
@@ -214,7 +212,7 @@ For an appliance factory, transparency is more valuable than hiding complexity b
 
 # Tradeoff Accepted
 
-Choosing a native engine means DAIA must implement functionality that already exists elsewhere.
+Choosing a native engine means Loom must implement functionality that already exists elsewhere.
 
 Examples:
 
@@ -233,10 +231,10 @@ The goal is not to replace Debian Live tooling. The goal is to own the appliance
 
 # Future Compatibility
 
-DAIA may support multiple image-generation backends:
+Loom may support multiple image-generation backends:
 
 ```
-              DAIA Engine
+              Loom Engine
                   |
         +---------+---------+
         |                   |
@@ -252,12 +250,12 @@ The core engine should remain independent.
 
 # Conclusion
 
-DAIA did not avoid `live-build` because it could not solve the problem.
+Loom did not avoid `live-build` because it could not solve the problem.
 
 It avoided `live-build` because it solves a different problem.
 
 `live-build` creates Debian Live images.
 
-DAIA builds managed AI appliances.
+Loom constructs and manages purpose-specific Debian appliances.
 
 The distinction is the architecture boundary.
