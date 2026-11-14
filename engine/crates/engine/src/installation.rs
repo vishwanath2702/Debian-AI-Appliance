@@ -990,6 +990,107 @@ mod runtime_recursive_copy_tests {
     }
 
     #[test]
+    fn runtime_recursive_copy_preserves_pgvector_archive_metadata() {
+        use std::os::unix::fs::MetadataExt;
+
+        let source = tempfile::tempdir().unwrap();
+        let destination = tempfile::tempdir().unwrap();
+
+        let image_directory = source.path().join("opt/daia/payload/images");
+        std::fs::create_dir_all(&image_directory).unwrap();
+
+        let archive = image_directory.join("pgvector.tar");
+        std::fs::write(&archive, b"pgvector-fixture").unwrap();
+        std::fs::set_permissions(&archive, std::fs::Permissions::from_mode(0o644)).unwrap();
+
+        let source_fd = open_directory(source.path());
+        let destination_fd = open_directory(destination.path());
+
+        copy_runtime_directory_contents_at(&source_fd, &destination_fd).unwrap();
+
+        let installed = destination
+            .path()
+            .join("opt/daia/payload/images/pgvector.tar");
+
+        let metadata = std::fs::symlink_metadata(&installed).unwrap();
+
+        assert!(metadata.file_type().is_file());
+        assert_eq!(metadata.nlink(), 1);
+        assert_eq!(metadata.mode() & 0o777, 0o644);
+        assert_eq!(metadata.uid(), rustix::process::geteuid().as_raw());
+        assert_eq!(std::fs::read(&installed).unwrap(), b"pgvector-fixture");
+    }
+
+    #[test]
+    fn runtime_recursive_copy_pgvector_directories_are_trusted() {
+        use std::os::unix::fs::MetadataExt;
+
+        let source = tempfile::tempdir().unwrap();
+        let destination = tempfile::tempdir().unwrap();
+
+        std::fs::create_dir_all(source.path().join("opt/daia/payload/images")).unwrap();
+
+        std::fs::write(
+            source.path().join("opt/daia/payload/images/pgvector.tar"),
+            b"fixture",
+        )
+        .unwrap();
+
+        let source_fd = open_directory(source.path());
+        let destination_fd = open_directory(destination.path());
+
+        copy_runtime_directory_contents_at(&source_fd, &destination_fd).unwrap();
+
+        for relative in [
+            "opt",
+            "opt/daia",
+            "opt/daia/payload",
+            "opt/daia/payload/images",
+        ] {
+            let metadata = std::fs::symlink_metadata(destination.path().join(relative)).unwrap();
+
+            assert!(metadata.file_type().is_dir());
+            assert_eq!(metadata.uid(), rustix::process::geteuid().as_raw());
+            assert_eq!(metadata.mode() & 0o022, 0);
+        }
+    }
+
+    #[test]
+    fn runtime_recursive_copy_rejects_unsafe_pgvector_directory() {
+        let source = tempfile::tempdir().unwrap();
+        let destination = tempfile::tempdir().unwrap();
+
+        let relative = "opt/daia/payload/images";
+
+        std::fs::create_dir_all(source.path().join(relative)).unwrap();
+        std::fs::write(
+            source.path().join(relative).join("pgvector.tar"),
+            b"fixture",
+        )
+        .unwrap();
+
+        let unsafe_directory = destination.path().join(relative);
+        std::fs::create_dir_all(&unsafe_directory).unwrap();
+        std::fs::set_permissions(&unsafe_directory, std::fs::Permissions::from_mode(0o777))
+            .unwrap();
+
+        let source_fd = open_directory(source.path());
+        let destination_fd = open_directory(destination.path());
+
+        let result = copy_runtime_directory_contents_at(&source_fd, &destination_fd);
+
+        assert!(
+            result.is_err(),
+            "unsafe existing pgvector directory must be rejected",
+        );
+
+        assert!(
+            !unsafe_directory.join("pgvector.tar").exists(),
+            "archive must not be deployed into an unsafe directory",
+        );
+    }
+
+    #[test]
     fn runtime_recursive_copy_rejects_nested_symlink() {
         use std::os::unix::fs::symlink;
 

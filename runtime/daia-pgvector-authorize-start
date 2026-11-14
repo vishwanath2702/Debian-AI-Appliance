@@ -1,6 +1,60 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Preserve the existing prestart and runtime interfaces.
+# Runtime additionally accepts:
+#   runtime --tika-id TIKA_ID
+#   runtime WEBUI_ID --tika-id TIKA_ID
+if [[ "$#" -gt 4 ]]; then
+    echo "Invalid pgvector authorization arguments" >&2
+    exit 1
+fi
+
+auth_mode="${1:-prestart}"
+case "$auth_mode" in
+    prestart|runtime) ;;
+    *)
+        echo "Invalid pgvector authorization mode" >&2
+        exit 1
+        ;;
+esac
+
+webui_id=""
+tika_id=""
+
+case "$#" in
+    0|1) ;;
+    2)
+        if [[ "$auth_mode" != "runtime" ||
+              ! "$2" =~ ^[0-9a-f]{64}$ ]]; then
+            echo "Invalid Open WebUI runtime identity" >&2
+            exit 1
+        fi
+        webui_id="$2"
+        ;;
+    3)
+        if [[ "$auth_mode" != "runtime" ||
+              "$2" != "--tika-id" ||
+              ! "$3" =~ ^[0-9a-f]{64}$ ]]; then
+            echo "Invalid Tika runtime identity" >&2
+            exit 1
+        fi
+        tika_id="$3"
+        ;;
+    4)
+        if [[ "$auth_mode" != "runtime" ||
+              ! "$2" =~ ^[0-9a-f]{64}$ ||
+              "$3" != "--tika-id" ||
+              ! "$4" =~ ^[0-9a-f]{64}$ ||
+              "$2" == "$4" ]]; then
+            echo "Invalid combined RAG identities" >&2
+            exit 1
+        fi
+        webui_id="$2"
+        tika_id="$4"
+        ;;
+esac
+
 # Authorize an existing DAIA pgvector container without starting it.
 # Output its immutable ID only after all checks succeed.
 
@@ -65,6 +119,61 @@ if [[ "$security" != "no-new-privileges:true|false" ]]; then
     exit 1
 fi
 
+# Verify each optional identity through its independent trusted registry.
+if [[ -n "$webui_id" ]]; then
+    if ! verified_webui_id="$(/usr/libexec/daia-openwebui-register-container --verify-identity "$webui_id")"; then
+        echo "Open WebUI trusted identity verification failed" >&2
+        exit 1
+    fi
+    if [[ "$verified_webui_id" != "$webui_id" ]]; then
+        echo "Open WebUI verified identity mismatch" >&2
+        exit 1
+    fi
+fi
+
+if [[ -n "$tika_id" ]]; then
+    if ! verified_tika_id="$(/usr/libexec/daia-tika-register-container --verify-identity "$tika_id")"; then
+        echo "Tika trusted identity verification failed" >&2
+        exit 1
+    fi
+    if [[ "$verified_tika_id" != "$tika_id" ]]; then
+        echo "Tika verified identity mismatch" >&2
+        exit 1
+    fi
+fi
+
+# The network verifier checks immutable attachment identities and
+# rejects unexpected or duplicate members.
+if [[ -n "$tika_id" ]]; then
+    if ! /usr/libexec/daia-rag-verify-network runtime "$container_id" "$webui_id" "$tika_id" >/dev/null; then
+        echo "DAIA RAG combined network verification failed" >&2
+        exit 1
+    fi
+elif [[ -n "$webui_id" ]]; then
+    if ! /usr/libexec/daia-rag-verify-network runtime "$container_id" "$webui_id" >/dev/null; then
+        echo "DAIA RAG combined network verification failed" >&2
+        exit 1
+    fi
+else
+    if ! /usr/libexec/daia-rag-verify-network "$auth_mode" "$container_id" >/dev/null; then
+        echo "DAIA RAG network verification failed" >&2
+        exit 1
+    fi
+fi
+
+# Require the isolated network mode established at container creation.
+if ! network_mode="$(docker container inspect \
+    --format '{{.HostConfig.NetworkMode}}' \
+    "$container_id")"; then
+    echo "Cannot inspect DAIA pgvector network configuration" >&2
+    exit 1
+fi
+
+if [[ "$network_mode" != "daia-rag-internal" ]]; then
+    echo "DAIA pgvector network isolation contract mismatch" >&2
+    exit 1
+fi
+
 # Subsequent inspections are pinned to the immutable ID.
 if ! mounts="$(docker container inspect \
     --format '{{range .Mounts}}{{printf "%s|%s|%s|%s|%t\n" .Type .Name .Source .Destination .RW}}{{end}}' \
@@ -74,9 +183,11 @@ if ! mounts="$(docker container inspect \
 fi
 
 expected_secret="bind||/var/lib/daia/pgvector/postgres-password|/run/secrets/daia-pgvector-password|false"
+expected_pgpass="bind||/var/lib/daia/pgvector/pgpass|/run/secrets/daia-pgvector-pgpass|false"
 
 volume_count=0
 secret_count=0
+pgpass_count=0
 mount_count=0
 
 while IFS= read -r mount; do
@@ -85,6 +196,8 @@ while IFS= read -r mount; do
 
     if [[ "$mount" == "$expected_secret" ]]; then
         secret_count=$((secret_count + 1))
+    elif [[ "$mount" == "$expected_pgpass" ]]; then
+        pgpass_count=$((pgpass_count + 1))
     elif [[ "$mount" == volume\|daia-pgvector-data\|* ]]; then
         # Parse exactly five fields without accepting extra separators.
         mount_type="${mount%%|*}"
@@ -114,9 +227,10 @@ while IFS= read -r mount; do
     fi
 done <<< "$mounts"
 
-if [[ "$mount_count" -ne 2 ||
+if [[ "$mount_count" -ne 3 ||
       "$volume_count" -ne 1 ||
-      "$secret_count" -ne 1 ]]; then
+      "$secret_count" -ne 1 ||
+       "$pgpass_count" -ne 1 ]]; then
     echo "DAIA pgvector mount contract mismatch" >&2
     exit 1
 fi

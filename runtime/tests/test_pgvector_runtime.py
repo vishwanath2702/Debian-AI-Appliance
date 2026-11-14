@@ -66,14 +66,15 @@ class PgvectorRuntimeContractTests(unittest.TestCase):
             result.stderr,
         )
 
-    def test_verify_fails_closed_while_unimplemented(self):
+    def test_verify_fails_closed_without_root(self):
+        import os
+
+        if os.geteuid() == 0:
+            self.skipTest("Non-root guard requires non-root execution")
+
         result = run_module("verify")
 
         self.assertNotEqual(result.returncode, 0)
-        self.assertIn(
-            "not implemented yet",
-            result.stderr,
-        )
 
 
 class PgvectorRuntimeValidationTests(unittest.TestCase):
@@ -816,6 +817,8 @@ class PgvectorContainerMountTests(unittest.TestCase):
             "/var/lib/postgresql/data|true\n"
             "bind||/var/lib/daia/pgvector/postgres-password|"
             "/run/secrets/daia-pgvector-password|false\n"
+            "bind||/var/lib/daia/pgvector/pgpass|"
+            "/run/secrets/daia-pgvector-pgpass|false\n"
         )
 
     def test_accepts_expected_writable_volume(self):

@@ -54,6 +54,7 @@ class ArchiveTests(unittest.TestCase):
         with tempfile.TemporaryDirectory(dir='/root') as directory:
             archive = Path(directory) / 'image.tar'
             archive.write_bytes(b'wrong')
+            os.chmod(archive, 0o600)
             with self.assertRaises(ValueError):
                 mod.verified_archive(str(archive))
 

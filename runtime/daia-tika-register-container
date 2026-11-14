@@ -1,0 +1,429 @@
+#!/usr/bin/env python3
+"""Privileged, fail-closed Apache Tika container registration."""
+
+import os
+import shutil
+import stat
+import subprocess
+import sys
+
+# Conventional imports support isolated source-level tests only.
+# Installed __main__ loads verified root-owned descriptors.
+if __name__ != "__main__":
+    from pgvector_registration import (
+        read_trusted_registration,
+        validate_container_id,
+    )
+    from tika_registration import (
+        EXPECTED_IMAGE,
+        provision_registration_directory,
+        register_authorized_container,
+        verify_registered_container,
+    )
+
+def _bind_trusted_dependencies():
+    """Bootstrap the installed loader from a verified root-owned descriptor."""
+    flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
+    directory_fd = os.open("/", flags)
+
+    try:
+        for component in ("usr", "libexec"):
+            next_fd = os.open(component, flags, dir_fd=directory_fd)
+            os.close(directory_fd)
+            directory_fd = next_fd
+
+            metadata = os.fstat(directory_fd)
+            if (
+                not stat.S_ISDIR(metadata.st_mode)
+                or metadata.st_uid != 0
+                or metadata.st_mode & 0o022
+            ):
+                raise PermissionError("Untrusted loader directory")
+
+        file_fd = os.open(
+            "openwebui_trusted_imports.py",
+            os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC,
+            dir_fd=directory_fd,
+        )
+
+        try:
+            before = os.fstat(file_fd)
+            if (
+                not stat.S_ISREG(before.st_mode)
+                or before.st_uid != 0
+                or before.st_mode & 0o022
+                or before.st_nlink != 1
+                or not 0 < before.st_size <= 1024 * 1024
+            ):
+                raise PermissionError("Untrusted loader file")
+
+            source = bytearray()
+            while len(source) < before.st_size:
+                chunk = os.pread(
+                    file_fd,
+                    min(65536, before.st_size - len(source)),
+                    len(source),
+                )
+                if not chunk:
+                    raise OSError("Trusted loader source truncated")
+                source.extend(chunk)
+
+            after = os.fstat(file_fd)
+            if (
+                (before.st_dev, before.st_ino, before.st_size,
+                 before.st_mtime_ns, before.st_ctime_ns)
+                !=
+                (after.st_dev, after.st_ino, after.st_size,
+                 after.st_mtime_ns, after.st_ctime_ns)
+            ):
+                raise PermissionError("Trusted loader changed during reading")
+        finally:
+            os.close(file_fd)
+    finally:
+        os.close(directory_fd)
+
+    namespace = {
+        "__name__": "_daia_verified_openwebui_loader",
+        "__file__": "<verified-openwebui-loader>",
+    }
+    exec(
+        compile(bytes(source), namespace["__file__"], "exec"),
+        namespace,
+    )
+
+    modules = namespace["load_trusted_runtime_modules"](
+        "/opt/daia",
+        expected_uid=0,
+        extra_modules=("tika_registration",),
+    )
+
+    pgvector = modules["pgvector_registration"]
+    tika_registration = modules["tika_registration"]
+
+    globals().update({
+        "read_trusted_registration":
+            pgvector.read_trusted_registration,
+        "validate_container_id":
+            pgvector.validate_container_id,
+        "EXPECTED_IMAGE":
+            tika_registration.EXPECTED_IMAGE,
+        "provision_registration_directory":
+            tika_registration.provision_registration_directory,
+        "register_authorized_container":
+            tika_registration.register_authorized_container,
+        "verify_registered_container":
+            tika_registration.verify_registered_container,
+    })
+
+
+NETWORK = "daia-rag-internal"
+
+
+def inspect(container_id, template):
+    result = subprocess.run(
+        ["docker", "container", "inspect",
+         "--format", template, container_id],
+        capture_output=True,
+        text=True,
+        check=True,
+        timeout=15,
+    )
+    return result.stdout.removesuffix("\n")
+
+
+def inspect_identity(container_id):
+    container_id = validate_container_id(container_id)
+    actual = inspect(
+        container_id,
+        '{{.Id}}{{printf "\t"}}'
+        '{{index .Config.Labels "org.daia.component"}}'
+        '{{printf "\t"}}'
+        '{{index .Config.Labels "org.daia.managed"}}'
+        '{{printf "\t"}}{{.Image}}',
+    )
+    expected = container_id + "\ttika\ttrue\t" + EXPECTED_IMAGE
+    if actual != expected:
+        raise PermissionError("Tika immutable identity mismatch")
+    return container_id
+
+
+def inspect_security(container_id):
+    security = inspect(
+        container_id,
+        '{{join .HostConfig.SecurityOpt ","}}'
+        '{{printf "|"}}{{.HostConfig.Privileged}}',
+    )
+    if security != "no-new-privileges:true|false":
+        raise PermissionError("Tika security contract mismatch")
+
+    mode = inspect(container_id, "{{.HostConfig.NetworkMode}}")
+    if mode != NETWORK:
+        raise PermissionError("Tika network mode mismatch")
+
+
+def inspect_mounts(container_id):
+    mounts = inspect(
+        container_id,
+        '{{range .Mounts}}{{printf "%s\n" .Destination}}{{end}}',
+    )
+    if mounts:
+        raise PermissionError("Unexpected Tika container mounts")
+
+
+def inspect_stopped(container_id):
+    state = inspect(
+        container_id,
+        '{{.State.Running}}{{printf "|"}}'
+        '{{.State.Paused}}{{printf "|"}}'
+        '{{.State.Restarting}}{{printf "|"}}'
+        '{{.State.Status}}',
+    )
+    if state not in (
+        "false|false|false|created",
+        "false|false|false|exited",
+    ):
+        raise PermissionError("Tika container is not safely stopped")
+
+
+def verify_network():
+    postgresql_id = validate_container_id(
+        read_trusted_registration("/var/lib/daia/pgvector")
+    )
+    subprocess.run(
+        ["/usr/libexec/daia-rag-verify-network",
+         "registration", postgresql_id],
+        capture_output=True,
+        text=True,
+        check=True,
+        timeout=15,
+    )
+
+
+def verify_container(container_id):
+    container_id = validate_container_id(container_id)
+    inspect_identity(container_id)
+    inspect_stopped(container_id)
+    inspect_security(container_id)
+    inspect_mounts(container_id)
+    verify_network()
+
+    # Recheck immutable identity and stopped state before publication.
+    inspect_identity(container_id)
+    inspect_stopped(container_id)
+    return container_id
+
+
+def verify_registered_identity(container_id):
+    """Read-only verification of a persistently registered Tika identity."""
+    container_id = validate_container_id(container_id)
+    inspect_identity(container_id)
+    inspect_security(container_id)
+    inspect_mounts(container_id)
+    verify_registered_container(container_id)
+    inspect_identity(container_id)
+    return container_id
+
+
+
+def inspect_running(container_id):
+    """Require the exact immutable container to be running normally."""
+    state = inspect(
+        container_id,
+        '{{.State.Running}}{{printf "|"}}'
+        '{{.State.Paused}}{{printf "|"}}'
+        '{{.State.Restarting}}{{printf "|"}}'
+        '{{.State.Status}}',
+    )
+    if state != "true|false|false|running":
+        raise PermissionError("Tika container is not safely running")
+
+
+def verify_runtime_network(container_id):
+    """Require PostgreSQL and this registered Tika ID on the RAG network."""
+    container_id = validate_container_id(container_id)
+    postgresql_id = validate_container_id(
+        read_trusted_registration("/var/lib/daia/pgvector")
+    )
+    result = subprocess.run(
+        [
+            "/usr/libexec/daia-pgvector-authorize-start",
+            "runtime", "--tika-id", container_id,
+        ],
+        capture_output=True,
+        text=True,
+        check=True,
+        timeout=30,
+    )
+    if result.stdout != postgresql_id + "\n":
+        raise PermissionError("PostgreSQL runtime identity mismatch")
+
+
+def verify_prestart_network(container_id):
+    """Authorize a stopped Tika container without assuming attachment.
+
+    Docker may expose a created/stopped container as attached or unattached.
+    Accept only PostgreSQL alone or PostgreSQL plus this registered Tika ID.
+    Both alternatives are independently checked by the PostgreSQL authorizer.
+    """
+    container_id = validate_container_id(container_id)
+    postgresql_id = validate_container_id(
+        read_trusted_registration("/var/lib/daia/pgvector")
+    )
+
+    alternatives = (
+        ["runtime", "--tika-id", container_id],
+        ["runtime"],
+    )
+
+    for arguments in alternatives:
+        try:
+            result = subprocess.run(
+                ["/usr/libexec/daia-pgvector-authorize-start", *arguments],
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=30,
+            )
+        except (OSError, subprocess.TimeoutExpired) as error:
+            raise PermissionError(
+                "Tika pre-start network authorization unavailable"
+            ) from error
+
+        if result.returncode == 0:
+            if result.stdout != postgresql_id + "\n":
+                raise PermissionError(
+                    "PostgreSQL pre-start identity mismatch"
+                )
+            return
+
+    raise PermissionError(
+        "Tika pre-start network membership is unauthorized"
+    )
+
+
+def authorize_registered_start(container_id):
+    """Read-only authorization; never starts a Docker container."""
+    container_id = validate_container_id(container_id)
+    inspect_identity(container_id)
+    inspect_security(container_id)
+    inspect_mounts(container_id)
+    inspect_stopped(container_id)
+    verify_registered_container(container_id)
+    verify_prestart_network(container_id)
+
+    inspect_identity(container_id)
+    inspect_stopped(container_id)
+    verify_prestart_network(container_id)
+    return container_id
+
+
+def verify_registered_running(container_id):
+    """Verify the registered running container and network twice."""
+    container_id = validate_container_id(container_id)
+    inspect_identity(container_id)
+    inspect_security(container_id)
+    inspect_mounts(container_id)
+    inspect_running(container_id)
+    verify_registered_container(container_id)
+    verify_runtime_network(container_id)
+
+    inspect_identity(container_id)
+    inspect_running(container_id)
+    verify_runtime_network(container_id)
+    return container_id
+
+
+def resolve_registered_tika_id():
+    """Resolve Tika only from its trusted on-disk registration."""
+    if os.geteuid() != 0:
+        raise PermissionError("Tika registration resolution requires root")
+
+    container_id = validate_container_id(
+        read_trusted_registration("/var/lib/daia/tika")
+    )
+
+    # The registered ID is independently checked against immutable
+    # Docker identity, pinned image, labels and security configuration.
+    verified_id = verify_registered_identity(container_id)
+    if verified_id != container_id:
+        raise PermissionError("Registered Tika identity mismatch")
+
+    # Reject registration changes during verification.
+    final_id = validate_container_id(
+        read_trusted_registration("/var/lib/daia/tika")
+    )
+    if final_id != container_id:
+        raise PermissionError("Tika registration changed")
+
+    return container_id
+
+
+def main():
+    if os.geteuid() != 0:
+        raise PermissionError("Tika registration requires root")
+
+    if __name__ == "__main__":
+        _bind_trusted_dependencies()
+
+    if len(sys.argv) == 2 and sys.argv[1] == "--resolve-registered":
+        if shutil.which("docker") is None:
+            raise RuntimeError("Docker is unavailable")
+
+        resolved_id = resolve_registered_tika_id()
+        print(resolved_id)
+        return 0
+
+    if len(sys.argv) == 2:
+        mode = "register"
+        container_id = validate_container_id(sys.argv[1])
+    elif len(sys.argv) == 3 and sys.argv[1] in (
+        "--verify-identity",
+        "--authorize-start",
+        "--verify-running",
+    ):
+        mode = sys.argv[1]
+        container_id = validate_container_id(sys.argv[2])
+    else:
+        raise ValueError("Invalid Tika registration helper arguments")
+
+    if shutil.which("docker") is None:
+        raise RuntimeError("Docker is unavailable")
+
+    if mode != "register":
+        handlers = {
+            "--verify-identity": verify_registered_identity,
+            "--authorize-start": authorize_registered_start,
+            "--verify-running": verify_registered_running,
+        }
+        verified_id = handlers[mode](container_id)
+        if verified_id != container_id:
+            raise PermissionError("Tika verified identity changed")
+        print(verified_id)
+        return 0
+
+    verified_id = verify_container(container_id)
+    if verified_id != container_id:
+        raise PermissionError("Tika identity changed")
+
+    provision_registration_directory()
+    register_authorized_container(
+        verified_id,
+        EXPECTED_IMAGE,
+        {
+            "org.daia.component": "tika",
+            "org.daia.managed": "true",
+        },
+        NETWORK,
+        ["no-new-privileges:true"],
+        False,
+    )
+    return 0
+
+
+if __name__ == "__main__":
+    try:
+        raise SystemExit(main())
+    except (OSError, ValueError, RuntimeError) as error:
+        print(f"DAIA Tika registration refused: {error}",
+              file=sys.stderr)
+        raise SystemExit(1)

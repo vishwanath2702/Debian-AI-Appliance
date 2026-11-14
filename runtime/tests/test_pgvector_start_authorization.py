@@ -21,6 +21,8 @@ MOUNTS = (
     "/var/lib/postgresql/data|true\n"
     "bind||/var/lib/daia/pgvector/postgres-password|"
     "/run/secrets/daia-pgvector-password|false\n"
+    "bind||/var/lib/daia/pgvector/pgpass|"
+    "/run/secrets/daia-pgvector-pgpass|false\n"
 )
 
 
@@ -45,6 +47,8 @@ class StartupAuthorizationTests(unittest.TestCase):
         verified_id=CONTAINER_ID,
         registration_success=True,
         security="no-new-privileges:true|false",
+        network_mode="daia-rag-internal",
+        auth_mode="prestart",
     ):
         if metadata is None:
             metadata = (
@@ -72,6 +76,10 @@ class StartupAuthorizationTests(unittest.TestCase):
             '        printf "%s\\n" '
             + shlex.quote(metadata) + '\n'
             '        ;;\n'
+            '      *".HostConfig.NetworkMode"*)\n'
+            '        printf "%s\\n" '
+            + shlex.quote(network_mode) + '\n'
+            '        ;;\n'
             '      *".HostConfig"*)\n'
             '        printf "%s\\n" '
             + shlex.quote(security) + '\n'
@@ -95,18 +103,25 @@ class StartupAuthorizationTests(unittest.TestCase):
         verifier_exit = 0 if registration_success else 1
 
         script = r"""
+function /usr/libexec/daia-rag-verify-network {
+    printf 'NETWORK:%s:%s\n' "$1" "$2" >> "$DAIA_TEST_DOCKER_LOG"
+    [[ "$1" == "$DAIA_TEST_AUTH_MODE" && "$2" == "$EXPECTED_CONTAINER_ID" ]]
+}
 function /usr/libexec/daia-pgvector-verify-registration {
     printf 'VERIFY:%s\n' "$1" >> "$DAIA_TEST_DOCKER_LOG"
     return "$VERIFIER_EXIT"
 }
 """ + "\nVERIFIER_EXIT=" + str(verifier_exit) + r"""
-source "$DAIA_AUTH_HELPER"
+source "$DAIA_AUTH_HELPER" "$DAIA_TEST_AUTH_MODE"
 """
 
         env["DAIA_AUTH_HELPER"] = str(HELPER)
+        env["EXPECTED_CONTAINER_ID"] = CONTAINER_ID
+        env["DAIA_TEST_AUTH_MODE"] = auth_mode
 
         return subprocess.run(
-            ["bash", "-c", script],
+            ["unshare", "--user", "--map-root-user",
+             "bash", "-c", script],
             env=env,
             capture_output=True,
             text=True,
@@ -124,11 +139,31 @@ source "$DAIA_AUTH_HELPER"
         self.assertNotIn("container create", events)
         self.assertNotIn("volume create", events)
 
+    def test_accepts_runtime_authorization(self):
+        result = self.authorize(auth_mode="runtime")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.strip(), CONTAINER_ID)
+        self.assertIn(
+            "NETWORK:runtime:" + CONTAINER_ID,
+            self.events(),
+        )
+        self.assertIn("VERIFY:" + CONTAINER_ID, self.events())
+
+    def test_rejects_unknown_authorization_mode(self):
+        result = self.authorize(auth_mode="invalid")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertNotIn("VERIFY:", self.events())
+        self.assertNotIn("container inspect", self.events())
+
     def test_accepts_verified_container(self):
         result = self.authorize()
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stdout.strip(), CONTAINER_ID)
         self.assert_inspection_reached()
+        self.assertIn(
+            "NETWORK:prestart:" + CONTAINER_ID,
+            self.events(),
+        )
         self.assertIn("volume inspect", self.events())
         self.assertIn("VERIFY:" + CONTAINER_ID, self.events())
         self.assertLess(
@@ -148,6 +183,14 @@ source "$DAIA_AUTH_HELPER"
             with self.subTest(security=security):
                 self.log.unlink(missing_ok=True)
                 result = self.authorize(security=security)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertNotIn("VERIFY:", self.events())
+
+    def test_rejects_unapproved_network_mode(self):
+        for mode in ("host", "bridge", "", "daia-untrusted"):
+            with self.subTest(network_mode=mode):
+                self.log.unlink(missing_ok=True)
+                result = self.authorize(network_mode=mode)
                 self.assertNotEqual(result.returncode, 0)
                 self.assertNotIn("VERIFY:", self.events())
 
@@ -173,6 +216,17 @@ source "$DAIA_AUTH_HELPER"
                 self.assertNotIn(".Mounts", self.events())
                 self.assertNotIn("volume inspect", self.events())
                 self.assertNotIn("VERIFY:", self.events())
+
+    def test_rejects_missing_pgpass_mount(self):
+        missing = MOUNTS.replace(
+            "bind||/var/lib/daia/pgvector/pgpass|"
+            "/run/secrets/daia-pgvector-pgpass|false" + chr(10),
+            "",
+        )
+        self.assertNotEqual(missing, MOUNTS)
+        result = self.authorize(mounts=missing)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertNotIn("VERIFY:", self.events())
 
     def test_rejects_invalid_mounts(self):
         cases = (

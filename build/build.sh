@@ -79,8 +79,21 @@ cargo build \
     -p tui
 
 echo
+ollama_approval_args=()
+case "${DAIA_OLLAMA_OFFLINE_APPROVED:-false}" in
+    true)
+        ollama_approval_args=(--ollama-approved-offline)
+        ;;
+    false)
+        ;;
+    *)
+        echo "ERROR: DAIA_OLLAMA_OFFLINE_APPROVED must be true or false" >&2
+        exit 1
+        ;;
+esac
+
 echo "[5/5] Building DAIA ISO with Rust engine..."
-"$PROJECT_ROOT/engine/target/release/daia"     build-iso     desktop     "$WORK_DIR/rootfs"     "$SOURCE_ISO"     "$WORK_DIR/iso-build"     "$OUTPUT_ISO"     "$WORK_DIR/payload/daia"
+"$PROJECT_ROOT/engine/target/release/daia"     build-iso     desktop     "$WORK_DIR/rootfs"     "$SOURCE_ISO"     "$WORK_DIR/iso-build"     "$OUTPUT_ISO"     "$WORK_DIR/payload/daia" "${ollama_approval_args[@]}"
 
 echo
 echo "Calculating SHA256..."

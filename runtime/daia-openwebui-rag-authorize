@@ -1,0 +1,145 @@
+#!/usr/bin/env python3
+"""Fail-closed preflight for Pragna Open WebUI RAG authorization."""
+
+import os
+import re
+import subprocess
+import sys
+
+PG_AUTHORIZER = "/usr/libexec/daia-pgvector-authorize-start"
+ROLE_VERIFIER = "/usr/libexec/daia-openwebui-rag-provision.py"
+
+
+class AuthorizationError(Exception):
+    pass
+
+
+def checked_command(arguments, *, timeout=20):
+    try:
+        return subprocess.run(
+            arguments,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired) as error:
+        raise AuthorizationError(
+            "RAG authorization dependency unavailable"
+        ) from error
+
+
+def preflight(webui_id=None, tika_id=None):
+    if os.geteuid() != 0:
+        raise AuthorizationError("RAG authorization requires root")
+
+    command = [PG_AUTHORIZER, "runtime"]
+    if webui_id is not None:
+        if (
+            not isinstance(webui_id, str)
+            or not re.fullmatch(r"[0-9a-f]{64}", webui_id)
+        ):
+            raise AuthorizationError("Invalid Open WebUI identity")
+        command.append(webui_id)
+
+    if tika_id is not None:
+        if (
+            not isinstance(tika_id, str)
+            or not re.fullmatch(r"[0-9a-f]{64}", tika_id)
+        ):
+            raise AuthorizationError("Invalid Tika identity")
+        command.extend(["--tika-id", tika_id])
+
+    authorization = checked_command(command)
+
+    if authorization.returncode != 0:
+        raise AuthorizationError(
+            "PostgreSQL runtime authorization failed"
+        )
+
+    output = authorization.stdout
+    if not isinstance(output, str):
+        raise AuthorizationError("Invalid PostgreSQL identity")
+
+    # Accept exactly one immutable container ID and one newline.
+    if not re.fullmatch(r"[0-9a-f]{64}\n", output):
+        raise AuthorizationError("Invalid PostgreSQL identity")
+
+    container_id = output[:-1]
+
+    readiness = checked_command([
+        "docker", "exec", container_id,
+        "pg_isready",
+        "-h", "127.0.0.1",
+        "-p", "5432",
+        "-U", "daia_rag",
+        "-d", "daia_rag",
+    ])
+
+    if readiness.returncode != 0:
+        raise AuthorizationError(
+            "PostgreSQL is not ready for RAG"
+        )
+
+    # Independent, read-only verification of the exact PostgreSQL ID.
+    # This helper must not provision, reset passwords, or start containers.
+    verification = checked_command(
+        [
+            ROLE_VERIFIER,
+            "--verify-only",
+            container_id,
+            *([webui_id] if webui_id is not None else []),
+            *(["--tika-id", tika_id] if tika_id is not None else []),
+        ],
+        timeout=90,
+    )
+
+    if verification.returncode != 0:
+        raise AuthorizationError(
+            "Open WebUI database-role authorization failed"
+        )
+
+    # The verifier's success protocol is exit 0 with no stdout.
+    if verification.stdout != "":
+        raise AuthorizationError(
+            "Unexpected database-role verification output"
+        )
+
+    return True
+
+
+def main():
+    if len(sys.argv) == 1:
+        webui_id = None
+        tika_id = None
+    elif len(sys.argv) == 3 and sys.argv[1] == "--webui-id":
+        webui_id = sys.argv[2]
+        tika_id = None
+    elif len(sys.argv) == 3 and sys.argv[1] == "--tika-id":
+        webui_id = None
+        tika_id = sys.argv[2]
+    elif (
+        len(sys.argv) == 5
+        and sys.argv[1] == "--webui-id"
+        and sys.argv[3] == "--tika-id"
+    ):
+        webui_id = sys.argv[2]
+        tika_id = sys.argv[4]
+    else:
+        print("Unexpected RAG authorization arguments", file=sys.stderr)
+        return 1
+
+    try:
+        if tika_id is None:
+            preflight(webui_id)
+        else:
+            preflight(webui_id, tika_id)
+    except AuthorizationError as error:
+        print(str(error), file=sys.stderr)
+        return 1
+
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

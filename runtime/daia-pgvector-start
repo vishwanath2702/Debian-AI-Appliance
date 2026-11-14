@@ -19,5 +19,60 @@ if [[ ! "$container_id" =~ ^[0-9a-f]{64}$ ]]; then
     exit 1
 fi
 
+# Wait for the final PostgreSQL TCP server, not the temporary
+# Unix-socket-only server used during initial database creation.
+# Readiness does not establish authentication: SCRAM is audited next.
+wait_for_pgvector_ready() {
+    local container_id="$1"
+    local attempt
+
+    for ((attempt = 1; attempt <= 20; attempt++)); do
+        if docker exec "$container_id" pg_isready \
+            -h 127.0.0.1 -p 5432 \
+            -U daia_rag -d daia_rag >/dev/null 2>&1; then
+            return 0
+        fi
+
+        if ((attempt < 20)); then
+            sleep 1
+        fi
+    done
+
+    return 1
+}
+
 # Never start by mutable container name.
 docker start "$container_id" >/dev/null
+
+# Docker may populate the actual network attachment only after start.
+# Require the registered container to be the sole member of the
+# verified DAIA RAG network.
+# A started container is not healthy until its network, authentication,
+# and pgvector extension have all been verified.
+startup_error=""
+
+if ! /usr/libexec/daia-rag-verify-network runtime "$container_id" >/dev/null; then
+    startup_error="DAIA pgvector post-start network verification failed"
+elif ! wait_for_pgvector_ready "$container_id"; then
+    startup_error="DAIA pgvector TCP readiness timed out"
+elif ! /usr/libexec/daia-pgvector-audit-auth.py "$container_id" >/dev/null; then
+    startup_error="DAIA pgvector SCRAM authentication audit failed"
+elif ! /usr/libexec/daia-pgvector-init-extension.py "$container_id" >/dev/null; then
+    startup_error="DAIA pgvector extension initialization failed"
+fi
+
+if [[ -n "$startup_error" ]]; then
+    echo "$startup_error" >&2
+
+    # Cleanup is pinned to the originally started immutable ID.
+    # Refuse to stop a container without independent registration.
+    if /usr/libexec/daia-pgvector-verify-registration "$container_id"; then
+        if ! docker stop --time 60 "$container_id" >/dev/null; then
+            echo "DAIA pgvector cleanup failed; manual intervention required" >&2
+        fi
+    else
+        echo "DAIA pgvector cleanup refused: registration mismatch" >&2
+    fi
+
+    exit 1
+fi

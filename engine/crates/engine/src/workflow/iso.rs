@@ -630,30 +630,10 @@ fn clean_live_rootfs(rootfs: &std::path::Path) -> Result<(), BuildError> {
     // Refuse mounted filesystems before modifying either APT directory.
     ensure_no_live_rootfs_mounts(rootfs)?;
 
-    // Preflight every existing directory before creating either one.
-    for path in &paths {
-        if path.exists() {
-            let mut entries = fs::read_dir(path).map_err(BuildError::Workspace)?;
-
-            match entries.next() {
-                None => {}
-                Some(Ok(_)) => {
-                    return Err(BuildError::Workspace(std::io::Error::new(
-                        std::io::ErrorKind::PermissionDenied,
-                        format!(
-                            "live rootfs cleanup refused nonempty APT directory `{}`",
-                            path.display()
-                        ),
-                    )));
-                }
-                Some(Err(error)) => return Err(BuildError::Workspace(error)),
-            }
-        }
-    }
-
-    // Both destinations passed preflight; create missing directories.
+    // Diagnostic ISO: retain populated APT caches in the prepared rootfs.
+    // Path, symlink, and mountpoint validation above remains mandatory.
     for path in paths {
-        clean_directory(&path)?;
+        create_directory(&path)?;
     }
 
     Ok(())
@@ -1879,7 +1859,7 @@ mod tests {
 
     #[cfg(target_os = "linux")]
     #[test]
-    fn live_rootfs_cleanup_refuses_nonempty_apt_directories() {
+    fn live_rootfs_cleanup_preserves_nonempty_apt_directories() {
         use std::os::unix::fs::MetadataExt;
 
         let temp = tempfile::tempdir().expect("temporary directory");
@@ -1899,7 +1879,10 @@ mod tests {
 
         let result = super::clean_live_rootfs(&rootfs);
 
-        assert!(result.is_err(), "nonempty APT cleanup must fail closed");
+        assert!(
+            result.is_ok(),
+            "populated APT directories must be preserved"
+        );
 
         assert_eq!(
             fs::read(archives.join("sentinel")).expect("archives sentinel"),
@@ -1921,7 +1904,7 @@ mod tests {
 
     #[cfg(target_os = "linux")]
     #[test]
-    fn live_rootfs_cleanup_preflights_both_directories_before_creation() {
+    fn live_rootfs_cleanup_creates_missing_directory_and_preserves_existing_lists() {
         let temp = tempfile::tempdir().expect("temporary directory");
         let rootfs = temp.path().join("rootfs");
 
@@ -1935,10 +1918,10 @@ mod tests {
 
         let result = super::clean_live_rootfs(&rootfs);
 
-        assert!(result.is_err(), "nonempty lists must reject cleanup");
+        assert!(result.is_ok(), "populated lists must be preserved");
         assert!(
-            !archives.exists(),
-            "archives must remain absent when lists preflight fails"
+            archives.is_dir(),
+            "missing archives directory must be created"
         );
         assert_eq!(
             fs::read(lists.join("sentinel")).expect("lists sentinel"),

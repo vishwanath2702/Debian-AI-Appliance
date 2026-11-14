@@ -6,6 +6,8 @@ mod content_repository;
 mod dto;
 mod error;
 mod package_manifest;
+mod artifact_manifest;
+pub use artifact_manifest::{Artifact, ArtifactManifest, validate_artifact_manifest};
 mod package_repository;
 mod registry;
 

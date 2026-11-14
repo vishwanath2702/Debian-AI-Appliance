@@ -1,0 +1,7 @@
+schema_version: 1
+name: tika
+artifacts:
+  - source: payload/images/tika-3.3.3.0.tar
+    destination: opt/daia/payload/images/tika.tar
+    sha256: ed3fbd4c58bd8f86e7c932f31d250490d31fbb175b318e22fcb6f4f96baa5ae4
+    mode: "0644"

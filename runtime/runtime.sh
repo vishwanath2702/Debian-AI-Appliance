@@ -103,6 +103,11 @@ then
     RUNTIME_MODULES+=("pgvector")
 fi
 
+if [[ "${DAIA_ENABLE_TIKA:-false}" == "true" ]]
+then
+    RUNTIME_MODULES+=("tika")
+fi
+
 if [[ "${DAIA_ENABLE_OPEN_WEBUI:-false}" == "true" ]]
 then
     RUNTIME_MODULES+=("openwebui")

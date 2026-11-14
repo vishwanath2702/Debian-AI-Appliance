@@ -1,0 +1,7 @@
+schema_version: 1
+name: open-webui
+artifacts:
+  - source: payload/images/open-webui-v0.13.0-slim.tar
+    destination: opt/daia/payload/images/open-webui.tar
+    sha256: 7f4607ad90e394222e9199f86b34a9c99261de50880c3661c1c9224d9ef17e54
+    mode: "0644"

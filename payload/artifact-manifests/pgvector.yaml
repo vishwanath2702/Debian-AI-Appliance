@@ -1,0 +1,7 @@
+schema_version: 1
+name: pgvector
+artifacts:
+  - source: payload/images/pgvector-pg17.tar
+    destination: opt/daia/payload/images/pgvector.tar
+    sha256: 5d903322c843abad607f7fa9349b0b7a1c1a53c02b1306eada13451d2a367228
+    mode: "0644"

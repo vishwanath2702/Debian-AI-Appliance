@@ -1,0 +1,280 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Read-only verification of the dedicated DAIA RAG network.
+
+if [[ "$EUID" -ne 0 ]]; then
+    echo "DAIA RAG network verification requires root" >&2
+    exit 1
+fi
+
+network_name="daia-rag-internal"
+
+if ! command -v docker >/dev/null 2>&1; then
+    echo "Docker is unavailable" >&2
+    exit 1
+fi
+
+if ! docker info >/dev/null 2>&1; then
+    echo "Docker daemon is unavailable" >&2
+    exit 1
+fi
+
+if ! inspection="$(docker network inspect \
+    --format '{{.Name}}{{printf "\t"}}{{.Driver}}{{printf "\t"}}{{.Internal}}{{printf "\t"}}{{index .Labels "org.daia.component"}}{{printf "\t"}}{{index .Labels "org.daia.managed"}}' \
+    "$network_name")"; then
+    echo "DAIA RAG network is unavailable" >&2
+    exit 1
+fi
+
+expected="$(printf 'daia-rag-internal\tbridge\ttrue\trag\ttrue')"
+
+if [[ "$inspection" != "$expected" ]]; then
+    echo "DAIA RAG network security contract mismatch" >&2
+    exit 1
+fi
+
+# Refuse networks with unexpected attachments.
+# Docker reports container IDs as keys in .Containers.
+if ! attached_ids="$(docker network inspect \
+    --format '{{range $id, $_ := .Containers}}{{println $id}}{{end}}' \
+    "$network_name")"; then
+    echo "Unable to inspect RAG network membership" >&2
+    exit 1
+fi
+
+mode="${1:-provision}"
+
+case "$mode" in
+    provision)
+        if [[ -n "$attached_ids" ]]; then
+            echo "RAG network is not empty during provisioning" >&2
+            exit 1
+        fi
+        ;;
+    prestart)
+        expected_container_id="${2:-}"
+
+        if [[ ! "$expected_container_id" =~ ^[0-9a-f]{64}$ ]]; then
+            echo "Invalid registered PostgreSQL container ID" >&2
+            exit 1
+        fi
+
+        # Before Docker starts a created container, active network
+        # attachment metadata may be absent. Require an empty network.
+        if [[ -n "$attached_ids" ]]; then
+            echo "RAG network is not empty before startup" >&2
+            exit 1
+        fi
+        ;;
+    registration)
+        # Registration may precede PostgreSQL startup. Accept an empty
+        # network or the independently trusted PostgreSQL container only.
+        expected_container_id="${2:-}"
+
+        if [[ ! "$expected_container_id" =~ ^[0-9a-f]{64}$ ]]; then
+            echo "Invalid registered PostgreSQL container ID" >&2
+            exit 1
+        fi
+
+        # With Tika already running, registration must be authorized
+        # against its immutable, trusted identity. The PostgreSQL
+        # authorizer independently verifies both registrations and
+        # the exact runtime network membership.
+        expected_tika_id="${3:-}"
+
+        if [[ "$#" -gt 3 ]]; then
+            echo "Unexpected RAG registration arguments" >&2
+            exit 1
+        fi
+
+        if [[ -n "$expected_tika_id" ]]; then
+            if [[ ! "$expected_tika_id" =~ ^[0-9a-f]{64}$ ]] ||
+               [[ "$expected_tika_id" == "$expected_container_id" ]]; then
+                echo "Invalid registered Tika identity" >&2
+                exit 1
+            fi
+
+            if ! verified_postgresql_id="$(
+                /usr/libexec/daia-pgvector-authorize-start                     runtime --tika-id "$expected_tika_id"
+            )"; then
+                echo "Registered Tika network authorization failed" >&2
+                exit 1
+            fi
+
+            if [[ "$verified_postgresql_id" != "$expected_container_id" ]]; then
+                echo "PostgreSQL registration identity mismatch" >&2
+                exit 1
+            fi
+        elif [[ -n "$attached_ids" ]]; then
+            if [[ "$attached_ids" != "$expected_container_id" ]]; then
+                echo "Unauthorized RAG network member during registration" >&2
+                exit 1
+            fi
+
+            if ! network_id="$(docker network inspect \
+                --format '{{.Id}}' "$network_name")"; then
+                echo "Cannot inspect RAG network ID" >&2
+                exit 1
+            fi
+
+            if [[ ! "$network_id" =~ ^[0-9a-f]{64}$ ]]; then
+                echo "Invalid RAG network ID" >&2
+                exit 1
+            fi
+
+            if ! attached_network_id="$(docker container inspect \
+                --format '{{with index .NetworkSettings.Networks "daia-rag-internal"}}{{.NetworkID}}{{end}}' \
+                "$expected_container_id")"; then
+                echo "Cannot inspect PostgreSQL network attachment" >&2
+                exit 1
+            fi
+
+            if [[ "$attached_network_id" != "$network_id" ]]; then
+                echo "PostgreSQL network identity mismatch" >&2
+                exit 1
+            fi
+        fi
+        ;;
+    runtime)
+        # Runtime membership is checked against the immutable
+        # PostgreSQL container ID supplied by its authorizer.
+        expected_container_id="${2:-}"
+
+        if [[ ! "$expected_container_id" =~ ^[0-9a-f]{64}$ ]]; then
+            echo "Invalid registered PostgreSQL container ID" >&2
+            exit 1
+        fi
+
+        # The registered container must actually be attached.
+        if [[ -z "$attached_ids" ]]; then
+            echo "Registered PostgreSQL container is not attached" >&2
+            exit 1
+        fi
+
+        # Compare Docker's immutable network ID with the
+        # container's attachment to that network.
+        if ! network_id="$(docker network inspect \
+            --format '{{.Id}}' "$network_name")"; then
+            echo "Cannot inspect RAG network ID" >&2
+            exit 1
+        fi
+
+        if [[ ! "$network_id" =~ ^[0-9a-f]{64}$ ]]; then
+            echo "Invalid RAG network ID" >&2
+            exit 1
+        fi
+
+        if ! attached_network_id="$(docker container inspect \
+            --format '{{with index .NetworkSettings.Networks "daia-rag-internal"}}{{.NetworkID}}{{end}}' \
+            "$expected_container_id")"; then
+            echo "Cannot inspect PostgreSQL network attachment" >&2
+            exit 1
+        fi
+
+        if [[ "$attached_network_id" != "$network_id" ]]; then
+            echo "PostgreSQL network identity mismatch" >&2
+            exit 1
+        fi
+
+        expected_webui_id="${3:-}"
+
+        if [[ -n "$expected_webui_id" ]]; then
+            if [[ ! "$expected_webui_id" =~ ^[0-9a-f]{64}$ ]] ||
+               [[ "$expected_webui_id" == "$expected_container_id" ]]; then
+                echo "Invalid Open WebUI container identity" >&2
+                exit 1
+            fi
+
+            if ! webui_network_id="$(docker container inspect \
+                --format '{{with index .NetworkSettings.Networks "daia-rag-internal"}}{{.NetworkID}}{{end}}' \
+                "$expected_webui_id")"; then
+                echo "Cannot inspect Open WebUI network attachment" >&2
+                exit 1
+            fi
+
+            if [[ "$webui_network_id" != "$network_id" ]]; then
+                echo "Open WebUI network identity mismatch" >&2
+                exit 1
+            fi
+        fi
+
+        expected_tika_id="${4:-}"
+
+        if [[ -n "$expected_tika_id" ]]; then
+            if [[ ! "$expected_tika_id" =~ ^[0-9a-f]{64}$ ]] ||
+               [[ "$expected_tika_id" == "$expected_container_id" ]] ||
+               [[ -n "$expected_webui_id" &&
+                  "$expected_tika_id" == "$expected_webui_id" ]]; then
+                echo "Invalid Tika container identity" >&2
+                exit 1
+            fi
+
+            if ! tika_network_id="$(docker container inspect \
+                --format '{{with index .NetworkSettings.Networks "daia-rag-internal"}}{{.NetworkID}}{{end}}' \
+                "$expected_tika_id")"; then
+                echo "Cannot inspect Tika network attachment" >&2
+                exit 1
+            fi
+
+            if [[ "$tika_network_id" != "$network_id" ]]; then
+                echo "Tika network identity mismatch" >&2
+                exit 1
+            fi
+        fi
+
+        seen_pgvector=0
+        seen_webui=0
+        seen_tika=0
+
+        while IFS= read -r attached_id; do
+            [[ -z "$attached_id" ]] && continue
+
+            if [[ "$attached_id" == "$expected_container_id" ]]; then
+                if [[ "$seen_pgvector" -ne 0 ]]; then
+                    echo "Duplicate PostgreSQL network member" >&2
+                    exit 1
+                fi
+                seen_pgvector=1
+            elif [[ -n "$expected_webui_id" ]] &&
+                 [[ "$attached_id" == "$expected_webui_id" ]]; then
+                if [[ "$seen_webui" -ne 0 ]]; then
+                    echo "Duplicate Open WebUI network member" >&2
+                    exit 1
+                fi
+                seen_webui=1
+            elif [[ -n "$expected_tika_id" ]] &&
+                 [[ "$attached_id" == "$expected_tika_id" ]]; then
+                if [[ "$seen_tika" -ne 0 ]]; then
+                    echo "Duplicate Tika network member" >&2
+                    exit 1
+                fi
+                seen_tika=1
+            else
+                echo "Unauthorized RAG network member" >&2
+                exit 1
+            fi
+        done <<< "$attached_ids"
+
+        if [[ "$seen_pgvector" -ne 1 ]]; then
+            echo "Registered PostgreSQL network member missing" >&2
+            exit 1
+        fi
+
+        if [[ -n "$expected_webui_id" ]] && [[ "$seen_webui" -ne 1 ]]; then
+            echo "Registered Open WebUI network member missing" >&2
+            exit 1
+        fi
+
+        if [[ -n "$expected_tika_id" ]] && [[ "$seen_tika" -ne 1 ]]; then
+            echo "Registered Tika network member missing" >&2
+            exit 1
+        fi
+        ;;
+    *)
+        echo "Unsupported RAG network verification mode" >&2
+        exit 1
+        ;;
+esac
+
+printf '%s\n' "$network_name"

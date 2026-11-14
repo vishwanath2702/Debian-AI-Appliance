@@ -210,6 +210,7 @@ pgvector_container_mount_matches() {
     local entry
     local expected_volume=0
     local expected_secret=0
+    local expected_pgpass=0
     local count=0
 
     [[ "$container_name" =~ ^[a-zA-Z0-9][a-zA-Z0-9_.-]*$ ]] || return 2
@@ -247,6 +248,9 @@ pgvector_container_mount_matches() {
             "bind||/var/lib/daia/pgvector/postgres-password|/run/secrets/daia-pgvector-password|false")
                 expected_secret=$((expected_secret + 1))
                 ;;
+            "bind||/var/lib/daia/pgvector/pgpass|/run/secrets/daia-pgvector-pgpass|false")
+                expected_pgpass=$((expected_pgpass + 1))
+                ;;
             *)
                 echo "Unexpected PostgreSQL container mount" >&2
                 return 1
@@ -254,9 +258,10 @@ pgvector_container_mount_matches() {
         esac
     done <<< "$mounts"
 
-    if [[ "$count" -ne 2 ||
+    if [[ "$count" -ne 3 ||
           "$expected_volume" -ne 1 ||
-          "$expected_secret" -ne 1 ]]; then
+          "$expected_secret" -ne 1 ||
+          "$expected_pgpass" -ne 1 ]]; then
         echo "PostgreSQL container mount contract mismatch" >&2
         return 1
     fi
@@ -405,6 +410,43 @@ pgvector_ensure_volume() {
     return 0
 }
 
+pgvector_ensure_rag_network() {
+    local network_name="daia-rag-internal"
+
+    if [[ "$EUID" -ne 0 ]]; then
+        echo "RAG network provisioning requires root" >&2
+        return 1
+    fi
+
+    if ! docker info >/dev/null 2>&1; then
+        echo "Docker daemon is unavailable" >&2
+        return 1
+    fi
+
+    local network_inventory
+    if ! network_inventory="$(docker network ls --format '{{.Name}}')"; then
+        echo "Unable to inspect Docker networks" >&2
+        return 1
+    fi
+
+    if printf '%s\n' "$network_inventory" | grep -Fxq "$network_name"; then
+        /usr/libexec/daia-rag-verify-network >/dev/null || return 1
+        return 0
+    fi
+
+    if ! docker network create \
+        --driver bridge \
+        --internal \
+        --label org.daia.component=rag \
+        --label org.daia.managed=true \
+        "$network_name" >/dev/null; then
+        echo "Unable to create DAIA RAG internal network" >&2
+        return 1
+    fi
+
+    /usr/libexec/daia-rag-verify-network >/dev/null || return 1
+}
+
 pgvector_install() {
     local container_name="${DAIA_PGVECTOR_CONTAINER:-daia-pgvector}"
     local volume_name="${DAIA_PGVECTOR_VOLUME:-daia-pgvector-data}"
@@ -422,6 +464,9 @@ pgvector_install() {
         return 1
     fi
 
+    # Create only when absent; reject existing untrusted networks.
+    pgvector_ensure_rag_network || return 1
+
     pgvector_load_verified_offline_image || return 1
 
     /usr/bin/python3 /opt/daia/pgvector_credentials.py \
@@ -429,7 +474,17 @@ pgvector_install() {
 
     pgvector_ensure_volume || return 1
 
-    pgvector_provision_container
+    # Provision and register before allowing systemd startup.
+    pgvector_provision_container || return 1
+
+    # Systemd owns the running container lifecycle. The service's
+    # ExecStart helper independently authorizes the immutable ID.
+    if ! systemctl start daia-pgvector.service; then
+        echo "PostgreSQL systemd startup failed" >&2
+        return 1
+    fi
+
+    return 0
 }
 
 # Verify the immutable container's Docker security configuration.
@@ -507,12 +562,14 @@ pgvector_provision_container() {
             --label org.daia.managed=true \
             --restart no \
             --security-opt no-new-privileges:true \
-            --network none \
+            --network daia-rag-internal \
             --mount "type=volume,src=${volume_name},dst=/var/lib/postgresql/data" \
             --mount "type=bind,src=/var/lib/daia/pgvector/postgres-password,dst=/run/secrets/daia-pgvector-password,readonly" \
+            --mount "type=bind,src=/var/lib/daia/pgvector/pgpass,dst=/run/secrets/daia-pgvector-pgpass,readonly" \
             --env POSTGRES_USER=daia_rag \
             --env POSTGRES_DB=daia_rag \
             --env POSTGRES_PASSWORD_FILE=/run/secrets/daia-pgvector-password \
+            --env "POSTGRES_INITDB_ARGS=--auth-local=scram-sha-256 --auth-host=scram-sha-256" \
             "$expected_id")"; then
             echo "Unable to create PostgreSQL container" >&2
             return 1
@@ -559,6 +616,49 @@ pgvector_provision_container() {
 }
 
 pgvector_verify() {
-    echo "PostgreSQL runtime readiness verification is not implemented yet" >&2
-    return 1
+    local container_name="${DAIA_PGVECTOR_CONTAINER:-daia-pgvector}"
+    local container_id
+    local running
+
+    [[ "$EUID" -eq 0 ]] || return 1
+    [[ "$container_name" == "daia-pgvector" ]] || return 1
+
+    command -v docker >/dev/null 2>&1 || return 1
+    docker info >/dev/null 2>&1 || return 1
+
+    container_id="$(docker container inspect         --format '{{.Id}}' "$container_name")" || return 1
+
+    [[ "$container_id" =~ ^[0-9a-f]{64}$ ]] || return 1
+
+    /usr/libexec/daia-pgvector-verify-registration         "$container_id" || return 1
+
+    pgvector_container_owned || return 1
+    pgvector_container_image_id_matches || return 1
+    pgvector_container_mount_matches || return 1
+    pgvector_volume_owned || return 1
+    pgvector_container_security_matches "$container_id" || return 1
+
+    running="$(docker container inspect         --format '{{.State.Running}}' "$container_id")" || return 1
+
+    [[ "$running" == "true" ]] || return 1
+
+    docker exec "$container_id" \
+        pg_isready -h /var/run/postgresql \
+        -U daia_rag -d daia_rag >/dev/null || return 1
+
+    # Existing database volumes must pass the read-only SCRAM audit.
+    # Never report pgvector healthy when authentication is unsafe.
+    /usr/libexec/daia-pgvector-audit-auth.py "$container_id" >/dev/null || return 1
+
+    # Read-only verification: the PostgreSQL server must have
+    # the pgvector extension installed in the appliance database.
+    local extension
+    extension="$(docker exec "$container_id" \
+        psql -X -w -A -t -v ON_ERROR_STOP=1 \
+        -d "host=127.0.0.1 port=5432 dbname=daia_rag user=daia_rag passfile=/run/secrets/daia-pgvector-pgpass require_auth=scram-sha-256" \
+        -c "SELECT extname FROM pg_extension WHERE extname = 'vector'")" || return 1
+
+    [[ "$extension" == "vector" ]] || return 1
+
+    return 0
 }

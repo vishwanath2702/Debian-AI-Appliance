@@ -427,7 +427,9 @@ stage_runtime()
         daia-pgvector-verify-registration \
         daia-pgvector-authorize-start \
         daia-pgvector-start \
-        daia-pgvector-stop
+        daia-pgvector-stop \
+        daia-pgvector-init-extension.py \
+        daia-pgvector-audit-auth.py
     do
         if [[ ! -f "$DAIA_RUNTIME_SOURCE/$helper" ]] ||
            [[ -L "$DAIA_RUNTIME_SOURCE/$helper" ]]; then
@@ -449,11 +451,103 @@ stage_runtime()
         "$DAIA_ROOT_TARGET/pgvector_archive.py" \
         0644
 
+    for helper in \
+        openwebui_registration.py \
+        openwebui_trusted_imports.py \
+        daia-openwebui-register-container
+    do
+        if [[ ! -f "$DAIA_RUNTIME_SOURCE/$helper" ]] ||
+           [[ -L "$DAIA_RUNTIME_SOURCE/$helper" ]]; then
+            log_error "Required Open WebUI registration helper is missing or unsafe: $helper"
+            return 1
+        fi
+    done
+
+    copy_file \
+        "$DAIA_RUNTIME_SOURCE/openwebui_registration.py" \
+        "$DAIA_ROOT_TARGET/openwebui_registration.py" \
+        0644
+
     ensure_directory "$DAIA_WORKSPACE/usr/libexec"
+
+    copy_file \
+        "$DAIA_RUNTIME_SOURCE/openwebui_trusted_imports.py" \
+        "$DAIA_WORKSPACE/usr/libexec/openwebui_trusted_imports.py" \
+        0644 || return 1
 
     copy_file \
         "$DAIA_RUNTIME_SOURCE/daia-pgvector-verify-registration" \
         "$DAIA_WORKSPACE/usr/libexec/daia-pgvector-verify-registration" \
+        0755
+
+    copy_file \
+        "$DAIA_RUNTIME_SOURCE/daia-openwebui-register-container" \
+        "$DAIA_WORKSPACE/usr/libexec/daia-openwebui-register-container" \
+        0755
+
+    # Require and stage Tika trusted registration components.
+    for helper in \
+        tika_registration.py \
+        daia-tika-register-container
+    do
+        if [[ ! -f "$DAIA_RUNTIME_SOURCE/$helper" ]] ||
+           [[ -L "$DAIA_RUNTIME_SOURCE/$helper" ]]; then
+            log_error "Required Tika registration helper is missing or unsafe: $helper"
+            return 1
+        fi
+    done
+
+    copy_file \
+        "$DAIA_RUNTIME_SOURCE/tika_registration.py" \
+        "$DAIA_ROOT_TARGET/tika_registration.py" \
+        0644 || return 1
+
+    copy_file \
+        "$DAIA_RUNTIME_SOURCE/daia-tika-register-container" \
+        "$DAIA_WORKSPACE/usr/libexec/daia-tika-register-container" \
+        0755 || return 1
+
+    copy_file \
+        "$DAIA_RUNTIME_SOURCE/daia-openwebui-rag-entrypoint.py" \
+        "$DAIA_WORKSPACE/usr/libexec/daia-openwebui-rag-entrypoint.py" \
+        0755
+
+    copy_file \
+        "$DAIA_RUNTIME_SOURCE/daia-openwebui-rag-authorize" \
+        "$DAIA_WORKSPACE/usr/libexec/daia-openwebui-rag-authorize" \
+        0755 || return 1
+
+    # Provisioning components are staged but not yet activated.
+    for helper in \
+        daia-openwebui-rag-provision.py \
+        daia-openwebui-pgvector-role.py \
+        daia-openwebui-pgvector-credentials.py
+    do
+        if [[ ! -f "$DAIA_RUNTIME_SOURCE/$helper" ]] ||
+           [[ -L "$DAIA_RUNTIME_SOURCE/$helper" ]]; then
+            log_error "Required Open WebUI RAG helper missing or unsafe: $helper"
+            return 1
+        fi
+    done
+
+    copy_file \
+        "$DAIA_RUNTIME_SOURCE/daia-openwebui-rag-provision.py" \
+        "$DAIA_WORKSPACE/usr/libexec/daia-openwebui-rag-provision.py" \
+        0755 || return 1
+
+    copy_file \
+        "$DAIA_RUNTIME_SOURCE/daia-openwebui-pgvector-role.py" \
+        "$DAIA_WORKSPACE/usr/libexec/daia-openwebui-pgvector-role.py" \
+        0644 || return 1
+
+    copy_file \
+        "$DAIA_RUNTIME_SOURCE/daia-openwebui-pgvector-credentials.py" \
+        "$DAIA_WORKSPACE/usr/libexec/daia-openwebui-pgvector-credentials.py" \
+        0755 || return 1
+
+    copy_file \
+        "$DAIA_RUNTIME_SOURCE/daia-rag-verify-network" \
+        "$DAIA_WORKSPACE/usr/libexec/daia-rag-verify-network" \
         0755
 
     copy_file \
@@ -469,6 +563,16 @@ stage_runtime()
     copy_file \
         "$DAIA_RUNTIME_SOURCE/daia-pgvector-stop" \
         "$DAIA_WORKSPACE/usr/libexec/daia-pgvector-stop" \
+        0755
+
+    copy_file \
+        "$DAIA_RUNTIME_SOURCE/daia-pgvector-init-extension.py" \
+        "$DAIA_WORKSPACE/usr/libexec/daia-pgvector-init-extension.py" \
+        0755
+
+    copy_file \
+        "$DAIA_RUNTIME_SOURCE/daia-pgvector-audit-auth.py" \
+        "$DAIA_WORKSPACE/usr/libexec/daia-pgvector-audit-auth.py" \
         0755
 
     record_staged_component \
@@ -520,8 +624,51 @@ stage_runtime()
         "$DAIA_RUNTIME_SOURCE/daia-whichllm-offline.py" \
         "$DAIA_WORKSPACE/usr/libexec/daia/daia-whichllm-offline.py" \
         0755
-    # The upstream WhichLLM runtime and signed/index-checksummed data are
-    # deliberately NOT staged until separately supplied and verified.
+    if [[ ! -f "$DAIA_RUNTIME_SOURCE/daia-whichllm-online.py" ]]; then
+        log_error "Required online recommendation helper is missing"
+        return 1
+    fi
+    copy_file \
+        "$DAIA_RUNTIME_SOURCE/daia-whichllm-online.py" \
+        "$DAIA_WORKSPACE/usr/libexec/daia/daia-whichllm-online.py" \
+        0755
+
+    # Use the verified local build asset unless explicitly overridden.
+    # No downloads or host Python site-packages are used.
+    local whichllm_source="${DAIA_WHICHLLM_RUNTIME_SOURCE:-$PROJECT_ROOT/build/assets/whichllm-runtime}"
+
+    if [[ ! -d "$whichllm_source" || -L "$whichllm_source" ]]; then
+        log_error "Prepared WhichLLM runtime source is missing or unsafe"
+        return 1
+    fi
+
+    if [[ -d "$whichllm_source" ]]; then
+
+        if [[ ! -d "$whichllm_source/whichllm" ]] ||
+           [[ ! -f "$whichllm_source/whichllm/cli.py" ]] ||
+           [[ ! -f "$whichllm_source/whichllm/engine/compatibility.py" ]]
+        then
+            log_error "Prepared WhichLLM runtime is incomplete"
+            return 1
+        fi
+
+        ensure_directory "$DAIA_WORKSPACE/usr/libexec/daia"
+
+        if [[ -e "$DAIA_WORKSPACE/usr/libexec/daia/whichllm-runtime" ]]; then
+            log_error "WhichLLM runtime destination already exists"
+            return 1
+        fi
+
+        cp -a -- "$whichllm_source" \
+            "$DAIA_WORKSPACE/usr/libexec/daia/whichllm-runtime" ||
+            return 1
+
+        record_staged_component \
+            "Prepared WhichLLM recommendation runtime staged successfully."
+    else
+        record_staged_component \
+            "WhichLLM online helper staged; runtime not supplied."
+    fi
 
     ensure_directory "$DAIA_WORKSPACE/usr/share/applications"
 
@@ -583,6 +730,23 @@ stage_runtime()
         record_staged_component \
             "First-boot orchestrator staged successfully."
     fi
+
+    # Install the pgvector unit without enabling or starting it.
+    if [[ ! -f "$DAIA_RUNTIME_SOURCE/services/daia-pgvector.service" ]] ||
+       [[ -L "$DAIA_RUNTIME_SOURCE/services/daia-pgvector.service" ]]; then
+        log_error "Required pgvector systemd service is missing or unsafe"
+        return 1
+    fi
+
+    ensure_directory "$DAIA_SYSTEMD_TARGET"
+
+    copy_file \
+        "$DAIA_RUNTIME_SOURCE/services/daia-pgvector.service" \
+        "$DAIA_SYSTEMD_TARGET/daia-pgvector.service" \
+        0644
+
+    record_staged_component \
+        "PostgreSQL pgvector systemd service staged without activation."
 
     if [[ -f "$DAIA_RUNTIME_SOURCE/systemd/daia-firstboot.service" ]]
     then
@@ -710,6 +874,138 @@ stage_file_component()
 # Returns:
 #   0
 ############################################################
+stage_verified_artifact()
+{
+    local component="$1"
+    local manifest="$2"
+    local trusted_source="$3"
+    local trusted_sha256="$4"
+    local expected_source="$5"
+    local expected_destination="$6"
+    local success_message="$7"
+
+    local planner="$PROJECT_ROOT/engine/target/debug/daia-artifact-plan"
+    local plan
+    local source
+    local destination
+    local checksum
+    local mode
+    local source_hash
+    local staged_hash
+    local target
+    local temporary
+
+    if [[ ! -f "$planner" || ! -x "$planner" ]]
+    then
+        stage_warning "$component: validated artifact planner unavailable"
+        return 1
+    fi
+
+    if ! plan="$("$planner" "$manifest")"
+    then
+        stage_warning "$component: artifact manifest validation failed"
+        return 1
+    fi
+
+    IFS=$'\t' read -r source destination checksum mode <<< "$plan"
+
+    if [[ "$plan" != "$source"$'\t'"$destination"$'\t'"$checksum"$'\t'"$mode" ||
+          "$source" != "$expected_source" ||
+          "$destination" != "$expected_destination" ||
+          "$mode" != "0644" ||
+          "$checksum" != "$trusted_sha256" ||
+          "$trusted_source" != "$PROJECT_ROOT/$source" ]]
+    then
+        stage_warning "$component: artifact staging contract mismatch"
+        return 1
+    fi
+
+    if [[ ! "$trusted_sha256" =~ ^[0-9a-f]{64}$ ]]
+    then
+        stage_warning "$component: invalid trusted archive checksum"
+        return 1
+    fi
+
+    if [[ ! -f "$trusted_source" || -L "$trusted_source" ||
+          ! -s "$trusted_source" ]]
+    then
+        stage_warning "$component: source archive missing or unsafe"
+        return 1
+    fi
+
+    if ! source_hash="$(sha256sum -- "$trusted_source")"
+    then
+        stage_warning "$component: cannot hash source archive"
+        return 1
+    fi
+
+    if [[ "${source_hash%% *}" != "$trusted_sha256" ]]
+    then
+        stage_warning "$component: source archive SHA-256 mismatch"
+        return 1
+    fi
+
+    target="$DAIA_ROOT_TARGET/$destination"
+
+    if [[ "$target" != "$DAIA_IMAGES_TARGET/"* ||
+          ! -d "$DAIA_IMAGES_TARGET" ||
+          -L "$DAIA_IMAGES_TARGET" ]]
+    then
+        stage_warning "$component: unsafe staging directory"
+        return 1
+    fi
+
+    if [[ -e "$target" || -L "$target" ]]
+    then
+        stage_warning "$component: staging destination already exists"
+        return 1
+    fi
+
+    if ! temporary="$(mktemp "$DAIA_IMAGES_TARGET/.daia-artifact.XXXXXXXX")"
+    then
+        stage_warning "$component: cannot create staging temporary"
+        return 1
+    fi
+
+    if ! cp -- "$trusted_source" "$temporary"
+    then
+        rm -f -- "$temporary"
+        stage_warning "$component: archive copy failed"
+        return 1
+    fi
+
+    if ! staged_hash="$(sha256sum -- "$temporary")"
+    then
+        rm -f -- "$temporary"
+        stage_warning "$component: cannot hash staged archive"
+        return 1
+    fi
+
+    if [[ "${staged_hash%% *}" != "$trusted_sha256" ]]
+    then
+        rm -f -- "$temporary"
+        stage_warning "$component: staged archive SHA-256 mismatch"
+        return 1
+    fi
+
+    if ! chmod 0644 "$temporary"
+    then
+        rm -f -- "$temporary"
+        stage_warning "$component: cannot set archive permissions"
+        return 1
+    fi
+
+    if ! ln -- "$temporary" "$target"
+    then
+        rm -f -- "$temporary"
+        stage_warning "$component: atomic publication failed"
+        return 1
+    fi
+
+    rm -f -- "$temporary"
+    record_staged_component "$success_message"
+}
+
 stage_offline_components()
 {
     log_section "Staging offline components"
@@ -756,99 +1052,40 @@ stage_offline_components()
         "$DAIA_DEPENDENCIES_SOURCE_ABS" \
         "$DAIA_PACKAGES_TARGET/dependencies"
 
-    stage_file_component \
-        "Open WebUI container image" \
-        "$DAIA_ENABLE_OPEN_WEBUI" \
-        "$DAIA_OPEN_WEBUI_IMAGE_ABS" \
-        "$DAIA_IMAGES_TARGET/open-webui.tar"
-
-    if [[ "$DAIA_ENABLE_PGVECTOR" == "true" ]] &&
-       ! validate_nonempty_file "$DAIA_PGVECTOR_IMAGE_ABS"
+    if [[ "$DAIA_ENABLE_OPEN_WEBUI" == "true" ]]
     then
-        stage_warning \
-            "PostgreSQL pgvector is enabled but its offline image is missing or empty: $DAIA_PGVECTOR_IMAGE_ABS"
-        return 1
+        stage_verified_artifact \
+            "Open WebUI" \
+            "$PROJECT_ROOT/payload/artifact-manifests/open-webui.yaml" \
+            "$DAIA_OPEN_WEBUI_IMAGE_ABS" \
+            "$DAIA_OPEN_WEBUI_ARCHIVE_SHA256" \
+            "payload/images/open-webui-v0.13.0-slim.tar" \
+            "opt/daia/payload/images/open-webui.tar" \
+            "Open WebUI container image staged successfully." || return 1
     fi
 
     if [[ "$DAIA_ENABLE_PGVECTOR" == "true" ]]
     then
-        if [[ ! "${DAIA_PGVECTOR_ARCHIVE_SHA256:-}" =~ ^[0-9a-f]{64}$ ]]
-        then
-            stage_warning "Missing or invalid trusted pgvector archive SHA-256"
-            return 1
-        fi
-
-        local source_sha256
-        if ! source_sha256="$(sha256sum -- "$DAIA_PGVECTOR_IMAGE_ABS")"
-        then
-            stage_warning "Unable to hash pgvector source archive"
-            return 1
-        fi
-        source_sha256="${source_sha256%% *}"
-
-        if [[ "$source_sha256" != "$DAIA_PGVECTOR_ARCHIVE_SHA256" ]]
-        then
-            stage_warning "Pgvector source archive SHA-256 mismatch"
-            return 1
-        fi
+        stage_verified_artifact \
+            "PostgreSQL pgvector" \
+            "$PROJECT_ROOT/payload/artifact-manifests/pgvector.yaml" \
+            "$DAIA_PGVECTOR_IMAGE_ABS" \
+            "$DAIA_PGVECTOR_ARCHIVE_SHA256" \
+            "payload/images/pgvector-pg17.tar" \
+            "opt/daia/payload/images/pgvector.tar" \
+            "PostgreSQL pgvector container image staged successfully." || return 1
     fi
 
-    if [[ "$DAIA_ENABLE_PGVECTOR" == "true" ]]
+    if [[ "$DAIA_ENABLE_TIKA" == "true" ]]
     then
-        local pgvector_destination="$DAIA_IMAGES_TARGET/pgvector.tar"
-        local pgvector_temporary
-        local staged_sha256
-
-        if [[ -e "$pgvector_destination" || -L "$pgvector_destination" ]]
-        then
-            stage_warning "Pgvector staging destination already exists"
-            return 1
-        fi
-
-        if ! pgvector_temporary="$(mktemp "$DAIA_IMAGES_TARGET/.pgvector.XXXXXXXX")"
-        then
-            stage_warning "Unable to create pgvector staging temporary file"
-            return 1
-        fi
-
-        if ! cp -- "$DAIA_PGVECTOR_IMAGE_ABS" "$pgvector_temporary"
-        then
-            rm -f -- "$pgvector_temporary"
-            stage_warning "Unable to copy pgvector archive"
-            return 1
-        fi
-
-        if ! staged_sha256="$(sha256sum -- "$pgvector_temporary")"
-        then
-            rm -f -- "$pgvector_temporary"
-            stage_warning "Unable to hash staged pgvector archive"
-            return 1
-        fi
-        staged_sha256="${staged_sha256%% *}"
-
-        if [[ "$staged_sha256" != "$DAIA_PGVECTOR_ARCHIVE_SHA256" ]]
-        then
-            rm -f -- "$pgvector_temporary"
-            stage_warning "Staged pgvector archive SHA-256 mismatch"
-            return 1
-        fi
-
-        if ! chmod 0644 "$pgvector_temporary"
-        then
-            rm -f -- "$pgvector_temporary"
-            stage_warning "Unable to set pgvector archive permissions"
-            return 1
-        fi
-
-        if ! ln -- "$pgvector_temporary" "$pgvector_destination"
-        then
-            rm -f -- "$pgvector_temporary"
-            stage_warning "Unable to publish verified pgvector archive"
-            return 1
-        fi
-
-        rm -f -- "$pgvector_temporary"
-        record_staged_component "PostgreSQL pgvector container image staged successfully."
+        stage_verified_artifact \
+            "Apache Tika" \
+            "$PROJECT_ROOT/payload/artifact-manifests/tika.yaml" \
+            "$DAIA_TIKA_IMAGE_ABS" \
+            "$DAIA_TIKA_ARCHIVE_SHA256" \
+            "payload/images/tika-3.3.3.0.tar" \
+            "opt/daia/payload/images/tika.tar" \
+            "Apache Tika container image staged successfully." || return 1
     fi
 
     stage_directory_component \
@@ -1060,6 +1297,24 @@ display_summary()
 # 10. Main
 ############################################################
 
+prepare_artifact_planner()
+{
+    if [[ "$DAIA_ENABLE_TIKA" != "true" &&
+          "$DAIA_ENABLE_PGVECTOR" != "true" &&
+          "$DAIA_ENABLE_OPEN_WEBUI" != "true" ]]
+    then
+        return 0
+    fi
+
+    if ! cargo build --offline \
+        --manifest-path "$PROJECT_ROOT/engine/Cargo.toml" \
+        -p registry --bin daia-artifact-plan
+    then
+        stage_warning "Unable to build validated artifact-plan CLI"
+        return 1
+    fi
+}
+
 main()
 {
     log_header "DAIA Payload Workspace Builder"
@@ -1070,6 +1325,7 @@ main()
     prepare_workspace
     stage_runtime
     create_payload_directories
+    prepare_artifact_planner || return 1
     stage_offline_components
     stage_branding
     write_build_information

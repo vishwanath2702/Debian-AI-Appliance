@@ -176,6 +176,7 @@ packages:
                 "xdg-desktop-portal-kde".to_owned(),
                 "kdialog".to_owned(),
                 "qdbus-qt6".to_owned(),
+                "python3".to_owned(),
                 "python3-pyqt6".to_owned(),
                 "pkexec".to_owned(),
                 "ntfs-3g".to_owned(),

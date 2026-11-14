@@ -67,6 +67,83 @@ class InstalledTab(QWidget):
         layout.addWidget(self.refresh_button)
         layout.addWidget(self.benchmark_button)
 
+        self.recommendation_process = QProcess(self)
+        self.recommendation_process.finished.connect(self._recommendations_finished)
+        self.recommendation_process.errorOccurred.connect(self._recommendations_error)
+        self.recommendation_status = QLabel("Online recommendations have not been loaded.")
+        self.recommendation_table = QTableWidget(0, 4)
+        self.recommendation_table.setHorizontalHeaderLabels(
+            ["Recommended model", "Est. tok/s", "Quality", "Hardware fit"]
+        )
+        self.recommendation_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self.recommend_button = QPushButton("Recommend Models (Online)")
+        self.recommend_button.clicked.connect(self.recommend_models)
+        layout.addWidget(self.recommendation_status)
+        layout.addWidget(self.recommendation_table)
+        layout.addWidget(self.recommend_button)
+
+    def recommend_models(self):
+        if self.recommendation_process.state() != QProcess.ProcessState.NotRunning:
+            return
+        self.recommendation_table.setRowCount(0)
+        self.recommend_button.setEnabled(False)
+        self.recommendation_status.setText("Checking online recommendations...")
+        command = os.environ.get(
+            "DAIA_WHICHLLM_COMMAND", "/usr/libexec/daia/daia-whichllm-online.py"
+        )
+        self.recommendation_process.start(command, [])
+
+    def _recommendations_finished(self, exit_code, exit_status):
+        stdout = bytes(self.recommendation_process.readAllStandardOutput())
+        stderr = bytes(self.recommendation_process.readAllStandardError())
+        self.recommend_button.setEnabled(True)
+        try:
+            if exit_status != QProcess.ExitStatus.NormalExit or exit_code != 0:
+                raise ValueError(stderr.decode("utf-8", "replace")[:300])
+            if len(stdout) > 1024 * 1024:
+                raise ValueError("Recommendation output too large")
+            result = json.loads(stdout)
+            if not isinstance(result, dict) or result.get("schema_version") != 1:
+                raise ValueError("Invalid recommendation schema")
+            models = result.get("models")
+            if not isinstance(models, list) or len(models) > 10:
+                raise ValueError("Invalid recommendations")
+            rows = []
+            for model in models:
+                if not isinstance(model, dict):
+                    raise ValueError("Invalid recommendation row")
+                name = model.get("model_id")
+                if not isinstance(name, str) or len(name) > 256:
+                    raise ValueError("Invalid model identifier")
+                rows.append([name, str(model.get("estimated_tok_per_sec") or "—"),
+                             str(model.get("quality_score") or "—"),
+                             str(model.get("fit_type") or "Unknown")])
+            for row in rows:
+                index = self.recommendation_table.rowCount()
+                self.recommendation_table.insertRow(index)
+                for column, value in enumerate(row):
+                    self.recommendation_table.setItem(
+                        index, column, QTableWidgetItem(value[:256])
+                    )
+            self.recommendation_status.setText(
+                "WhichLLM estimates only — not DAIA measured benchmarks."
+            )
+        except (ValueError, TypeError) as error:
+            self.recommendation_table.setRowCount(0)
+            self.recommendation_status.setText(
+                "Online recommendations unavailable: " + str(error)[:160]
+            )
+
+    def _recommendations_error(self, error):
+        if error == QProcess.ProcessError.FailedToStart:
+            self.recommend_button.setEnabled(True)
+            self.recommendation_status.setText("Online recommendation helper unavailable.")
+
+    def stop_recommendations(self):
+        if self.recommendation_process.state() != QProcess.ProcessState.NotRunning:
+            self.recommendation_process.kill()
+            self.recommendation_process.waitForFinished(3000)
+
     def attach_benchmark(self, benchmark):
         self.benchmark_tab = benchmark
         # Benchmark runner is retained without an embedded UI.
@@ -1128,6 +1205,7 @@ class ModelManager(QMainWindow):
         self.setCentralWidget(tabs)
 
     def closeEvent(self, event):
+        self.centralWidget().widget(0).stop_recommendations()
         benchmark = self.centralWidget().widget(0).benchmark_tab
         if benchmark is not None:
             if not benchmark.close():
