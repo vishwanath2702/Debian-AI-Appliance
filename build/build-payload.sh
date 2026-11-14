@@ -945,7 +945,7 @@ stage_verified_artifact()
         return 1
     fi
 
-    target="$DAIA_ROOT_TARGET/$destination"
+    target="$DAIA_WORKSPACE/$destination"
 
     if [[ "$target" != "$DAIA_IMAGES_TARGET/"* ||
           ! -d "$DAIA_IMAGES_TARGET" ||

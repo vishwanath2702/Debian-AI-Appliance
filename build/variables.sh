@@ -67,4 +67,17 @@ else
     VERSION="dev"
 fi
 
-OUTPUT_ISO="$OUTPUT_DIR/daia-${VERSION}.iso"
+OUTPUT_ISO="${DAIA_OUTPUT_ISO:-$OUTPUT_DIR/daia-${VERSION}.iso}"
+
+# Optional build-specific output must remain directly under output/.
+if [[ -n "${DAIA_OUTPUT_ISO:-}" ]]; then
+    [[ "$OUTPUT_ISO" = /* &&
+       "$(dirname "$OUTPUT_ISO")" == "$OUTPUT_DIR" &&
+       "$(basename "$OUTPUT_ISO")" == daia-*.iso &&
+       "$OUTPUT_ISO" != *"/../"* &&
+       "$OUTPUT_ISO" != *"/./"* &&
+       "$OUTPUT_ISO" != *"//"* ]] || {
+        echo "ERROR: Unsafe DAIA_OUTPUT_ISO" >&2
+        exit 1
+    }
+fi
