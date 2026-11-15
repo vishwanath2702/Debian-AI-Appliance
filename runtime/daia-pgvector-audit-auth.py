@@ -54,9 +54,68 @@ def validate_identity(value):
     return value
 
 
-def authorize(runner=subprocess.run):
+def trusted_rag_identities(runner=subprocess.run):
+    """Resolve RAG peers; never confuse Docker failure with absence."""
     result = runner(
-        [AUTHORIZER, "runtime"],
+        ["docker", "container", "ls", "-a", "--format", "{{.Names}}"],
+        capture_output=True, text=True, check=False, timeout=15,
+    )
+    if result.returncode != 0 or not isinstance(result.stdout, str):
+        raise AuditError("Docker inventory unavailable")
+
+    names = result.stdout.splitlines()
+    if len(names) != len(set(names)):
+        raise AuditError("Ambiguous Docker inventory")
+
+    webui_id = ""
+    tika_id = ""
+
+    if "open-webui" in names:
+        result = runner(
+            ["docker", "container", "inspect", "--format", "{{.Id}}",
+             "open-webui"],
+            capture_output=True, text=True, check=False, timeout=15,
+        )
+        if result.returncode != 0 or not isinstance(result.stdout, str):
+            raise AuditError("Open WebUI inspection failed")
+        if not result.stdout.endswith(chr(10)):
+            raise AuditError("Malformed Open WebUI identity")
+        webui_id = validate_identity(result.stdout[:-1])
+
+        result = runner(
+            ["/usr/libexec/daia-openwebui-register-container",
+             "--verify-identity", webui_id],
+            capture_output=True, text=True, check=False, timeout=20,
+        )
+        if result.returncode != 0 or result.stdout != webui_id + chr(10):
+            raise AuditError("Open WebUI registration not trusted")
+
+    if "daia-tika" in names:
+        result = runner(
+            ["/usr/libexec/daia-tika-register-container",
+             "--resolve-registered"],
+            capture_output=True, text=True, check=False, timeout=20,
+        )
+        if result.returncode != 0 or not isinstance(result.stdout, str):
+            raise AuditError("Tika registration unavailable")
+        if not result.stdout.endswith(chr(10)):
+            raise AuditError("Malformed Tika identity")
+        tika_id = validate_identity(result.stdout[:-1])
+
+    if webui_id and tika_id and webui_id == tika_id:
+        raise AuditError("Duplicate RAG identities")
+
+    return webui_id, tika_id
+
+
+def authorize(runner=subprocess.run, webui_id="", tika_id=""):
+    command = [AUTHORIZER, "runtime"]
+    if webui_id:
+        command.append(validate_identity(webui_id))
+    if tika_id:
+        command.extend(["--tika-id", validate_identity(tika_id)])
+    result = runner(
+        command,
         capture_output=True,
         text=True,
         check=False,
@@ -100,7 +159,10 @@ def main(expected_id=None):
         if os.geteuid() != 0:
             raise AuditError("Root privileges required")
         validate_identity(expected_id)
-        authorized_id = authorize()
+        webui_id, tika_id = trusted_rag_identities()
+        authorized_id = authorize(
+            webui_id=webui_id, tika_id=tika_id
+        )
         if authorized_id != expected_id:
             raise AuditError(
                 "Authorized container identity changed"

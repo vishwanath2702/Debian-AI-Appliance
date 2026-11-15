@@ -27,6 +27,10 @@ main() {
             shift
             build_iso "$@"
             ;;
+        clean)
+            shift
+            bash "${SCRIPT_DIRECTORY}/build/clean.sh" "$@"
+            ;;
         *)
             run_cli "$@"
             ;;
@@ -40,6 +44,107 @@ build_iso() {
     fi
 
     local capability="$1"
+
+    # Public laptop profile: use the existing guarded fresh-build pipeline.
+    # The Rust capability remains "desktop" until declarative profiles
+    # are integrated into the engine.
+    if [[ "$capability" == "laptop" ]]; then
+        if [[ -n "${DAIA_WORK_DIR:-}" || -n "${DAIA_OUTPUT_ISO:-}" ]]; then
+            printf 'Error: laptop build selects its own workspace and output.\n' >&2
+            return 1
+        fi
+
+        local stamp
+        local workspace
+        local output_iso
+
+        stamp="$(date -u +%Y%m%d-%H%M%S)"
+        workspace="${WORK_DIRECTORY}/daia-fresh-laptop-${stamp}"
+        output_iso="${OUTPUT_DIRECTORY}/daia-laptop-${stamp}.iso"
+
+        if [[ -e "$workspace" || -L "$workspace" ||
+              -e "$output_iso" || -L "$output_iso" ]]; then
+            printf 'Error: laptop build destination already exists.\n' >&2
+            return 1
+        fi
+
+        umask 077
+
+        local lock_file="${WORK_DIRECTORY}/.daia-build-cleanup.lock"
+        mkdir -p -- "${WORK_DIRECTORY}"
+
+        if [[ -L "$lock_file" ]]; then
+            printf 'Error: unsafe build lock symlink.\n' >&2
+            return 1
+        fi
+
+        (
+            exec 9>>"$lock_file"
+            flock -n -x 9 || {
+                printf 'Error: another build or cleanup is active.\n' >&2
+                exit 1
+            }
+
+            DAIA_CLEANUP_LOCK_FD=9 bash "${SCRIPT_DIRECTORY}/build/clean.sh" --auto-clean --execute --confirm DELETE --lock-held
+
+            mkdir -m 700 -- "$workspace"
+            printf 'running\n' > "$workspace/.daia-build-status"
+
+            if env DAIA_WORK_DIR="$workspace" DAIA_OUTPUT_ISO="$output_iso" DAIA_OLLAMA_OFFLINE_APPROVED="${DAIA_OLLAMA_OFFLINE_APPROVED:-false}" bash "${SCRIPT_DIRECTORY}/build/build.sh"; then
+                if ! python3 - "$output_iso" <<'ISO_VERIFY_PY'
+import hashlib
+import os
+import stat
+import sys
+
+path = sys.argv[1]
+fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
+try:
+    info = os.fstat(fd)
+    if not stat.S_ISREG(info.st_mode):
+        raise RuntimeError("ISO output is not a regular file")
+    if info.st_size < 32768:
+        raise RuntimeError("ISO output is too small")
+    os.lseek(fd, 16 * 2048, os.SEEK_SET)
+    descriptor = os.read(fd, 2048)
+    if len(descriptor) != 2048 or descriptor[:7] != bytes((1,)) + b"CD001" + bytes((1,)):
+        raise RuntimeError("ISO9660 primary volume descriptor missing")
+    os.lseek(fd, 0, os.SEEK_SET)
+    digest = hashlib.sha256()
+    while True:
+        chunk = os.read(fd, 1024 * 1024)
+        if not chunk:
+            break
+        digest.update(chunk)
+    if os.fstat(fd).st_size != info.st_size:
+        raise RuntimeError("ISO size changed during verification")
+    print("ISO_VERIFIED_SHA256=" + digest.hexdigest())
+    print("ISO_VERIFIED_BYTES=" + str(info.st_size))
+finally:
+    os.close(fd)
+ISO_VERIFY_PY
+                then
+                    printf 'failed\n' > "$workspace/.daia-build-status"
+                    printf 'Error: ISO verification failed; workspace preserved.\n' >&2
+                    exit 1
+                fi
+                printf 'succeeded\n' > "$workspace/.daia-build-status"
+
+                # The output ISO has passed the verification gate.
+                # Remove disposable successful-build intermediates
+                # while preserving the ISO in the output directory.
+                if ! DAIA_CLEANUP_LOCK_FD=9 bash "${SCRIPT_DIRECTORY}/build/clean.sh" --auto-clean --execute --confirm DELETE --lock-held; then
+                    printf 'Warning: post-build cleanup failed; verified ISO remains available.\n' >&2
+                fi
+            else
+                result=$?
+                printf 'failed\n' > "$workspace/.daia-build-status"
+                exit "$result"
+            fi
+        )
+        return
+    fi
+
     local rootfs
     local source_iso
     local iso_work_directory

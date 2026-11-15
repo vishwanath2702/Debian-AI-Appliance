@@ -1,0 +1,32 @@
+[Unit]
+Description=DAIA private Open WebUI to Ollama bridge
+Requires=docker.service ollama.service
+After=docker.service ollama.service
+Wants=network-online.target
+After=network-online.target
+
+Requires=daia-rag-recovery.service
+After=daia-rag-recovery.service
+AssertPathExists=/var/lib/daia/firstboot-complete
+[Service]
+Type=simple
+ExecStart=/usr/libexec/daia-ollama-bridge.py
+User=root
+Group=root
+Restart=on-failure
+RestartSec=10
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_UNIX AF_INET
+LockPersonality=yes
+RestrictRealtime=yes
+SystemCallArchitectures=native
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

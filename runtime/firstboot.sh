@@ -104,6 +104,12 @@ disable_firstboot_service()
     systemctl disable "$DAIA_FIRSTBOOT_SERVICE"
 }
 
+enable_rag_recovery_service()
+{
+    systemctl daemon-reload || return 1
+    systemctl enable daia-rag-recovery.service || return 1
+}
+
 ############################################################
 # main
 ############################################################
@@ -114,6 +120,7 @@ main()
     prepare_model_directory "$DAIA_STATE_DIRECTORY"
     run_runtime
     realize_models
+    enable_rag_recovery_service
     mark_firstboot_complete
     disable_firstboot_service
 }

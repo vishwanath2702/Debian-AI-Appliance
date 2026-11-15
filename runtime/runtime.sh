@@ -132,6 +132,11 @@ runtime_module_execute()
             "$lifecycle_operation" || return $?
     done
 
+    # Verified Open WebUI is the activation boundary.
+    if [[ "$module_name" == "openwebui" ]]; then
+        openwebui_activate_proxies || return 1
+    fi
+
     return 0
 }
 

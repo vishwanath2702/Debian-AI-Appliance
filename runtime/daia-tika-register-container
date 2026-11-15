@@ -164,7 +164,7 @@ def inspect_security(container_id):
 def inspect_mounts(container_id):
     mounts = inspect(
         container_id,
-        '{{range .Mounts}}{{printf "%s\n" .Destination}}{{end}}',
+        '{{range .Mounts}}{{printf "%s\\n" .Destination}}{{end}}',
     )
     if mounts:
         raise PermissionError("Unexpected Tika container mounts")

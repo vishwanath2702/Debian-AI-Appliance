@@ -52,6 +52,11 @@ mark_firstboot_complete() {
     [[ "$FAILURE" != marker ]]
 }
 
+enable_rag_recovery_service() {
+    record recovery
+    [[ "$FAILURE" != recovery ]]
+}
+
 disable_firstboot_service() {
     record disable
     [[ "$FAILURE" != disable ]]
@@ -80,7 +85,7 @@ main
     def test_success(self):
         self.assert_case(
             "none",
-            ["root", "prepare", "runtime", "models", "marker", "disable"],
+            ["root", "prepare", "runtime", "models", "recovery", "marker", "disable"],
         )
 
     def test_root_failure(self):
@@ -99,13 +104,19 @@ main
 
     def test_completion_marker_failure(self):
         self.assert_case(
-            "marker", ["root", "prepare", "runtime", "models", "marker"],
+            "marker", ["root", "prepare", "runtime", "models", "recovery", "marker"],
+        )
+
+    def test_recovery_activation_failure(self):
+        self.assert_case(
+            "recovery",
+            ["root", "prepare", "runtime", "models", "recovery"],
         )
 
     def test_disable_failure(self):
         self.assert_case(
             "disable",
-            ["root", "prepare", "runtime", "models", "marker", "disable"],
+            ["root", "prepare", "runtime", "models", "recovery", "marker", "disable"],
         )
 
 

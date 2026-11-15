@@ -130,16 +130,23 @@ class PgvectorAuthAuditTests(unittest.TestCase):
             return Result(stdout=CONTAINER_ID + chr(10))
 
         self.assertEqual(
-            module.authorize(runner=runner),
+            module.authorize(
+                runner=runner, webui_id="b" * 64, tika_id="c" * 64
+            ),
             CONTAINER_ID,
         )
         self.assertEqual(
-            calls, [[module.AUTHORIZER, "runtime"]]
+            calls,
+            [[module.AUTHORIZER, "runtime", "b" * 64,
+              "--tika-id", "c" * 64]],
         )
 
     def test_main_requires_pinned_identity(self):
         with (
             patch.object(module.os, "geteuid", return_value=0),
+            patch.object(
+                module, "trusted_rag_identities", return_value=("", "")
+            ),
             patch.object(module, "authorize") as authorized,
         ):
             self.assertEqual(module.main(), 1)
@@ -148,6 +155,9 @@ class PgvectorAuthAuditTests(unittest.TestCase):
     def test_main_rejects_changed_container_identity(self):
         with (
             patch.object(module.os, "geteuid", return_value=0),
+            patch.object(
+                module, "trusted_rag_identities", return_value=("", "")
+            ),
             patch.object(
                 module, "authorize", return_value="b" * 64
             ),
@@ -159,6 +169,9 @@ class PgvectorAuthAuditTests(unittest.TestCase):
     def test_main_accepts_matching_container_identity(self):
         with (
             patch.object(module.os, "geteuid", return_value=0),
+            patch.object(
+                module, "trusted_rag_identities", return_value=("", "")
+            ),
             patch.object(
                 module, "authorize", return_value=CONTAINER_ID
             ),
@@ -174,6 +187,78 @@ class PgvectorAuthAuditTests(unittest.TestCase):
         ):
             self.assertEqual(module.main(), 1)
             authorized.assert_not_called()
+
+
+    def test_resolves_registered_peers_and_authorizes_combined(self):
+        webui = "b" * 64
+        tika = "c" * 64
+        calls = []
+
+        def runner(command, **options):
+            calls.append(command)
+            if command[:3] == ["docker", "container", "ls"]:
+                return Result(stdout=chr(10).join(
+                    ["daia-pgvector", "daia-tika", "open-webui", ""]
+                ))
+            if command[:3] == ["docker", "container", "inspect"]:
+                return Result(stdout=webui + chr(10))
+            if command[0].endswith("daia-openwebui-register-container"):
+                return Result(stdout=webui + chr(10))
+            if command[0].endswith("daia-tika-register-container"):
+                return Result(stdout=tika + chr(10))
+            return Result(stdout=CONTAINER_ID + chr(10))
+
+        peers = module.trusted_rag_identities(runner=runner)
+        self.assertEqual(peers, (webui, tika))
+        self.assertEqual(
+            module.authorize(
+                runner=runner, webui_id=peers[0], tika_id=peers[1]
+            ),
+            CONTAINER_ID,
+        )
+        self.assertEqual(
+            calls[-1],
+            [module.AUTHORIZER, "runtime", webui, "--tika-id", tika],
+        )
+
+    def test_inventory_failure_blocks_authorization(self):
+        with self.assertRaises(module.AuditError):
+            module.trusted_rag_identities(
+                runner=lambda *a, **k: Result(returncode=1)
+            )
+
+    def test_untrusted_webui_blocks_authorization(self):
+        webui = "b" * 64
+
+        def runner(command, **options):
+            if command[:3] == ["docker", "container", "ls"]:
+                return Result(stdout="open-webui" + chr(10))
+            if command[:3] == ["docker", "container", "inspect"]:
+                return Result(stdout=webui + chr(10))
+            return Result(returncode=1)
+
+        with self.assertRaises(module.AuditError):
+            module.trusted_rag_identities(runner=runner)
+
+    def test_untrusted_tika_blocks_authorization(self):
+        def runner(command, **options):
+            if command[:3] == ["docker", "container", "ls"]:
+                return Result(stdout="daia-tika" + chr(10))
+            return Result(returncode=1)
+
+        with self.assertRaises(module.AuditError):
+            module.trusted_rag_identities(runner=runner)
+
+    def test_absent_peers_use_pgvector_only(self):
+        def runner(command, **options):
+            self.assertEqual(
+                command[:3], ["docker", "container", "ls"]
+            )
+            return Result(stdout="daia-pgvector" + chr(10))
+
+        self.assertEqual(
+            module.trusted_rag_identities(runner=runner), ("", "")
+        )
 
     def test_packaged_but_not_activated(self):
         payload = (

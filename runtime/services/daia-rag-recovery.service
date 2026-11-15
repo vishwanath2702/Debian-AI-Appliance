@@ -1,0 +1,15 @@
+[Unit]
+Description=DAIA guarded RAG container recovery
+Requires=docker.service
+After=docker.service daia-firstboot.service
+ConditionPathExists=/var/lib/daia/firstboot-complete
+
+[Service]
+Type=oneshot
+ExecStart=/usr/libexec/daia-rag-recover
+TimeoutStartSec=300
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

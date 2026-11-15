@@ -1,0 +1,111 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Recover only existing, independently registered RAG containers.
+# Never provision, recreate, adopt, or modify persistent data.
+
+[[ "$EUID" -eq 0 ]] || {
+    echo "DAIA RAG recovery requires root" >&2
+    exit 1
+}
+
+[[ -f /var/lib/daia/firstboot-complete ]] || {
+    echo "DAIA firstboot has not completed" >&2
+    exit 1
+}
+
+docker info >/dev/null
+
+readonly MODULE_ROOT=/opt/daia/modules
+
+for module in pgvector tika openwebui; do
+    path="${MODULE_ROOT}/${module}.sh"
+    [[ -f "$path" && ! -L "$path" ]] || exit 1
+done
+
+# Reuse existing guarded lifecycle functions.
+source "${MODULE_ROOT}/tika.sh"
+source "${MODULE_ROOT}/openwebui.sh"
+
+resolve_id() {
+    local name="$1"
+    local id
+    id="$(docker container inspect --format '{{.Id}}' "$name")" ||
+        return 1
+    [[ "$id" =~ ^[0-9a-f]{64}$ ]] || return 1
+    printf '%s\n' "$id"
+}
+
+require_stopped_or_running() {
+    local id="$1"
+    local state
+    state="$(docker container inspect --format \
+        '{{.State.Running}}|{{.State.Paused}}|{{.State.Restarting}}|{{.State.Status}}' \
+        "$id")" || return 1
+    case "$state" in
+        true\|false\|false\|running)
+            printf 'running\n' ;;
+        false\|false\|false\|exited|false\|false\|false\|created)
+            printf 'stopped\n' ;;
+        *) return 1 ;;
+    esac
+}
+
+pg_id="$(resolve_id daia-pgvector)"
+tika_id="$(resolve_id daia-tika)"
+webui_id="$(resolve_id open-webui)"
+
+# Resolve and verify all registrations before any mutation.
+# PostgreSQL authorization and registration are enforced by
+# daia-pgvector-start through the systemd service.
+[[ "$(/usr/libexec/daia-tika-register-container --verify-identity "$tika_id")" == "$tika_id" ]]
+[[ "$(/usr/libexec/daia-openwebui-register-container --verify-identity "$webui_id")" == "$webui_id" ]]
+
+pg_state="$(require_stopped_or_running "$pg_id")"
+tika_state="$(require_stopped_or_running "$tika_id")"
+webui_state="$(require_stopped_or_running "$webui_id")"
+
+# PostgreSQL systemd service performs independent authorization,
+# SCRAM authentication audit, and extension verification.
+# Verify PostgreSQL is in an acceptable Docker state before
+# asking its authorized systemd service to start.
+[[ "$pg_state" == "stopped" || "$pg_state" == "running" ]]
+# A RemainAfterExit=yes service can be active while its container
+# has been stopped externally. Never mistake systemd state for health.
+if systemctl is-active --quiet daia-pgvector.service; then
+    [[ "$pg_state" == "running" ]] || {
+        echo "DAIA pgvector service active but container not running" >&2
+        exit 1
+    }
+else
+    systemctl start daia-pgvector.service
+fi
+
+systemctl is-active --quiet daia-pgvector.service
+
+# Independently verify the already-running immutable container, even
+# when systemctl start was a no-op.
+[[ "$(/usr/libexec/daia-pgvector-authorize-start runtime)" == "$pg_id" ]]
+/usr/libexec/daia-pgvector-verify-registration "$pg_id"
+/usr/libexec/daia-rag-verify-network runtime "$pg_id"
+docker exec "$pg_id" pg_isready -h 127.0.0.1 -p 5432 \
+    -U daia_rag -d daia_rag >/dev/null
+/usr/libexec/daia-pgvector-audit-auth.py "$pg_id"
+/usr/libexec/daia-pgvector-init-extension.py "$pg_id"
+
+if [[ "$tika_state" == "stopped" ]]; then
+    tika_start_registered "$tika_id"
+else
+    tika_verify_registered
+fi
+
+if [[ "$webui_state" == "stopped" ]]; then
+    openwebui_start_registered "$webui_id" "$tika_id"
+else
+    [[ "$(/usr/libexec/daia-openwebui-register-container \
+        --verify-running "$webui_id" --tika-id "$tika_id")" == "$webui_id" ]]
+fi
+
+tika_verify_registered
+
+echo "DAIA registered RAG containers recovered"

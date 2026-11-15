@@ -470,6 +470,18 @@ stage_runtime()
 
     ensure_directory "$DAIA_WORKSPACE/usr/libexec"
 
+    # Stage the private Ollama bridge without activating it.
+    if [[ ! -f "$DAIA_RUNTIME_SOURCE/daia-ollama-bridge.py" ]] ||
+       [[ -L "$DAIA_RUNTIME_SOURCE/daia-ollama-bridge.py" ]]; then
+        log_error "Required Ollama bridge helper is missing or unsafe"
+        return 1
+    fi
+
+    copy_file \
+        "$DAIA_RUNTIME_SOURCE/daia-ollama-bridge.py" \
+        "$DAIA_WORKSPACE/usr/libexec/daia-ollama-bridge.py" \
+        0755 || return 1
+
     copy_file \
         "$DAIA_RUNTIME_SOURCE/openwebui_trusted_imports.py" \
         "$DAIA_WORKSPACE/usr/libexec/openwebui_trusted_imports.py" \
@@ -731,6 +743,45 @@ stage_runtime()
             "First-boot orchestrator staged successfully."
     fi
 
+    # Stage the trusted localhost WebUI proxy executable.
+    if [[ ! -f "$DAIA_RUNTIME_SOURCE/daia-openwebui-localhost-proxy.py" ]] ||
+       [[ -L "$DAIA_RUNTIME_SOURCE/daia-openwebui-localhost-proxy.py" ]]; then
+        log_error "Required Open WebUI localhost proxy is missing or unsafe"
+        return 1
+    fi
+
+    copy_file \
+        "$DAIA_RUNTIME_SOURCE/daia-openwebui-localhost-proxy.py" \
+        "$DAIA_WORKSPACE/usr/libexec/daia-openwebui-localhost-proxy.py" \
+        0755 || return 1
+
+    record_staged_component \
+        "Trusted Open WebUI localhost proxy executable staged."
+
+    # Stage guarded RAG recovery without activating it.
+    if [[ ! -f "$DAIA_RUNTIME_SOURCE/daia-rag-recover" ]] ||
+       [[ -L "$DAIA_RUNTIME_SOURCE/daia-rag-recover" ]] ||
+       [[ ! -f "$DAIA_RUNTIME_SOURCE/services/daia-rag-recovery.service" ]] ||
+       [[ -L "$DAIA_RUNTIME_SOURCE/services/daia-rag-recovery.service" ]]; then
+        log_error "Required RAG recovery components are missing or unsafe"
+        return 1
+    fi
+
+    copy_file \
+        "$DAIA_RUNTIME_SOURCE/daia-rag-recover" \
+        "$DAIA_WORKSPACE/usr/libexec/daia-rag-recover" \
+        0755 || return 1
+
+    ensure_directory "$DAIA_SYSTEMD_TARGET"
+
+    copy_file \
+        "$DAIA_RUNTIME_SOURCE/services/daia-rag-recovery.service" \
+        "$DAIA_SYSTEMD_TARGET/daia-rag-recovery.service" \
+        0644 || return 1
+
+    record_staged_component \
+        "Guarded RAG recovery staged without activation."
+
     # Install the pgvector unit without enabling or starting it.
     if [[ ! -f "$DAIA_RUNTIME_SOURCE/services/daia-pgvector.service" ]] ||
        [[ -L "$DAIA_RUNTIME_SOURCE/services/daia-pgvector.service" ]]; then
@@ -747,6 +798,36 @@ stage_runtime()
 
     record_staged_component \
         "PostgreSQL pgvector systemd service staged without activation."
+
+    # Install the private Ollama bridge unit without activation.
+    if [[ ! -f "$DAIA_RUNTIME_SOURCE/services/daia-ollama-bridge.service" ]] ||
+       [[ -L "$DAIA_RUNTIME_SOURCE/services/daia-ollama-bridge.service" ]]; then
+        log_error "Required Ollama bridge systemd service is missing or unsafe"
+        return 1
+    fi
+
+    copy_file \
+        "$DAIA_RUNTIME_SOURCE/services/daia-ollama-bridge.service" \
+        "$DAIA_SYSTEMD_TARGET/daia-ollama-bridge.service" \
+        0644 || return 1
+
+    record_staged_component \
+        "Ollama bridge systemd service staged without activation."
+
+    # Install the localhost proxy unit without activation.
+    if [[ ! -f "$DAIA_RUNTIME_SOURCE/services/daia-openwebui-localhost.service" ]] ||
+       [[ -L "$DAIA_RUNTIME_SOURCE/services/daia-openwebui-localhost.service" ]]; then
+        log_error "Required Open WebUI localhost service is missing or unsafe"
+        return 1
+    fi
+
+    copy_file \
+        "$DAIA_RUNTIME_SOURCE/services/daia-openwebui-localhost.service" \
+        "$DAIA_SYSTEMD_TARGET/daia-openwebui-localhost.service" \
+        0644 || return 1
+
+    record_staged_component \
+        "Open WebUI localhost proxy systemd service staged without activation."
 
     if [[ -f "$DAIA_RUNTIME_SOURCE/systemd/daia-firstboot.service" ]]
     then
@@ -1046,11 +1127,22 @@ stage_offline_components()
             --approved-offline || return 1
     fi
 
-    stage_directory_component \
-        "Package dependencies" \
-        "$DAIA_OFFLINE_INSTALL" \
-        "$DAIA_DEPENDENCIES_SOURCE_ABS" \
-        "$DAIA_PACKAGES_TARGET/dependencies"
+    # Additional offline dependency archives are optional.
+    # The base image and configured package manifests remain
+    # responsible for their own required dependencies.
+    if [[ "$DAIA_OFFLINE_INSTALL" == "true" ]]
+    then
+        if directory_contains_files "$DAIA_DEPENDENCIES_SOURCE_ABS"
+        then
+            stage_directory_component \
+                "Package dependencies" \
+                "true" \
+                "$DAIA_DEPENDENCIES_SOURCE_ABS" \
+                "$DAIA_PACKAGES_TARGET/dependencies"
+        else
+            log_info "No additional offline dependency archives configured."
+        fi
+    fi
 
     if [[ "$DAIA_ENABLE_OPEN_WEBUI" == "true" ]]
     then

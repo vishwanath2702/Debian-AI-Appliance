@@ -65,3 +65,8 @@ OVMF_VARS.fd
 
 # DAIA build and investigation workspace
 /work/
+
+# Python generated caches
+__pycache__/
+*.py[cod]
+.pytest_cache/

@@ -430,7 +430,57 @@ pgvector_ensure_rag_network() {
     fi
 
     if printf '%s\n' "$network_inventory" | grep -Fxq "$network_name"; then
-        /usr/libexec/daia-rag-verify-network >/dev/null || return 1
+        local pg_id
+        local tika_id=""
+        local webui_id=""
+        local webui_inventory
+        local verified_id
+        local -a authorization_args=(runtime)
+
+        # Resolve the immutable PostgreSQL registration first.
+        pg_id="$(docker container inspect --format '{{.Id}}' daia-pgvector)" ||
+            return 1
+        [[ "$pg_id" =~ ^[0-9a-f]{64}$ ]] || return 1
+
+        /usr/libexec/daia-pgvector-verify-registration "$pg_id"             >/dev/null || return 1
+
+        # Inventory existing peers independently of provisioning flags.
+        # Docker failure is not equivalent to an absent container.
+        webui_inventory="$(docker container ls -a --format '{{.Names}}')" ||
+            return 1
+
+        # An existing Tika peer must have a trusted registration.
+        if printf '%s\n' "$webui_inventory" | grep -Fxq daia-tika; then
+            tika_id="$(
+                /usr/libexec/daia-tika-register-container --resolve-registered
+            )" || return 1
+            [[ "$tika_id" =~ ^[0-9a-f]{64}$ ]] || return 1
+        fi
+
+        # Resolve Open WebUI only if it exists in the same inventory.
+
+        if printf '%s\n' "$webui_inventory" | grep -Fxq open-webui; then
+            webui_id="$(
+                docker container inspect --format '{{.Id}}' open-webui
+            )" || return 1
+            [[ "$webui_id" =~ ^[0-9a-f]{64}$ ]] || return 1
+
+            verified_id="$(
+                /usr/libexec/daia-openwebui-register-container                     --verify-identity "$webui_id"
+            )" || return 1
+            [[ "$verified_id" == "$webui_id" ]] || return 1
+            authorization_args+=("$webui_id")
+        fi
+
+        if [[ -n "$tika_id" ]]; then
+            authorization_args+=(--tika-id "$tika_id")
+        fi
+
+        verified_id="$(
+            /usr/libexec/daia-pgvector-authorize-start                 "${authorization_args[@]}"
+        )" || return 1
+        [[ "$verified_id" == "$pg_id" ]] || return 1
+
         return 0
     fi
 

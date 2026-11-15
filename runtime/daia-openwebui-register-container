@@ -205,7 +205,7 @@ def inspect_container_mounts(container_id: str) -> None:
             "docker", "container", "inspect",
             "--format",
             '{{range .Mounts}}'
-            '{{printf "%s|%s|%s|%s|%t\n" '
+            '{{printf "%s|%s|%s|%s|%t\\n" '
             '.Type .Name .Source .Destination .RW}}'
             '{{end}}',
             container_id,
@@ -226,6 +226,8 @@ def inspect_container_mounts(container_id: str) -> None:
     )
 
     mounts = result.stdout.splitlines()
+    if mounts and mounts[-1] == '':
+        mounts.pop()
 
     if len(mounts) != 3 or len(set(mounts)) != 3:
         raise PermissionError("Invalid Open WebUI mount count")

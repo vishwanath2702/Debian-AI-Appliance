@@ -267,6 +267,82 @@ openwebui_start_registered() {
 }
 
 
+# Activate only after the runtime has verified Open WebUI.
+openwebui_activate_proxies() {
+    local service
+    local helper
+    local -a services=(
+        daia-ollama-bridge.service
+        daia-openwebui-localhost.service
+    )
+    local -a helpers=(
+        /usr/libexec/daia-ollama-bridge.py
+        /usr/libexec/daia-openwebui-localhost-proxy.py
+    )
+
+    if [[ "$EUID" -ne 0 ]] ||
+       ! command -v systemctl >/dev/null 2>&1; then
+        echo "Proxy activation requires root and systemctl" >&2
+        return 1
+    fi
+
+    for helper in "${helpers[@]}"; do
+        if [[ ! -f "$helper" || -L "$helper" || ! -x "$helper" ]]; then
+            echo "Required proxy helper is unavailable: $helper" >&2
+            return 1
+        fi
+    done
+
+    for service in "${services[@]}"; do
+        if [[ ! -f "/etc/systemd/system/$service" ||
+              -L "/etc/systemd/system/$service" ]]; then
+            echo "Required proxy service unit is unavailable: $service" >&2
+            return 1
+        fi
+    done
+
+    systemctl daemon-reload || return 1
+
+    for service in "${services[@]}"; do
+        if ! systemctl enable --now "$service"; then
+            echo "Failed to activate proxy service: $service" >&2
+            return 1
+        fi
+        if ! systemctl is-active --quiet "$service"; then
+            echo "Proxy service is not active: $service" >&2
+            return 1
+        fi
+    done
+}
+
+openwebui_trusted_ollama_url() {
+    local helper="/usr/libexec/daia-ollama-bridge.py"
+    local gateway
+    local expected_url
+
+    if [[ "$EUID" -ne 0 ]] ||
+       [[ ! -f "$helper" || -L "$helper" || ! -x "$helper" ]]; then
+        echo "Trusted Ollama gateway helper is unavailable" >&2
+        return 1
+    fi
+
+    if ! gateway="$(python3 "$helper" --gateway)" ||
+       [[ ! "$gateway" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+        echo "Cannot resolve trusted Ollama bridge gateway" >&2
+        return 1
+    fi
+
+    expected_url="http://${gateway}:11434"
+    if [[ -n "${DAIA_OPEN_WEBUI_OLLAMA_URL:-}" &&
+          "$DAIA_OPEN_WEBUI_OLLAMA_URL" != "$expected_url" ]]; then
+        echo "Configured Ollama URL conflicts with trusted gateway" >&2
+        return 1
+    fi
+
+    printf '%s\n' "$expected_url"
+}
+
+
 openwebui_install() {
     local payload_root="${DAIA_PAYLOAD_ROOT:-/opt/daia/payload}"
     local image_file="${payload_root}/images/open-webui.tar"
@@ -276,7 +352,8 @@ openwebui_install() {
         echo "Unexpected Open WebUI volume configuration" >&2
         return 1
     fi
-    local ollama_url="${DAIA_OPEN_WEBUI_OLLAMA_URL:-http://127.0.0.1:11434}"
+    local ollama_url
+    ollama_url="$(openwebui_trusted_ollama_url)" || return 1
 
     openwebui_validate || return 1
 
@@ -529,8 +606,10 @@ openwebui_verify() {
         return 1
     fi
 
+    local expected_ollama_url
+    expected_ollama_url="$(openwebui_trusted_ollama_url)" || return 1
     if ! grep -Fxq \
-        "OLLAMA_BASE_URL=${DAIA_OPEN_WEBUI_OLLAMA_URL:-http://127.0.0.1:11434}" \
+        "OLLAMA_BASE_URL=${expected_ollama_url}" \
         <<< "$configured_env"; then
         echo "Open WebUI Ollama endpoint mismatch" >&2
         return 1
