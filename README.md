@@ -90,6 +90,7 @@ The current validation target is a CPU-compatible Debian/KDE laptop ISO. Booting
 
 ## Documentation
 
+- [Repository testing playbook — online preparation, offline assets, Live USB and installation tests](docs/testing/repository-testing-playbook.md)
 - [Product overview and architecture](docs/architecture/loom-daia-product-overview.md)
 - [Capability inventory and verification status](docs/architecture/loom-daia-capability-inventory.md)
 - [Appliance naming conventions](docs/architecture/appliance-naming-conventions.md)
