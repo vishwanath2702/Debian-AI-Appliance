@@ -58,6 +58,22 @@ Loom's Rust engine, capability framework, ISO workflow, and installer have imple
 
 Not every planned integration or appliance capability is operational. Source availability, passing tests, and successful real-hardware operation are separate verification milestones.
 
+## Pragna Engineering Census
+
+The [Pragna engineering census](docs/project-census.md) records
+a dated snapshot of the project's development, including its
+original Shell implementation and subsequent Rust migration.
+
+At the November 15, 2026 checkpoint: **818 commits**,
+**207,281 cumulative line changes**, **382 current files**,
+and approximately **2,792 statically identified Rust and
+Python test definitions/attributes**.
+
+These are historical snapshot figures, not live counters.
+They include locally available Git history and, for current
+file counts, untracked source files present at measurement time.
+They do not imply that every test was executed or passed.
+
 ## Documentation
 
 - [Product overview and architecture](docs/architecture/loom-daia-product-overview.md)
