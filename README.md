@@ -74,6 +74,20 @@ They include locally available Git history and, for current
 file counts, untracked source files present at measurement time.
 They do not imply that every test was executed or passed.
 
+## Building the DAIA Laptop ISO
+
+The intended one-command interface for a fresh clone is:
+
+```bash
+./builder.sh build laptop
+```
+
+**Status (November 2026): planned interface; not yet verified as an end-to-end command.** Do not assume this command currently selects the laptop profile or builds an ISO successfully. The existing build scripts and Rust ISO engine are being integrated and tested to support this workflow.
+
+The completed interface will validate build prerequisites and required offline assets, select the laptop configuration, create an isolated workspace, assemble the payload, build the bootable Live/Install ISO, and report the output path and SHA-256 checksum. Required large offline artifacts may need to be supplied separately from a Git clone; the build must not silently download them or overwrite existing outputs.
+
+The current validation target is a CPU-compatible Debian/KDE laptop ISO. Booting that ISO on other hardware, including NVIDIA RTX systems using Nouveau, is a separate test goal and is not yet verified. Future RTX-specific software-stack decisions will use a separate profile rather than impose KDE or laptop requirements on every appliance.
+
 ## Documentation
 
 - [Product overview and architecture](docs/architecture/loom-daia-product-overview.md)
