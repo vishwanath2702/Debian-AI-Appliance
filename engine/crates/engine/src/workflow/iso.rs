@@ -59,6 +59,37 @@ impl LiveRootfsPreparer for SystemLiveRootfsPreparer {
             &daia_directory.join("assets"),
         )?;
 
+        // Only the public registry tree is made traversable.
+        // Do not alter the private workspace or credential directories.
+        set_public_directory_mode(&daia_directory)?;
+        for category in [
+            "package-manifests",
+            "providers",
+            "appliance-profiles",
+            "content-repositories",
+            "assets",
+        ] {
+            set_public_directory_mode(&daia_directory.join(category))?;
+        }
+
+        // Public registry metadata must be readable by non-root users.
+        // Never apply this policy to credentials or arbitrary payloads.
+        for category in [
+            "package-manifests",
+            "providers",
+            "appliance-profiles",
+            "content-repositories",
+        ] {
+            let directory = daia_directory.join(category);
+            for entry in fs::read_dir(&directory).map_err(BuildError::Workspace)? {
+                let entry = entry.map_err(BuildError::Workspace)?;
+                let path = entry.path();
+                if path.extension().is_some_and(|ext| ext == "yaml") {
+                    set_public_file_mode(&path, 0o644)?;
+                }
+            }
+        }
+
         if let Some(daia_binary) = build_context.daia_binary() {
             let usr_bin = build_context.rootfs().join("usr/bin");
 
@@ -67,6 +98,7 @@ impl LiveRootfsPreparer for SystemLiveRootfsPreparer {
             let destination = usr_bin.join("daia");
 
             copy_file(daia_binary, &destination)?;
+            set_public_file_mode(&destination, 0o755)?;
         }
 
         if let Some(daia_tui_binary) = build_context.daia_tui_binary() {
@@ -77,6 +109,7 @@ impl LiveRootfsPreparer for SystemLiveRootfsPreparer {
             let destination = usr_bin.join("daia-tui");
 
             copy_file(daia_tui_binary, &destination)?;
+            set_public_file_mode(&destination, 0o755)?;
         }
 
         if let Some(model_import_binary) = build_context.daia_model_import_binary() {
@@ -87,6 +120,7 @@ impl LiveRootfsPreparer for SystemLiveRootfsPreparer {
             let destination = usr_bin.join("daia-model-import");
 
             copy_file(model_import_binary, &destination)?;
+            set_public_file_mode(&destination, 0o755)?;
         }
 
         install_exporter_binaries(build_context)?;
@@ -105,6 +139,12 @@ impl LiveRootfsPreparer for SystemLiveRootfsPreparer {
                 }
 
                 copy_file(&source, &destination)?;
+                let mode = if relative_path.ends_with(".desktop") {
+                    0o644
+                } else {
+                    0o755
+                };
+                set_public_file_mode(&destination, mode)?;
             }
         }
 
@@ -283,6 +323,8 @@ impl RootfsVerifier for SystemRootfsVerifier {
         verify_nvidia_pci_id_databases(build_context.rootfs()).map_err(BuildError::Workspace)?;
         verify_setpriv(build_context.rootfs()).map_err(BuildError::Workspace)?;
 
+        verify_public_rootfs_permissions(build_context.rootfs())?;
+
         if build_context.daia_payload_directory().is_some() {
             use std::os::unix::fs::PermissionsExt;
 
@@ -307,7 +349,7 @@ impl RootfsVerifier for SystemRootfsVerifier {
                     .permissions()
                     .mode();
 
-                if mode & 0o111 == 0 {
+                if mode & 0o777 != 0o755 {
                     return Err(BuildError::Workspace(std::io::Error::other(format!(
                         "rootfs verification failed: graphical model tool is not executable: {}",
                         launcher.display()
@@ -927,6 +969,165 @@ fn enforce_exporter_root_ownership(path: &std::path::Path) -> Result<(), BuildEr
     verify_exporter_root_ownership(path)
 }
 
+fn verify_public_rootfs_permissions(rootfs: &std::path::Path) -> Result<(), BuildError> {
+    use std::os::unix::fs::PermissionsExt;
+
+    let registry = rootfs.join("usr/share/daia");
+    for relative in [
+        "usr/share/daia",
+        "usr/share/daia/package-manifests",
+        "usr/share/daia/providers",
+        "usr/share/daia/appliance-profiles",
+        "usr/share/daia/content-repositories",
+        "usr/share/daia/assets",
+    ] {
+        let path = rootfs.join(relative);
+        let metadata = fs::symlink_metadata(&path).map_err(BuildError::Workspace)?;
+        if !metadata.file_type().is_dir() || metadata.permissions().mode() & 0o777 != 0o755 {
+            return Err(BuildError::Workspace(std::io::Error::other(format!(
+                "rootfs verification failed: public directory permissions: {}",
+                path.display()
+            ))));
+        }
+    }
+
+    for category in [
+        "package-manifests",
+        "providers",
+        "appliance-profiles",
+        "content-repositories",
+    ] {
+        let directory = registry.join(category);
+        for entry in fs::read_dir(&directory).map_err(BuildError::Workspace)? {
+            let entry = entry.map_err(BuildError::Workspace)?;
+            let path = entry.path();
+            if path.extension().is_some_and(|ext| ext == "yaml") {
+                verify_public_regular_file(&path, 0o644)?;
+            }
+        }
+    }
+
+    for executable in ["daia", "daia-tui", "daia-model-import"] {
+        let path = rootfs.join("usr/bin").join(executable);
+        if path.exists() {
+            verify_public_regular_file(&path, 0o755)?;
+        }
+    }
+
+    for executable in ["daia-model-importer", "daia-model-manager"] {
+        let path = rootfs.join("usr/bin").join(executable);
+        if path.exists() {
+            verify_public_regular_file(&path, 0o755)?;
+        }
+    }
+
+    let desktop = rootfs.join("usr/share/applications/daia-model-manager.desktop");
+    if desktop.exists() {
+        verify_public_regular_file(&desktop, 0o644)?;
+    }
+
+    Ok(())
+}
+
+fn verify_public_regular_file(
+    path: &std::path::Path,
+    expected_mode: u32,
+) -> Result<(), BuildError> {
+    use std::os::unix::fs::PermissionsExt;
+
+    let metadata = fs::symlink_metadata(path).map_err(BuildError::Workspace)?;
+    if !metadata.file_type().is_file() || metadata.permissions().mode() & 0o777 != expected_mode {
+        return Err(BuildError::Workspace(std::io::Error::other(format!(
+            "rootfs verification failed: public file permissions: {}",
+            path.display()
+        ))));
+    }
+    Ok(())
+}
+
+fn set_public_directory_mode(path: &std::path::Path) -> Result<(), BuildError> {
+    use std::os::unix::fs::PermissionsExt;
+
+    let metadata = fs::symlink_metadata(path).map_err(BuildError::Workspace)?;
+    if !metadata.file_type().is_dir() {
+        return Err(BuildError::Workspace(std::io::Error::other(
+            "public directory must be a real directory",
+        )));
+    }
+
+    match fs::set_permissions(path, fs::Permissions::from_mode(0o755)) {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
+            let status = std::process::Command::new("sudo")
+                .arg("chmod")
+                .arg("0755")
+                .arg("--")
+                .arg(path)
+                .status()
+                .map_err(BuildError::Workspace)?;
+            if !status.success() {
+                return Err(BuildError::Workspace(std::io::Error::other(
+                    "privileged public directory chmod failed",
+                )));
+            }
+        }
+        Err(error) => return Err(BuildError::Workspace(error)),
+    }
+
+    let actual = fs::symlink_metadata(path).map_err(BuildError::Workspace)?;
+    if !actual.file_type().is_dir() || actual.permissions().mode() & 0o777 != 0o755 {
+        return Err(BuildError::Workspace(std::io::Error::other(
+            "public directory permission verification failed",
+        )));
+    }
+
+    Ok(())
+}
+
+fn set_public_file_mode(path: &std::path::Path, expected_mode: u32) -> Result<(), BuildError> {
+    use std::os::unix::fs::PermissionsExt;
+
+    if !matches!(expected_mode, 0o644 | 0o755) {
+        return Err(BuildError::Workspace(std::io::Error::other(
+            "unsupported public file mode",
+        )));
+    }
+
+    let metadata = fs::symlink_metadata(path).map_err(BuildError::Workspace)?;
+    if !metadata.file_type().is_file() {
+        return Err(BuildError::Workspace(std::io::Error::other(
+            "public file must be a regular file, not a symlink",
+        )));
+    }
+
+    match fs::set_permissions(path, fs::Permissions::from_mode(expected_mode)) {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
+            let status = std::process::Command::new("sudo")
+                .arg("chmod")
+                .arg(format!("{expected_mode:04o}"))
+                .arg("--")
+                .arg(path)
+                .status()
+                .map_err(BuildError::Workspace)?;
+            if !status.success() {
+                return Err(BuildError::Workspace(std::io::Error::other(
+                    "privileged public file chmod failed",
+                )));
+            }
+        }
+        Err(error) => return Err(BuildError::Workspace(error)),
+    }
+
+    let actual = fs::symlink_metadata(path).map_err(BuildError::Workspace)?;
+    if !actual.file_type().is_file() || actual.permissions().mode() & 0o777 != expected_mode {
+        return Err(BuildError::Workspace(std::io::Error::other(
+            "public file permission verification failed",
+        )));
+    }
+    Ok(())
+}
+
 fn copy_file(source: &std::path::Path, destination: &std::path::Path) -> Result<(), BuildError> {
     match fs::copy(source, destination) {
         Ok(_) => Ok(()),
@@ -985,6 +1186,84 @@ fn copy_directory_contents(
 
     Ok(())
 }
+
+#[cfg(test)]
+mod public_file_mode_tests {
+    use super::set_public_file_mode;
+    use std::fs;
+    use std::os::unix::fs::{PermissionsExt, symlink};
+
+    #[test]
+    fn public_directory_modes_are_enforced() {
+        let dir = tempfile::tempdir().unwrap();
+        let public = dir.path().join("registry");
+        fs::create_dir(&public).unwrap();
+        fs::set_permissions(&public, fs::Permissions::from_mode(0o700)).unwrap();
+        super::set_public_directory_mode(&public).unwrap();
+        assert_eq!(
+            fs::metadata(&public).unwrap().permissions().mode() & 0o777,
+            0o755
+        );
+    }
+
+    #[test]
+    fn public_directory_modes_reject_symlinks() {
+        let dir = tempfile::tempdir().unwrap();
+        let actual = dir.path().join("actual");
+        let link = dir.path().join("link");
+        fs::create_dir(&actual).unwrap();
+        symlink(&actual, &link).unwrap();
+        assert!(super::set_public_directory_mode(&link).is_err());
+    }
+
+    #[test]
+    fn public_file_verifier_rejects_inaccessible_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("public.yaml");
+        fs::write(&file, b"fixture").unwrap();
+        fs::set_permissions(&file, fs::Permissions::from_mode(0o600)).unwrap();
+        assert!(super::verify_public_regular_file(&file, 0o644).is_err());
+        fs::set_permissions(&file, fs::Permissions::from_mode(0o644)).unwrap();
+        super::verify_public_regular_file(&file, 0o644).unwrap();
+    }
+
+    #[test]
+    fn public_file_verifier_rejects_symlinks() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("target");
+        let link = dir.path().join("link");
+        fs::write(&target, b"fixture").unwrap();
+        symlink(&target, &link).unwrap();
+        assert!(super::verify_public_regular_file(&link, 0o644).is_err());
+    }
+
+    #[test]
+    fn public_file_modes_are_enforced() {
+        let dir = tempfile::tempdir().unwrap();
+        for expected in [0o644, 0o755] {
+            let path = dir.path().join(format!("public-{expected:o}"));
+            fs::write(&path, b"fixture").unwrap();
+            fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+            set_public_file_mode(&path, expected).unwrap();
+            assert_eq!(
+                fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+                expected
+            );
+        }
+    }
+
+    #[test]
+    fn public_file_modes_reject_symlinks_and_private_modes() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("target");
+        let link = dir.path().join("link");
+        fs::write(&target, b"fixture").unwrap();
+        symlink(&target, &link).unwrap();
+        assert!(set_public_file_mode(&link, 0o755).is_err());
+        assert!(set_public_file_mode(&target, 0o600).is_err());
+    }
+}
+
 impl IsoWorkflow {
     /// Runs the bootable ISO workflow.
     ///

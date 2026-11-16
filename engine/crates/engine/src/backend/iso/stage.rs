@@ -392,6 +392,34 @@ impl SquashFsStage {
             )));
         }
 
+        // Privileged mksquashfs may create a root-owned 0600 image.
+        // Keep the workspace private while making the image readable
+        // by the unprivileged GRUB packaging process.
+        if context.config.privileged_squashfs {
+            let owner = format!(
+                "{}:{}",
+                rustix::process::getuid().as_raw(),
+                rustix::process::getgid().as_raw()
+            );
+            let status = Command::new("sudo")
+                .args(["chown", "--", &owner])
+                .arg(&output)
+                .status()?;
+            if !status.success() {
+                return Err(io::Error::other("failed to transfer SquashFS ownership"));
+            }
+        }
+
+        let metadata = fs::symlink_metadata(&output)?;
+        if !metadata.file_type().is_file() {
+            return Err(io::Error::other("SquashFS output is not a regular file"));
+        }
+        use std::os::unix::fs::{MetadataExt, PermissionsExt};
+        if metadata.uid() != rustix::process::getuid().as_raw() {
+            return Err(io::Error::other("SquashFS output ownership mismatch"));
+        }
+        fs::set_permissions(&output, fs::Permissions::from_mode(0o600))?;
+
         Ok(output)
     }
 }

@@ -73,6 +73,7 @@ class TikaShellLifecycleTests(unittest.TestCase):
             )
         )
 
+        functions += "\n" + "openwebui_trusted_ollama_url() {\n    printf '%s\\n' 'http://127.0.0.1:11434'\n}\n"
         functions = functions.replace(
             "/usr/libexec/daia-openwebui-register-container",
             str(self.helper),

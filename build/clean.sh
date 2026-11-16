@@ -47,6 +47,29 @@ def validate(path, mounted):
     if any(m == str(path) or m.startswith(prefix) for m in mounted):
         refuse("workspace contains a mounted filesystem: " + path.name)
 
+def verify_removal_access(target):
+    # Conservative preflight. This does not make deletion atomic.
+    # Refuse inaccessible directories before starting rmtree.
+    for current, directories, files in os.walk(
+        target, topdown=True, followlinks=False
+    ):
+        directory = Path(current)
+        metadata = directory.lstat()
+        if not stat.S_ISDIR(metadata.st_mode):
+            refuse("unsafe cleanup directory: " + str(directory))
+        if not os.access(directory, os.R_OK | os.W_OK | os.X_OK):
+            refuse("cleanup permissions insufficient: " + str(directory))
+        for name in directories:
+            child = directory / name
+            metadata = child.lstat()
+            if stat.S_ISLNK(metadata.st_mode):
+                continue
+            if not stat.S_ISDIR(metadata.st_mode):
+                refuse("unsafe cleanup entry: " + str(child))
+            if not os.access(child, os.R_OK | os.W_OK | os.X_OK):
+                refuse("cleanup permissions insufficient: " + str(child))
+
+
 def usage():
     print("Usage:")
     print("  ./builder.sh clean --dry-run")
@@ -259,6 +282,7 @@ try:
                     ):
                         refuse("auto-clean target changed")
 
+                    verify_removal_access(target)
                     shutil.rmtree(target.name, dir_fd=work_fd)
                     print("AUTO_DELETED=" + str(target))
             finally:
@@ -309,6 +333,7 @@ try:
             ):
                 refuse("target changed during validation")
 
+            verify_removal_access(target)
             shutil.rmtree(target.name, dir_fd=work_fd)
         finally:
             os.close(work_fd)

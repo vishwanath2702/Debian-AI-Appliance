@@ -44,10 +44,54 @@ work_parent="$PROJECT_ROOT/work"
     exit 1
 }
 
-[[ ! -e "$DAIA_WORK_DIR" && ! -L "$DAIA_WORK_DIR" ]] || {
-    echo "ERROR: Fresh Build workspace already exists" >&2
-    exit 1
-}
+# The outer laptop builder creates the workspace under its build lock.
+# A direct invocation must still reject any pre-existing workspace.
+if [[ "${DAIA_BUILD_HANDOFF:-}" == 1 ]]; then
+    # The laptop builder passes its exclusive build lock on FD 9.
+    # Validate the descriptor before accepting an existing workspace.
+    lock_file="$work_parent/.daia-build-cleanup.lock"
+
+    [[ -f "$lock_file" && ! -L "$lock_file" &&
+       -e /proc/self/fd/9 ]] || {
+        echo "ERROR: Missing or unsafe build handoff lock" >&2
+        exit 1
+    }
+
+    lock_identity="$(stat -Lc '%d:%i' /proc/self/fd/9)" || exit 1
+    expected_identity="$(stat -c '%d:%i' -- "$lock_file")" || exit 1
+
+    [[ "$lock_identity" == "$expected_identity" ]] || {
+        echo "ERROR: Build handoff lock descriptor mismatch" >&2
+        exit 1
+    }
+
+    flock -n -x 9 || {
+        echo "ERROR: Build handoff lock unavailable" >&2
+        exit 1
+    }
+
+    [[ -d "$DAIA_WORK_DIR" && ! -L "$DAIA_WORK_DIR" ]] || {
+        echo "ERROR: Invalid Fresh Build handoff workspace" >&2
+        exit 1
+    }
+
+    [[ "$(stat -c '%a' -- "$DAIA_WORK_DIR")" == 700 ]] || {
+        echo "ERROR: Fresh Build handoff workspace permissions" >&2
+        exit 1
+    }
+
+    [[ -f "$DAIA_WORK_DIR/.daia-build-status" &&
+       ! -L "$DAIA_WORK_DIR/.daia-build-status" &&
+       "$(cat "$DAIA_WORK_DIR/.daia-build-status")" == running ]] || {
+        echo "ERROR: Fresh Build handoff status invalid" >&2
+        exit 1
+    }
+else
+    [[ ! -e "$DAIA_WORK_DIR" && ! -L "$DAIA_WORK_DIR" ]] || {
+        echo "ERROR: Fresh Build workspace already exists" >&2
+        exit 1
+    }
+fi
 
 [[ ! -e "$OUTPUT_ISO" && ! -L "$OUTPUT_ISO" ]] || {
     echo "ERROR: Output ISO already exists; refusing overwrite" >&2
@@ -64,7 +108,13 @@ echo "[1/5] Validating project..."
 
 echo
 echo "[2/5] Cleaning workspace..."
-"$SCRIPT_DIR/clean.sh"
+if [[ "${DAIA_BUILD_HANDOFF:-}" == 1 ]]; then
+    # FD 9 was verified against the outer builder lock above.
+    # Reuse it instead of attempting to acquire a competing lock.
+    DAIA_CLEANUP_LOCK_FD=9 "$SCRIPT_DIR/clean.sh" --lock-held
+else
+    "$SCRIPT_DIR/clean.sh"
+fi
 
 echo
 echo "[3/5] Building DAIA payload..."

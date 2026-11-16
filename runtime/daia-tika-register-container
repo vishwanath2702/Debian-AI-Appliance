@@ -239,15 +239,18 @@ def inspect_running(container_id):
 
 
 def verify_runtime_network(container_id):
-    """Require PostgreSQL and this registered Tika ID on the RAG network."""
+    """Require all registered RAG peers on the runtime network."""
     container_id = validate_container_id(container_id)
     postgresql_id = validate_container_id(
         read_trusted_registration("/var/lib/daia/pgvector")
     )
+    webui_id = validate_container_id(
+        read_trusted_registration("/var/lib/daia/openwebui")
+    )
     result = subprocess.run(
         [
             "/usr/libexec/daia-pgvector-authorize-start",
-            "runtime", "--tika-id", container_id,
+            "runtime", webui_id, "--tika-id", container_id,
         ],
         capture_output=True,
         text=True,
@@ -270,7 +273,17 @@ def verify_prestart_network(container_id):
         read_trusted_registration("/var/lib/daia/pgvector")
     )
 
+    webui_id = validate_container_id(
+        read_trusted_registration("/var/lib/daia/openwebui")
+    )
+    if webui_id in (postgresql_id, container_id):
+        raise PermissionError("Duplicate RAG container identity")
+
+    # Each alternative is independently verified against exact
+    # trusted network membership by the PostgreSQL authorizer.
     alternatives = (
+        ["runtime", webui_id, "--tika-id", container_id],
+        ["runtime", webui_id],
         ["runtime", "--tika-id", container_id],
         ["runtime"],
     )
@@ -299,6 +312,75 @@ def verify_prestart_network(container_id):
     raise PermissionError(
         "Tika pre-start network membership is unauthorized"
     )
+
+
+
+def verify_provisioning_network(container_id, prestart=False):
+    """Require exact trusted PG/Tika provisioning membership."""
+    container_id = validate_container_id(container_id)
+    postgresql_id = validate_container_id(
+        read_trusted_registration("/var/lib/daia/pgvector")
+    )
+    if postgresql_id == container_id:
+        raise PermissionError("Duplicate provisioning identity")
+
+    alternatives = (
+        (["runtime", "--tika-id", container_id], ["runtime"])
+        if prestart else
+        (["runtime", "--tika-id", container_id],)
+    )
+    for arguments in alternatives:
+        try:
+            result = subprocess.run(
+                ["/usr/libexec/daia-pgvector-authorize-start", *arguments],
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=30,
+            )
+        except (OSError, subprocess.TimeoutExpired) as error:
+            raise PermissionError(
+                "Tika provisioning authorization unavailable"
+            ) from error
+
+        if result.returncode == 0:
+            if result.stdout != postgresql_id + "\n":
+                raise PermissionError(
+                    "PostgreSQL provisioning identity mismatch"
+                )
+            return
+
+    raise PermissionError("Unauthorized provisioning membership")
+
+
+def authorize_provisioning_start(container_id):
+    """Read-only authorization for initial Tika provisioning."""
+    container_id = validate_container_id(container_id)
+    inspect_identity(container_id)
+    inspect_security(container_id)
+    inspect_mounts(container_id)
+    inspect_stopped(container_id)
+    verify_registered_container(container_id)
+    verify_provisioning_network(container_id, prestart=True)
+    inspect_identity(container_id)
+    inspect_stopped(container_id)
+    verify_provisioning_network(container_id, prestart=True)
+    return container_id
+
+
+def verify_provisioning_running(container_id):
+    """Double-check newly provisioned running Tika and PG membership."""
+    container_id = validate_container_id(container_id)
+    inspect_identity(container_id)
+    inspect_security(container_id)
+    inspect_mounts(container_id)
+    inspect_running(container_id)
+    verify_registered_container(container_id)
+    verify_provisioning_network(container_id)
+    inspect_identity(container_id)
+    inspect_running(container_id)
+    verify_provisioning_network(container_id)
+    return container_id
 
 
 def authorize_registered_start(container_id):
@@ -380,6 +462,8 @@ def main():
         "--verify-identity",
         "--authorize-start",
         "--verify-running",
+        "--authorize-provisioning-start",
+        "--verify-provisioning-running",
     ):
         mode = sys.argv[1]
         container_id = validate_container_id(sys.argv[2])
@@ -394,6 +478,8 @@ def main():
             "--verify-identity": verify_registered_identity,
             "--authorize-start": authorize_registered_start,
             "--verify-running": verify_registered_running,
+            "--authorize-provisioning-start": authorize_provisioning_start,
+            "--verify-provisioning-running": verify_provisioning_running,
         }
         verified_id = handlers[mode](container_id)
         if verified_id != container_id:

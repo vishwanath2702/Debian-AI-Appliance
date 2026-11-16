@@ -110,6 +110,15 @@ enable_rag_recovery_service()
     systemctl enable daia-rag-recovery.service || return 1
 }
 
+# Queue startup without waiting for first-boot completion.
+# Systemd enforces recovery and completion-marker prerequisites.
+queue_rag_proxy_start()
+{
+    systemctl start --no-block \
+        daia-ollama-bridge.service \
+        daia-openwebui-localhost.service
+}
+
 ############################################################
 # main
 ############################################################
@@ -122,6 +131,7 @@ main()
     realize_models
     enable_rag_recovery_service
     mark_firstboot_complete
+    queue_rag_proxy_start
     disable_firstboot_service
 }
 

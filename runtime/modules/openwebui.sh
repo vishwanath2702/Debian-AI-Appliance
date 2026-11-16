@@ -304,12 +304,8 @@ openwebui_activate_proxies() {
     systemctl daemon-reload || return 1
 
     for service in "${services[@]}"; do
-        if ! systemctl enable --now "$service"; then
+        if ! systemctl enable "$service"; then
             echo "Failed to activate proxy service: $service" >&2
-            return 1
-        fi
-        if ! systemctl is-active --quiet "$service"; then
-            echo "Proxy service is not active: $service" >&2
             return 1
         fi
     done

@@ -23,6 +23,19 @@ set -euo pipefail
 printf '%s\\n' "$*" >> "$DAIA_TEST_LOG"
 case "$1" in
   info) exit 0 ;;
+  container)
+    case "${2:-}" in
+      inspect)
+        printf '%s\\n' "$DAIA_TEST_PG_ID"
+        ;;
+      ls)
+        printf '%s\\n' ""
+        ;;
+      *)
+        exit 99
+        ;;
+    esac
+    ;;
   network) case "${2:-}" in
   ls)
     printf '%s\\n' "$DAIA_TEST_NETWORKS"
@@ -53,6 +66,16 @@ function /usr/libexec/daia-rag-verify-network {
     printf 'VERIFY\n' >> "$DAIA_TEST_LOG"
     return "$DAIA_VERIFY_EXIT"
 }
+function /usr/libexec/daia-pgvector-verify-registration {
+    printf 'VERIFY_REGISTRATION\n' >> "$DAIA_TEST_LOG"
+    [[ "$1" == "$DAIA_TEST_PG_ID" ]]
+}
+function /usr/libexec/daia-pgvector-authorize-start {
+    printf 'AUTHORIZE\n' >> "$DAIA_TEST_LOG"
+    [[ "$1" == "runtime" ]] || return 1
+    [[ "$DAIA_VERIFY_EXIT" == "0" ]] || return 1
+    printf '%s\n' "$DAIA_TEST_PG_ID"
+}
 pgvector_ensure_rag_network
 """
 
@@ -62,6 +85,7 @@ pgvector_ensure_rag_network
                 "DAIA_MODULE": str(MODULE),
                 "DAIA_TEST_LOG": str(log),
                 "DAIA_TEST_NETWORKS": inventory,
+                "DAIA_TEST_PG_ID": "a" * 64,
                 "DAIA_VERIFY_EXIT": (
                     "0" if verification_success else "1"
                 ),

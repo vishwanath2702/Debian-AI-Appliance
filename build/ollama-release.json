@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
   "component": "ollama",
-  "version": "v0.40.15",
+  "version": "v0.40.16",
   "architecture": "amd64",
   "asset": "ollama-linux-amd64.tar.zst",
-  "sha256": "628c018404a4206493efd38e46251c154ede5141b8b8dc85c659b3b027c47379"
+  "sha256": "87bfafb2acbc89b2e6a1be0a9043de6aa75fb450696f86bc426e65fc448f788d"
 }

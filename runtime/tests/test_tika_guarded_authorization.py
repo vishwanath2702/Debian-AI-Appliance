@@ -97,7 +97,7 @@ class TikaGuardedAuthorizationTests(unittest.TestCase):
 
         self.assertEqual(runner.call_args.args[0], [
             "/usr/libexec/daia-pgvector-authorize-start",
-            "runtime", "--tika-id", CID,
+            "runtime", "b" * 64, "--tika-id", CID,
         ])
         self.assertTrue(runner.call_args.kwargs["check"])
 

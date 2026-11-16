@@ -26,9 +26,17 @@ def validate_identity(value):
     return value
 
 
-def authorize(runner=subprocess.run):
+def authorize(runner=subprocess.run, *, webui_id=None, tika_id=None):
+    if (webui_id is None) != (tika_id is None):
+        raise InitializationError("Incomplete RAG identities")
+    command = [AUTHORIZER, "runtime"]
+    if webui_id is not None:
+        command.extend([
+            validate_identity(webui_id),
+            "--tika-id", validate_identity(tika_id),
+        ])
     result = runner(
-        [AUTHORIZER, "runtime"],
+        command,
         capture_output=True,
         text=True,
         check=False,
@@ -80,12 +88,17 @@ def initialize(container_id, runner=subprocess.run):
     return True
 
 
-def main(expected_id=None):
+def main(expected_id=None, webui_id=None, tika_id=None):
     try:
         if os.geteuid() != 0:
             raise InitializationError("Root privileges required")
         validate_identity(expected_id)
-        authorized_id = authorize()
+        if webui_id is None and tika_id is None:
+            authorized_id = authorize()
+        else:
+            authorized_id = authorize(
+                webui_id=webui_id, tika_id=tika_id
+            )
         if authorized_id != expected_id:
             raise InitializationError(
                 "Authorized container identity changed"
@@ -102,4 +115,9 @@ def main(expected_id=None):
 
 
 if __name__ == "__main__":
-    sys.exit(main(sys.argv[1] if len(sys.argv) == 2 else None))
+    if len(sys.argv) == 2:
+        sys.exit(main(sys.argv[1]))
+    elif len(sys.argv) == 4:
+        sys.exit(main(sys.argv[1], sys.argv[2], sys.argv[3]))
+    else:
+        sys.exit(1)

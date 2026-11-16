@@ -32,8 +32,9 @@ class ActivationTests(unittest.TestCase):
             "daia-openwebui-localhost.service",
         ):
             self.assertIn(name, section)
-        self.assertIn('systemctl enable --now "$service"', section)
-        self.assertIn('systemctl is-active --quiet "$service"', section)
+        self.assertIn('systemctl enable "$service"', section)
+        self.assertNotIn('systemctl enable --now', section)
+        self.assertNotIn('systemctl is-active --quiet', section)
         self.assertIn("systemctl daemon-reload", section)
 
     def test_shell_syntax(self):

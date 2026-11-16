@@ -85,12 +85,25 @@ build_iso() {
                 exit 1
             }
 
-            DAIA_CLEANUP_LOCK_FD=9 bash "${SCRIPT_DIRECTORY}/build/clean.sh" --auto-clean --execute --confirm DELETE --lock-held
+            # Explicit opt-in for preserving earlier build workspaces.
+            # The build lock remains held in either mode.
+            case "${DAIA_SKIP_AUTO_CLEANUP:-0}" in
+                0)
+                    DAIA_CLEANUP_LOCK_FD=9 bash "${SCRIPT_DIRECTORY}/build/clean.sh" --auto-clean --execute --confirm DELETE --lock-held
+                    ;;
+                1)
+                    printf 'DAIA_AUTO_CLEANUP=SKIPPED (explicit preservation)\\n'
+                    ;;
+                *)
+                    printf 'Error: DAIA_SKIP_AUTO_CLEANUP must be 0 or 1.\\n' >&2
+                    exit 1
+                    ;;
+            esac
 
             mkdir -m 700 -- "$workspace"
             printf 'running\n' > "$workspace/.daia-build-status"
 
-            if env DAIA_WORK_DIR="$workspace" DAIA_OUTPUT_ISO="$output_iso" DAIA_OLLAMA_OFFLINE_APPROVED="${DAIA_OLLAMA_OFFLINE_APPROVED:-false}" bash "${SCRIPT_DIRECTORY}/build/build.sh"; then
+            if env DAIA_WORK_DIR="$workspace" DAIA_OUTPUT_ISO="$output_iso" DAIA_BUILD_HANDOFF=1 DAIA_OLLAMA_OFFLINE_APPROVED="${DAIA_OLLAMA_OFFLINE_APPROVED:-false}" bash "${SCRIPT_DIRECTORY}/build/build.sh"; then
                 if ! python3 - "$output_iso" <<'ISO_VERIFY_PY'
 import hashlib
 import os

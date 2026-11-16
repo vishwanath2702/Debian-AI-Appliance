@@ -163,6 +163,17 @@ tika_provision_container() {
 
 tika_start_registered() {
     local container_id="${1:-}"
+    local phase="${2:-recovery}"
+    local authorize_mode="--authorize-start"
+    local verify_mode="--verify-running"
+
+    if [[ "$phase" == "provisioning" ]]; then
+        authorize_mode="--authorize-provisioning-start"
+        verify_mode="--verify-provisioning-running"
+    elif [[ "$phase" != "recovery" ]]; then
+        echo "Invalid Tika startup phase" >&2
+        return 1
+    fi
     local helper="/usr/libexec/daia-tika-register-container"
     local authorized_id verified_id trusted_id
 
@@ -187,7 +198,7 @@ tika_start_registered() {
         return 1
     fi
 
-    if ! authorized_id="$("$helper" --authorize-start "$container_id")" ||
+    if ! authorized_id="$("$helper" "$authorize_mode" "$container_id")" ||
        [[ "$authorized_id" != "$container_id" ]]; then
         echo "Tika startup authorization failed" >&2
         return 1
@@ -199,7 +210,7 @@ tika_start_registered() {
     fi
 
     verified_id=""
-    if ! verified_id="$("$helper" --verify-running "$container_id")" ||
+    if ! verified_id="$("$helper" "$verify_mode" "$container_id")" ||
        [[ "$verified_id" != "$container_id" ]]; then
         # Do not stop a container whose trusted identity is unverified.
         if trusted_id="$("$helper" --verify-identity "$container_id")" &&
@@ -214,7 +225,16 @@ tika_start_registered() {
 }
 
 tika_verify_registered() {
+    local phase="${1:-recovery}"
+    local verify_mode="--verify-running"
     local helper="/usr/libexec/daia-tika-register-container"
+
+    if [[ "$phase" == "provisioning" ]]; then
+        verify_mode="--verify-provisioning-running"
+    elif [[ "$phase" != "recovery" ]]; then
+        echo "Invalid Tika verification phase" >&2
+        return 1
+    fi
     local container_id verified_id
 
     if [[ "$EUID" -ne 0 ]]; then
@@ -244,7 +264,7 @@ tika_verify_registered() {
         return 1
     fi
 
-    if ! verified_id="$("$helper" --verify-running "$container_id")" ||
+    if ! verified_id="$("$helper" "$verify_mode" "$container_id")" ||
        [[ "$verified_id" != "$container_id" ]]; then
         echo "Registered Tika runtime verification failed" >&2
         return 1
@@ -339,8 +359,8 @@ tika_install_registered() {
         return 1
     fi
 
-    tika_start_registered "$container_id" || return 1
-    tika_verify_registered || return 1
+    tika_start_registered "$container_id" provisioning || return 1
+    tika_verify_registered provisioning || return 1
     return 0
 }
 

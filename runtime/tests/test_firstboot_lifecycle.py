@@ -57,6 +57,11 @@ enable_rag_recovery_service() {
     [[ "$FAILURE" != recovery ]]
 }
 
+queue_rag_proxy_start() {
+    record queue
+    [[ "$FAILURE" != queue ]]
+}
+
 disable_firstboot_service() {
     record disable
     [[ "$FAILURE" != disable ]]
@@ -85,7 +90,7 @@ main
     def test_success(self):
         self.assert_case(
             "none",
-            ["root", "prepare", "runtime", "models", "recovery", "marker", "disable"],
+            ["root", "prepare", "runtime", "models", "recovery", "marker", "queue", "disable"],
         )
 
     def test_root_failure(self):
@@ -113,10 +118,16 @@ main
             ["root", "prepare", "runtime", "models", "recovery"],
         )
 
+    def test_queue_failure(self):
+        self.assert_case(
+            "queue",
+            ["root", "prepare", "runtime", "models", "recovery", "marker", "queue"],
+        )
+
     def test_disable_failure(self):
         self.assert_case(
             "disable",
-            ["root", "prepare", "runtime", "models", "recovery", "marker", "disable"],
+            ["root", "prepare", "runtime", "models", "recovery", "marker", "queue", "disable"],
         )
 
 
