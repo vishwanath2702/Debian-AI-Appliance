@@ -64,15 +64,17 @@ The [Pragna engineering census](docs/project-census.md) records
 a dated snapshot of the project's development, including its
 original Shell implementation and subsequent Rust migration.
 
-At the November 15, 2026 checkpoint: **818 commits**,
-**207,281 cumulative line changes**, **382 current files**,
-and approximately **2,792 statically identified Rust and
-Python test definitions/attributes**.
+At the November 16, 2026 local-checkout checkpoint: **825 commits**,
+**209,784 cumulative line changes**, **383 source/configuration files**,
+and approximately **2,821 statically identified Python test definitions
+and Rust test attributes** (1,147 Python; 1,674 Rust).
 
-These are historical snapshot figures, not live counters.
-They include locally available Git history and, for current
-file counts, untracked source files present at measurement time.
-They do not imply that every test was executed or passed.
+These figures are a dated, read-only snapshot, **not live counters**.
+They reflect locally available Git history and include untracked source
+files at measurement time; GitHub documentation commits made afterward
+are not included. Static test counts are not executed test results.
+The [full census](docs/project-census.md) preserves the November 15
+baseline and explains differences in measurement methodology.
 
 ## Building the DAIA Laptop ISO
 
