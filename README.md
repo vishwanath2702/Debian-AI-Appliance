@@ -79,7 +79,7 @@ They do not imply that every test was executed or passed.
 The intended one-command interface for a fresh clone is:
 
 ```bash
-./builder.sh build laptop
+bash builder.sh build laptop
 ```
 
 **Status (November 2026): planned interface; not yet verified as an end-to-end command.** Do not assume this command currently selects the laptop profile or builds an ISO successfully. The existing build scripts and Rust ISO engine are being integrated and tested to support this workflow.
