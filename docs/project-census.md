@@ -152,6 +152,31 @@ NO ISO BUILD
 NO COMMIT OR PUSH
 ```
 
+
+## November 16, 2026 — follow-up census
+
+**Measured local Git HEAD:** `9193a7df7808f8ad161e4bd4eaf297584abbf24c`  
+**Scope:** Local development checkout, including tracked and untracked source/configuration files.  
+**Method:** Read-only Step 0580 static approximation; no tests executed.
+
+| Metric | November 16 measurement |
+| --- | ---: |
+| Git commits (locally available `--all` history) | 825 |
+| Cumulative lines added | 177,050 |
+| Cumulative lines deleted | 32,734 |
+| Cumulative line changes | 209,784 |
+| Source/configuration files | 383 |
+| Total lines | 142,462 |
+| Nonblank lines | 115,455 |
+| Approximate functions/methods | 4,950 |
+| Python `test_*` definitions | 1,147 |
+| Rust test attributes | 1,674 |
+| Test-related files | 140 |
+
+**Methodology and comparability:** The Step 0580 script counts a selected set of source/configuration extensions, tracked and untracked non-symlink files, and uses regular-expression approximations for functions and tests. Its function/method pattern differs from the November 15 Step 0366 census; the 4,950 and 5,299 estimates must **not** be interpreted as a measured decline. The test-file count and other static metrics may likewise vary with detection methodology. Git history reflects the local checkout at the measured HEAD, not necessarily the latest GitHub branch; documentation-only GitHub commits made afterward are not included. These figures are not live counters, executed-test results, or proof of build success.
+
+The original November 15 census and its complete measurement report remain preserved above.
+
 ## Update policy
 
 Publish a new dated census at major milestones. Preserve older
