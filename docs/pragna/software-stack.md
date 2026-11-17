@@ -17,6 +17,22 @@ component has passed physical laptop integration testing.
 | Debian firmware packages | Hardware and wireless support |
 | APT and Debian backports | Package management and updates |
 
+## Installation wizard
+
+| Component | Role |
+| --- | --- |
+| Rust | Implementation language for the installation wizard and installer engine |
+| Ratatui 0.29 | Terminal-based installation wizard interface |
+| Crossterm 0.28 | Terminal interaction and keyboard input |
+| Loom / DAIA TUI crate | Wizard screens, navigation and input handling |
+| Loom application crate | Installer application state and configuration |
+| Loom model crate | Appliance identity and configuration models |
+| Loom installation engine | Installation planning and execution |
+
+The installer uses a keyboard-driven terminal interface rather
+than a GTK or Qt graphical wizard. Its Rust implementation is
+separate from the KDE Plasma desktop environment.
+
 ## AI inference and model management
 
 | Component | Role |
