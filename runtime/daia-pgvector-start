@@ -55,7 +55,7 @@ if ! /usr/libexec/daia-rag-verify-network runtime "$container_id" >/dev/null; th
     startup_error="DAIA pgvector post-start network verification failed"
 elif ! wait_for_pgvector_ready "$container_id"; then
     startup_error="DAIA pgvector TCP readiness timed out"
-elif ! /usr/libexec/daia-pgvector-audit-auth.py "$container_id" >/dev/null; then
+elif ! /usr/libexec/daia-pgvector-audit-auth.py --postgres-only "$container_id" >/dev/null; then
     startup_error="DAIA pgvector SCRAM authentication audit failed"
 elif ! /usr/libexec/daia-pgvector-init-extension.py "$container_id" >/dev/null; then
     startup_error="DAIA pgvector extension initialization failed"

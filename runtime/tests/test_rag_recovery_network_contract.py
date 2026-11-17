@@ -20,7 +20,10 @@ class RecoveryNetworkContractTests(unittest.TestCase):
                 "/usr/libexec/daia-rag-verify-network runtime"
             )
         ]
-        self.assertEqual(invocations, [expected])
+        staged = (
+            '/usr/libexec/daia-rag-verify-network runtime "$pg_id"'
+        )
+        self.assertEqual(invocations, [staged, expected])
 
     def test_identities_resolved_before_network_verification(self):
         source = RECOVERY.read_text()

@@ -85,13 +85,13 @@ systemctl is-active --quiet daia-pgvector.service
 
 # Independently verify the already-running immutable container, even
 # when systemctl start was a no-op.
-[[ "$(/usr/libexec/daia-pgvector-authorize-start runtime "$webui_id" --tika-id "$tika_id")" == "$pg_id" ]]
+[[ "$(/usr/libexec/daia-pgvector-authorize-start runtime)" == "$pg_id" ]]
 /usr/libexec/daia-pgvector-verify-registration "$pg_id"
-/usr/libexec/daia-rag-verify-network runtime "$pg_id" "$webui_id" "$tika_id"
+/usr/libexec/daia-rag-verify-network runtime "$pg_id"
 docker exec "$pg_id" pg_isready -h 127.0.0.1 -p 5432 \
     -U daia_rag -d daia_rag >/dev/null
-/usr/libexec/daia-pgvector-audit-auth.py "$pg_id"
-/usr/libexec/daia-pgvector-init-extension.py "$pg_id" "$webui_id" "$tika_id"
+/usr/libexec/daia-pgvector-audit-auth.py --postgres-only "$pg_id"
+/usr/libexec/daia-pgvector-init-extension.py "$pg_id"
 
 if [[ "$tika_state" == "stopped" ]]; then
     tika_start_registered "$tika_id"
@@ -107,5 +107,11 @@ else
 fi
 
 tika_verify_registered
+
+# Final gate requires exact membership of all registered RAG peers.
+[[ "$(/usr/libexec/daia-pgvector-authorize-start runtime "$webui_id" --tika-id "$tika_id")" == "$pg_id" ]]
+/usr/libexec/daia-rag-verify-network runtime "$pg_id" "$webui_id" "$tika_id"
+/usr/libexec/daia-pgvector-audit-auth.py "$pg_id"
+/usr/libexec/daia-pgvector-init-extension.py "$pg_id" "$webui_id" "$tika_id"
 
 echo "DAIA registered RAG containers recovered"

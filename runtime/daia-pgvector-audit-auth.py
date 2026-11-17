@@ -154,15 +154,20 @@ def audit(container_id, runner=subprocess.run):
     return True
 
 
-def main(expected_id=None):
+def main(expected_id=None, postgres_only=False):
     try:
         if os.geteuid() != 0:
             raise AuditError("Root privileges required")
         validate_identity(expected_id)
-        webui_id, tika_id = trusted_rag_identities()
-        authorized_id = authorize(
-            webui_id=webui_id, tika_id=tika_id
-        )
+        if postgres_only:
+            # Startup requires PostgreSQL-only runtime authorization.
+            # Full peer authorization remains mandatory after recovery.
+            authorized_id = authorize()
+        else:
+            webui_id, tika_id = trusted_rag_identities()
+            authorized_id = authorize(
+                webui_id=webui_id, tika_id=tika_id
+            )
         if authorized_id != expected_id:
             raise AuditError(
                 "Authorized container identity changed"
@@ -178,4 +183,9 @@ def main(expected_id=None):
 
 
 if __name__ == "__main__":
-    sys.exit(main(sys.argv[1] if len(sys.argv) == 2 else None))
+    if len(sys.argv) == 3 and sys.argv[1] == "--postgres-only":
+        sys.exit(main(sys.argv[2], postgres_only=True))
+    elif len(sys.argv) == 2:
+        sys.exit(main(sys.argv[1]))
+    else:
+        sys.exit(1)

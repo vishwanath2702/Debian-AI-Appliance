@@ -101,7 +101,7 @@ class PgvectorStartupIntegrationTests(unittest.TestCase):
             self.events().splitlines(),
             ["AUTHORIZE", "DOCKER:start " + CONTAINER_ID,
              "NETWORK:runtime:" + CONTAINER_ID,
-             "AUDIT:" + CONTAINER_ID,
+             "AUDIT:--postgres-only",
              "INIT:" + CONTAINER_ID],
         )
 
@@ -127,7 +127,7 @@ class PgvectorStartupIntegrationTests(unittest.TestCase):
                 "AUTHORIZE",
                 "DOCKER:start " + CONTAINER_ID,
                 "NETWORK:runtime:" + CONTAINER_ID,
-                "AUDIT:" + CONTAINER_ID,
+                "AUDIT:--postgres-only",
                 "VERIFY:" + CONTAINER_ID,
                 "DOCKER:stop --time 60 " + CONTAINER_ID,
             ],
@@ -143,7 +143,7 @@ class PgvectorStartupIntegrationTests(unittest.TestCase):
                 "AUTHORIZE",
                 "DOCKER:start " + CONTAINER_ID,
                 "NETWORK:runtime:" + CONTAINER_ID,
-                "AUDIT:" + CONTAINER_ID,
+                "AUDIT:--postgres-only",
                 "INIT:" + CONTAINER_ID,
                 "VERIFY:" + CONTAINER_ID,
                 "DOCKER:stop --time 60 " + CONTAINER_ID,

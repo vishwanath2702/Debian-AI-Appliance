@@ -28,6 +28,9 @@ ids = {"daia-pgvector": "a"*64,
        "daia-tika": "b"*64,
        "open-webui": "c"*64}
 failure = os.environ.get("MOCK_FAILURE", "")
+if failure == "final-network" and name == "daia-rag-verify-network":
+    if len(args) == 4:
+        sys.exit(1)
 if failure == name or failure == name + ":" + ":".join(args[:2]):
     sys.exit(1)
 
@@ -160,6 +163,17 @@ class RecoveryBehaviorTests(unittest.TestCase):
         self.assertIn("systemctl start daia-pgvector.service", events)
         self.assertTrue(any(x.startswith("tika-start ") for x in events))
         self.assertTrue(any(x.startswith("webui-start ") for x in events))
+
+    def test_final_combined_network_failure_blocks_success(self):
+        result, events = self.execute(failure="final-network")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertTrue(
+            any(e.startswith("webui-start ") for e in events)
+        )
+        self.assertNotIn(
+            "DAIA registered RAG containers recovered",
+            result.stdout
+        )
 
     def test_active_but_stopped_postgres_refused(self):
         result, events = self.execute(pg_active=True)

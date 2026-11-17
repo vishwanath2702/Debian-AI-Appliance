@@ -180,6 +180,33 @@ class PgvectorAuthAuditTests(unittest.TestCase):
             self.assertEqual(module.main(CONTAINER_ID), 0)
             operation.assert_called_once_with(CONTAINER_ID)
 
+    def test_postgres_only_authorizes_and_audits_without_peers(self):
+        with (
+            patch.object(module.os, "geteuid", return_value=0),
+            patch.object(module, "trusted_rag_identities") as peers,
+            patch.object(module, "authorize",
+                         return_value=CONTAINER_ID) as authorization,
+            patch.object(module, "audit") as scram,
+        ):
+            self.assertEqual(
+                module.main(CONTAINER_ID, postgres_only=True), 0
+            )
+            peers.assert_not_called()
+            authorization.assert_called_once_with()
+            scram.assert_called_once_with(CONTAINER_ID)
+
+    def test_postgres_only_scram_failure_is_fatal(self):
+        with (
+            patch.object(module.os, "geteuid", return_value=0),
+            patch.object(module, "authorize",
+                         return_value=CONTAINER_ID),
+            patch.object(module, "audit",
+                         side_effect=module.AuditError()),
+        ):
+            self.assertEqual(
+                module.main(CONTAINER_ID, postgres_only=True), 1
+            )
+
     def test_nonroot_blocks_authorization(self):
         with (
             patch.object(module.os, "geteuid", return_value=1000),
