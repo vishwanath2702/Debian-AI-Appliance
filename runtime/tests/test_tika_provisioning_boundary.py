@@ -144,10 +144,10 @@ class ProvisioningBoundaryTests(unittest.TestCase):
         )
         self.assertIn("tika_verify_registered provisioning", install)
         self.assertIn(
-            'tika_start_registered "$container_id" || return 1',
+            'tika_start_registered "$container_id" provisioning || return 1',
             install,
         )
-        self.assertIn("tika_verify_registered || return 1", install)
+        self.assertIn("tika_verify_registered provisioning || return 1", install)
 
     def test_recovery_handlers_unchanged(self):
         module, _ = load_helper()

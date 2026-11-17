@@ -325,11 +325,11 @@ tika_install_registered() {
         case "$state" in
             "true|false|false|running")
                 # Verify only; do not restart a running container.
-                tika_verify_registered || return 1
+                tika_verify_registered provisioning || return 1
                 ;;
             "false|false|false|created"|"false|false|false|exited")
-                tika_start_registered "$container_id" || return 1
-                tika_verify_registered || return 1
+                tika_start_registered "$container_id" provisioning || return 1
+                tika_verify_registered provisioning || return 1
                 ;;
             *)
                 echo "Unsafe existing Tika container state" >&2
@@ -369,5 +369,8 @@ tika_install() {
 }
 
 tika_verify() {
-    tika_verify_registered || return 1
+    # The runtime verifies Tika before provisioning Open WebUI.
+    # Require the strict PostgreSQL/Tika provisioning contract here.
+    # Full three-peer verification remains mandatory during recovery.
+    tika_verify_registered provisioning || return 1
 }

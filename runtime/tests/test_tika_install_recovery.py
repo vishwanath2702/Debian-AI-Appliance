@@ -219,7 +219,7 @@ tika_install_registered
             "\ntika_verify() {\n", 1
         )[1]
         self.assertIn("tika_install_registered || return 1", install)
-        self.assertIn("tika_verify_registered || return 1", verify)
+        self.assertIn("tika_verify_registered provisioning || return 1", verify)
         self.assertNotIn(
             "Tika container provisioning is not authorized yet",
             install,
