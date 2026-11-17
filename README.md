@@ -60,6 +60,8 @@ Not every planned integration or appliance capability is operational. Source ava
 
 ## Pragna Engineering Census
 
+For the appliance components and integration status, see the [Pragna software stack](docs/pragna/software-stack.md).
+
 The [Pragna engineering census](docs/project-census.md) records
 a dated snapshot of the project's development, including its
 original Shell implementation and subsequent Rust migration.
