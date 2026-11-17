@@ -37,7 +37,7 @@ Pragna appliance design.
 | PostgreSQL 17 | Persistent database |
 | pgvector | Vector similarity search |
 | Apache Tika | Document text and metadata extraction |
-| Open WebUI | User-facing document and AI interaction |
+| Open WebUI Slim | User-facing document and AI interaction |
 
 The intended integration supports document ingestion,
 retrieval-augmented generation and local inference.
