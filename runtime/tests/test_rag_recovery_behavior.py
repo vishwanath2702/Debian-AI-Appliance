@@ -28,6 +28,9 @@ ids = {"daia-pgvector": "a"*64,
        "daia-tika": "b"*64,
        "open-webui": "c"*64}
 failure = os.environ.get("MOCK_FAILURE", "")
+if name == "daia-pgvector-audit-auth.py" and args[:1] == ["--postgres-only"]:
+    if os.environ.get("MOCK_REJECT_WARM_POSTGRES_ONLY") == "1":
+        sys.exit(1)
 if failure == "final-network" and name == "daia-rag-verify-network":
     if len(args) == 4:
         sys.exit(1)
@@ -155,6 +158,10 @@ class RecoveryBehaviorTests(unittest.TestCase):
                 "MOCK_A_STATE": pg_state,
                 "MOCK_B_STATE": tika_state,
                 "MOCK_C_STATE": web_state,
+                "MOCK_REJECT_WARM_POSTGRES_ONLY": (
+                    "1" if pg_state == tika_state == web_state == "running"
+                    else "0"
+                ),
             })
             result = subprocess.run(
                 ["bash", str(base / "recover")],
@@ -229,6 +236,59 @@ class RecoveryBehaviorTests(unittest.TestCase):
         self.assertNotIn(
             "DAIA registered RAG containers recovered",
             result.stdout
+        )
+
+    def test_cold_recovery_uses_staged_then_full_auth_audits(self):
+        result, events = self.execute()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        audit_events = [
+            event for event in events
+            if event.startswith("daia-pgvector-audit-auth.py ")
+        ]
+        self.assertEqual(audit_events, [
+            "daia-pgvector-audit-auth.py --postgres-only " + "a"*64,
+            "daia-pgvector-audit-auth.py " + "a"*64,
+        ])
+
+    def test_warm_recovery_uses_full_audit_without_staged_audit(self):
+        result, events = self.execute(
+            pg_active=True,
+            pg_state="running",
+            tika_state="running",
+            web_state="running",
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        audit_events = [
+            event for event in events
+            if event.startswith("daia-pgvector-audit-auth.py ")
+        ]
+        self.assertEqual(audit_events, [
+            "daia-pgvector-audit-auth.py " + "a"*64,
+            "daia-pgvector-audit-auth.py " + "a"*64,
+        ])
+        self.assertFalse(any(
+            event.startswith("systemctl start ")
+            or event.startswith("tika-start ")
+            or event.startswith("webui-start ")
+            for event in events
+        ))
+
+    def test_warm_full_auth_audit_failure_blocks_recovery(self):
+        result, events = self.execute(
+            failure="daia-pgvector-audit-auth.py",
+            pg_active=True,
+            pg_state="running",
+            tika_state="running",
+            web_state="running",
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(
+            "daia-pgvector-audit-auth.py " + "a"*64,
+            events,
+        )
+        self.assertNotIn(
+            "DAIA registered RAG containers recovered",
+            result.stdout,
         )
 
     def test_warm_recovery_uses_combined_authorization(self):

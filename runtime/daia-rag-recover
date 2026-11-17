@@ -95,14 +95,23 @@ if [[ "$pg_state" == "running" &&
     /usr/libexec/daia-pgvector-verify-registration "$pg_id"
     /usr/libexec/daia-rag-verify-network runtime \
         "$pg_id" "$webui_id" "$tika_id"
+    # Warm recovery already has all registered peers attached.
+    # Audit that exact topology; PostgreSQL-only authorization would
+    # incorrectly reject the legitimate existing peer membership.
+    audit_mode=full
 else
     [[ "$(/usr/libexec/daia-pgvector-authorize-start runtime)" == "$pg_id" ]]
     /usr/libexec/daia-pgvector-verify-registration "$pg_id"
     /usr/libexec/daia-rag-verify-network runtime "$pg_id"
+    audit_mode=postgres-only
 fi
 docker exec "$pg_id" pg_isready -h 127.0.0.1 -p 5432 \
     -U daia_rag -d daia_rag >/dev/null
-/usr/libexec/daia-pgvector-audit-auth.py --postgres-only "$pg_id"
+if [[ "$audit_mode" == "full" ]]; then
+    /usr/libexec/daia-pgvector-audit-auth.py "$pg_id"
+else
+    /usr/libexec/daia-pgvector-audit-auth.py --postgres-only "$pg_id"
+fi
 /usr/libexec/daia-pgvector-init-extension.py "$pg_id"
 
 if [[ "$tika_state" == "stopped" ]]; then
