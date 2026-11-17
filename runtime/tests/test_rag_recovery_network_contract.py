@@ -13,9 +13,11 @@ class RecoveryNetworkContractTests(unittest.TestCase):
             '/usr/libexec/daia-rag-verify-network runtime '
             '"$pg_id" "$webui_id" "$tika_id"'
         )
+        # Normalize shell line continuations before comparing commands.
+        normalized = source.replace("\\\n", " ")
         invocations = [
-            line.strip()
-            for line in source.splitlines()
+            " ".join(line.split())
+            for line in normalized.splitlines()
             if line.strip().startswith(
                 "/usr/libexec/daia-rag-verify-network runtime"
             )
@@ -23,7 +25,16 @@ class RecoveryNetworkContractTests(unittest.TestCase):
         staged = (
             '/usr/libexec/daia-rag-verify-network runtime "$pg_id"'
         )
-        self.assertEqual(invocations, [staged, expected])
+        self.assertEqual(invocations, [expected, staged, expected])
+        self.assertIn(
+            '"$pg_state" == "running"', source
+        )
+        self.assertIn(
+            '"$tika_state" == "running"', source
+        )
+        self.assertIn(
+            '"$webui_state" == "running"', source
+        )
 
     def test_identities_resolved_before_network_verification(self):
         source = RECOVERY.read_text()

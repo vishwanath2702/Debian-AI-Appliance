@@ -111,6 +111,7 @@ class RagLifecycleTests(unittest.TestCase):
             script = (
                 'source "$MODULE_PATH"\n'
                 'openwebui_validate() { return 0; }\n'
+                'openwebui_trusted_ollama_url() { printf "%s\\n" "http://172.25.0.1:11434"; }\n'
                 'docker() { printf "%s\\n" docker >> "$EVENT_LOG"; '
                 'return 1; }\n'
                 'openwebui_install\n'

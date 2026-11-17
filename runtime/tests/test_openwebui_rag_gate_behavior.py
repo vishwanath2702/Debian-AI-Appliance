@@ -59,6 +59,7 @@ class OpenWebUIRAGGateBehaviorTests(unittest.TestCase):
             script = (
                 'source "$1"\n'
                 'openwebui_prepare_rag() { return 0; }\n'
+                'openwebui_trusted_ollama_url() { printf "%s\\n" "http://172.25.0.1:11434"; }\n'
                 'openwebui_install\n'
             )
 

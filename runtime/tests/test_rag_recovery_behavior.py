@@ -31,6 +31,12 @@ failure = os.environ.get("MOCK_FAILURE", "")
 if failure == "final-network" and name == "daia-rag-verify-network":
     if len(args) == 4:
         sys.exit(1)
+if failure == "reject-staged-network" and name == "daia-rag-verify-network":
+    if len(args) == 2:
+        sys.exit(1)
+if failure == "reject-staged-network" and name == "daia-pgvector-authorize-start":
+    if args == ["runtime"]:
+        sys.exit(1)
 if failure == name or failure == name + ":" + ":".join(args[:2]):
     sys.exit(1)
 
@@ -224,6 +230,83 @@ class RecoveryBehaviorTests(unittest.TestCase):
             "DAIA registered RAG containers recovered",
             result.stdout
         )
+
+    def test_warm_recovery_uses_combined_authorization(self):
+        result, events = self.execute(
+            failure="reject-staged-network",
+            pg_active=True,
+            pg_state="running",
+            tika_state="running",
+            web_state="running",
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertNotIn(
+            "daia-pgvector-authorize-start runtime", events
+        )
+        self.assertIn(
+            "daia-pgvector-authorize-start runtime "
+            + "c"*64 + " --tika-id " + "b"*64,
+            events,
+        )
+        self.assertNotIn(
+            "daia-rag-verify-network runtime " + "a"*64,
+            events,
+        )
+        self.assertIn(
+            "daia-rag-verify-network runtime "
+            + "a"*64 + " " + "c"*64 + " " + "b"*64,
+            events,
+        )
+        self.assertFalse(any(
+            event.startswith("tika-start ")
+            or event.startswith("webui-start ")
+            for event in events
+        ))
+
+    def test_mixed_state_pg_and_tika_running_fails_closed(self):
+        result, events = self.execute(
+            failure="reject-staged-network",
+            pg_active=True,
+            pg_state="running",
+            tika_state="running",
+            web_state="stopped",
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertFalse(any(
+            event.startswith("tika-start ")
+            or event.startswith("webui-start ")
+            for event in events
+        ))
+
+    def test_mixed_state_pg_and_webui_running_fails_closed(self):
+        result, events = self.execute(
+            failure="reject-staged-network",
+            pg_active=True,
+            pg_state="running",
+            tika_state="stopped",
+            web_state="running",
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertFalse(any(
+            event.startswith("tika-start ")
+            or event.startswith("webui-start ")
+            for event in events
+        ))
+
+    def test_warm_recovery_rejects_combined_network_failure(self):
+        result, events = self.execute(
+            failure="final-network",
+            pg_active=True,
+            pg_state="running",
+            tika_state="running",
+            web_state="running",
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertFalse(any(
+            event.startswith("tika-start ")
+            or event.startswith("webui-start ")
+            for event in events
+        ))
 
     def test_running_postgres_not_restarted(self):
         result, events = self.execute(
