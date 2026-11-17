@@ -177,6 +177,122 @@ NO COMMIT OR PUSH
 
 The original November 15 census and its complete measurement report remain preserved above.
 
+## November 17, 2026 — RAG recovery integration checkpoint
+
+**Verified Git HEAD:** `4586d9a73ad39794294f69e9fea9ebd25f4e482c`
+**Branch:** `master`
+**Scope:** PostgreSQL 17/pgvector, Apache Tika, Open WebUI Slim,
+and their guarded recovery dependencies.
+
+### Engineering changes
+
+- Corrected warm RAG recovery authorization sequencing so that
+  already-running, registered PostgreSQL, Tika and Open WebUI
+  containers are verified together rather than incorrectly rejected
+  by a PostgreSQL-only network-membership check.
+- Preserved staged authorization for cold recovery.
+- Retained fail-closed behavior for unauthorized membership,
+  authorization failures and unsupported mixed recovery states.
+- Updated isolated Open WebUI test fixtures to account for the
+  trusted Ollama gateway prerequisite without weakening production
+  gateway validation.
+- Confirmed that the recovery helper and systemd service are
+  staged into the ISO payload, with dependent service ordering.
+
+### Verification evidence
+
+| Check | Result |
+| --- | --- |
+| Targeted regressions, Step 0700 | 45 passed |
+| Expanded RAG/pgvector suite, Step 0701 | 417 passed, 23 skipped |
+| Expanded suite failures/errors | 0 |
+| Shell syntax and Git diff checks | Passed |
+| Guarded commit and GitHub verification, Step 0702 | Passed |
+| Verified Git commit | `4586d9a7` |
+
+The 23 skipped tests require privileged or isolated root fixtures.
+These executed test results are distinct from the static test
+definition counts in the November 15 and November 16 censuses.
+
+### Physical laptop validation outstanding
+
+The installed laptop previously exhibited a failed RAG recovery
+service and inaccessible Open WebUI at `http://localhost:3000`.
+The source correction has passed automated tests but has **not**
+yet been validated through a newly built and installed ISO.
+
+The next approved ISO validation must check:
+
+1. UEFI and Legacy BIOS boot and the Rust installer.
+2. KDE desktop, networking and hardware integration.
+3. PostgreSQL 17/pgvector initialization and persistence.
+4. Apache Tika availability and document extraction.
+5. Warm and cold RAG recovery and trusted network membership.
+6. Open WebUI availability at `http://localhost:3000`.
+7. Ollama connectivity and local model inference.
+8. End-to-end document ingestion, retrieval and recovery.
+
+**Release gate:** Source-level checkpoint verified; physical
+integration pending. ISO construction requires separate approval.
+
+### November 17 quantitative measurement — Step 0707
+
+**Measurement recorded at:** `2026-11-18T02:55:01+05:30`
+
+**Measured Git HEAD:** `4586d9a73ad39794294f69e9fea9ebd25f4e482c`
+
+| Metric | November 17 measurement |
+| --- | ---: |
+| Git commits (locally available `--all` history) | 835 |
+| Cumulative lines added | 179,468 |
+| Cumulative lines deleted | 32,856 |
+| Cumulative line changes | 212,324 |
+| Source/configuration files | 384 |
+| Total lines | 143,023 |
+| Nonblank lines | 115,944 |
+| Approximate Python functions | 1,736 |
+| Approximate Rust functions | 3,394 |
+| Approximate Shell functions | 235 |
+| Python `test_*` definitions | 1,170 |
+| Rust test attributes | 1,674 |
+| Test-related files | 144 |
+
+**Language breakdown:**
+
+| Language/configuration | Files | Lines |
+| --- | ---: | ---: |
+| Rust | 102 | 73,744 |
+| Python | 168 | 29,735 |
+| Markdown | 39 | 26,604 |
+| Shell | 40 | 12,112 |
+| Systemd | 8 | 179 |
+| TOML | 14 | 264 |
+| YAML | 10 | 157 |
+| JSON | 2 | 56 |
+| JavaScript | 1 | 172 |
+
+**Methodology:** Read-only Step 0707. Counts include Git-tracked
+and nonignored untracked files with selected source/configuration
+extensions, excluding symlinks. Physical line counts include blank
+lines and comments. Function and test counts use regular-expression
+approximations. Historical changes cover locally available Git
+`--all` history. No tests were executed during measurement.
+
+**Timestamp interpretation:** The timestamp above records when
+these Step 0707 results were entered into the Engineering Census.
+It is not the original execution timestamp of Step 0707.
+
+**Comparability:** Direct equivalence with the November 16 Step 0580
+measurement has not been established. Differences between dated
+measurements must not be interpreted as exact development deltas.
+
+### Census measurement boundary
+
+This milestone records engineering changes and executed tests.
+It does not replace or recompute the November 15 or November 16
+static codebase measurements. A new quantitative census requires
+a separately executed, documented measurement.
+
 ## Update policy
 
 Publish a new dated census at major milestones. Preserve older

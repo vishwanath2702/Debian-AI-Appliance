@@ -66,15 +66,22 @@ The [Pragna engineering census](docs/project-census.md) records
 a dated snapshot of the project's development, including its
 original Shell implementation and subsequent Rust migration.
 
-At the November 16, 2026 local-checkout checkpoint: **825 commits**,
-**209,784 cumulative line changes**, **383 source/configuration files**,
-and approximately **2,821 statically identified Python test definitions
-and Rust test attributes** (1,147 Python; 1,674 Rust).
+At the November 17, 2026 engineering checkpoint (`4586d9a7`):
+**835 commits**, **212,324 cumulative line changes**,
+**384 source/configuration files**, and **143,023 total lines**.
+Static test measurements identified **1,170 Python test definitions**
+and **1,674 Rust test attributes**.
 
-These figures are a dated, read-only snapshot, **not live counters**.
-They reflect locally available Git history and include untracked source
-files at measurement time; GitHub documentation commits made afterward
-are not included. Static test counts are not executed test results.
+The measurements were recorded in the census on
+**November 18, 2026 at 02:55:01 IST (UTC+05:30)**.
+They reflect locally available Git history and include nonignored
+untracked source/configuration files. They are **not live counters**,
+and static test counts are not executed test results.
+Measurement methods differ between snapshots; see the full census.
+
+The November 17 checkpoint also records the RAG recovery correction,
+its automated verification, and the remaining physical laptop tests.
+The next ISO build requires separate approval.
 The [full census](docs/project-census.md) preserves the November 15
 baseline and explains differences in measurement methodology.
 
