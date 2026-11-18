@@ -11,6 +11,7 @@
 build/
 !/build/
 build/*
+!/build/prepare-laptop.sh
 !build/check-ollama-release.py
 !build/ollama-release.json
 !/build/fetch-docker-packages.sh
@@ -70,3 +71,19 @@ OVMF_VARS.fd
 __pycache__/
 *.py[cod]
 .pytest_cache/
+
+# Loom laptop build verification sources.
+!/build/
+!/build/prepare-laptop.sh
+!/build/debian-release.json
+!/build/check-debian-release.py
+!/build/check-debian-signature.py
+
+# Downloaded Debian release evidence remains outside Git.
+/iso/debian-13.7.0-evidence/
+!/build/laptop-acquisition.json
+!/build/plan-laptop-acquisition.py
+!/build/check-laptop-permissions.py
+
+# Loom Debian acquisition helper
+!/build/acquire-debian-iso.py

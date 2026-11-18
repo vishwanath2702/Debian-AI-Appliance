@@ -14,9 +14,90 @@ readonly ISO_DIRECTORY="${SCRIPT_DIRECTORY}/iso"
 readonly WORK_DIRECTORY="${SCRIPT_DIRECTORY}/work"
 readonly OUTPUT_DIRECTORY="${SCRIPT_DIRECTORY}/output"
 readonly VERSION_FILE="${SCRIPT_DIRECTORY}/VERSION"
-main() {
-    require_command cargo
+# DEBIAN_ACQUISITION_GATE_V1
+# Called only by the laptop build path, never by prepare laptop.
+# Approval is specific to the pinned Debian ISO and this invocation.
+prepare_pinned_debian_acquisition() {
+    local filename="debian-13.7.0-amd64-netinst.iso"
+    local destination="${SCRIPT_DIRECTORY}/iso/${filename}"
+    local evidence="${DAIA_DEBIAN_EVIDENCE_DIR:-${SCRIPT_DIRECTORY}/iso/debian-13.7.0-evidence}"
+    local url="https://cdimage.debian.org/cdimage/archive/13.7.0/amd64/iso-cd/${filename}"
+    local answer=""
+    local item
 
+    printf 'DEBIAN_ACQUISITION_GATE=START\n'
+
+    # Never acquire an ISO when the caller explicitly selected another path.
+    if [[ -n "${DAIA_SOURCE_ISO:-}" && "${DAIA_SOURCE_ISO}" != "${destination}" ]]; then
+        printf 'DEBIAN_ACQUISITION=EXPLICIT_SOURCE_OVERRIDE\n'
+        return 0
+    fi
+
+    if [[ -L "${destination}" ]]; then
+        printf 'DEBIAN_ACQUISITION=UNSAFE_DESTINATION\n' >&2
+        return 1
+    fi
+
+    if [[ -f "${destination}" ]]; then
+        printf 'DEBIAN_ACQUISITION=EXISTING_SOURCE_VERIFY_LATER\n'
+        return 0
+    fi
+
+    if [[ -e "${destination}" ]]; then
+        printf 'DEBIAN_ACQUISITION=INVALID_DESTINATION\n' >&2
+        return 1
+    fi
+
+    printf 'DEBIAN_ACQUISITION=PINNED_SOURCE_MISSING\n'
+    printf 'DEBIAN_ACQUISITION_SOURCE=%s\n' "${url}"
+    printf 'DEBIAN_ACQUISITION_DESTINATION=%s\n' "${destination}"
+    printf 'DEBIAN_ACQUISITION_EVIDENCE=%s\n' "${evidence}"
+
+    # Evidence must be available before requesting download consent.
+    if [[ ! -d "${evidence}" || -L "${evidence}" ]]; then
+        printf 'DEBIAN_ACQUISITION=SIGNED_EVIDENCE_MISSING\n' >&2
+        return 1
+    fi
+
+    for item in SHA256SUMS SHA256SUMS.sign debian-cd-signing-keyring.gpg; do
+        if [[ ! -f "${evidence}/${item}" || -L "${evidence}/${item}" ]]; then
+            printf 'DEBIAN_ACQUISITION=SIGNED_EVIDENCE_INCOMPLETE:%s\n' "${item}" >&2
+            return 1
+        fi
+    done
+
+    if [[ ! -t 0 ]]; then
+        printf 'DEBIAN_ACQUISITION_CONSENT=DENIED_NONINTERACTIVE\n'
+        return 1
+    fi
+
+    printf 'Download ONLY the pinned Debian 13.7.0 ISO above? [y/N] '
+    IFS= read -r answer || answer=""
+
+    case "${answer}" in
+        y|Y|yes|YES)
+            printf 'DEBIAN_ACQUISITION_CONSENT=APPROVED_THIS_INVOCATION\n'
+            ;;
+        *)
+            printf 'DEBIAN_ACQUISITION_CONSENT=DENIED\n'
+            return 1
+            ;;
+    esac
+
+    # The helper independently validates the manifest, URL, hash,
+    # signed provenance, destination, and publication contract.
+    if ! python3 -u "${SCRIPT_DIRECTORY}/build/acquire-debian-iso.py" \
+        --url "${url}" \
+        --evidence-dir "${evidence}" \
+        --approve; then
+        printf 'DEBIAN_ACQUISITION=FAILED\n' >&2
+        return 1
+    fi
+
+    printf 'DEBIAN_ACQUISITION=VERIFIED_PUBLICATION_COMPLETE\n'
+}
+
+main() {
     if [[ ! -f "${ENGINE_DIRECTORY}/Cargo.toml" ]]; then
         printf 'Error: Rust workspace not found: %s\n' "${ENGINE_DIRECTORY}" >&2
         return 1
@@ -25,19 +106,66 @@ main() {
     case "${1:-}" in
         build)
             shift
+            if [[ "$#" -eq 1 && "$1" == "laptop" ]]; then
+                # Resolve the pinned source once, before preparation.
+                # Preserve explicit overrides for integrity validation.
+                if [[ -z "${DAIA_SOURCE_ISO:-}" ]]; then
+                    DAIA_SOURCE_ISO="$(python3 - "${SCRIPT_DIRECTORY}" <<'PINNED_ISO'
+import json
+import pathlib
+import sys
+
+root = pathlib.Path(sys.argv[1])
+manifest = json.loads(
+    (root / "build/debian-release.json").read_text(
+        encoding="utf-8"
+    )
+)
+name = manifest["filename"]
+if (
+    manifest.get("release_policy") != "pinned"
+    or manifest.get("require_signed_provenance") is not True
+    or not isinstance(name, str)
+    or pathlib.Path(name).name != name
+    or not name.startswith("debian-13.")
+    or not name.endswith("-amd64-netinst.iso")
+):
+    raise SystemExit("Invalid pinned Debian release manifest")
+print(root / "iso" / name)
+PINNED_ISO
+                    )" || return 1
+                fi
+                export DAIA_SOURCE_ISO
+                printf '[builder] Pinned laptop source ISO: %s\\n' "${DAIA_SOURCE_ISO}"
+                printf '[builder] Checking laptop build prerequisites...\\n'
+                prepare_pinned_debian_acquisition || return $?
+                bash "${SCRIPT_DIRECTORY}/build/prepare-laptop.sh" || return $?
+                printf '[builder] Checking strict laptop build permissions...\n'
+                python3 "${SCRIPT_DIRECTORY}/build/check-laptop-permissions.py" --mode build || return $?
+            fi
             build_iso "$@"
+            ;;
+        prepare)
+            shift
+            if [[ "$#" -ne 1 || "$1" != "laptop" ]]; then
+                printf 'Usage: %s prepare laptop\n' "${0##*/}" >&2
+                return 2
+            fi
+            bash "${SCRIPT_DIRECTORY}/build/prepare-laptop.sh"
             ;;
         clean)
             shift
             bash "${SCRIPT_DIRECTORY}/build/clean.sh" "$@"
             ;;
         *)
+            require_command cargo
             run_cli "$@"
             ;;
     esac
 }
 
 build_iso() {
+    require_command cargo
     if [[ "$#" -ne 1 ]]; then
         printf 'Usage: %s build <capability>\n' "${0##*/}" >&2
         return 1

@@ -1,0 +1,79 @@
+{
+  "schema_version": 1,
+  "profile": "laptop",
+  "architecture": "amd64",
+  "automatic_upgrade": false,
+  "network_default": "deny",
+  "download_consent": "explicit_per_invocation",
+  "installation_consent": "explicit_per_invocation",
+  "acquisition_execution": "not_implemented",
+  "host_tools": [
+    "cargo",
+    "rustc",
+    "xorriso",
+    "debootstrap",
+    "mksquashfs",
+    "grub-mkrescue",
+    "rsync",
+    "python3",
+    "sha256sum"
+  ],
+  "assets": [
+    {
+      "id": "debian",
+      "kind": "signed_iso",
+      "policy": "build/debian-release.json",
+      "destination": "iso/debian-13.7.0-amd64-netinst.iso",
+      "method": "official_signed_release",
+      "status": "verification_defined"
+    },
+    {
+      "id": "ollama",
+      "kind": "release_archive",
+      "policy": "build/ollama-release.json",
+      "destination": "payload/packages/ollama/ollama-linux-amd64.tar.zst",
+      "method": "pinned_release",
+      "status": "verification_defined"
+    },
+    {
+      "id": "open-webui",
+      "kind": "oci_archive",
+      "policy": "payload/config/pragna.conf",
+      "destination_key": "DAIA_OPEN_WEBUI_IMAGE",
+      "reference_key": "DAIA_OPEN_WEBUI_IMAGE_REF",
+      "archive_hash_key": "DAIA_OPEN_WEBUI_ARCHIVE_SHA256",
+      "method": "none",
+      "status": "blocked_unresolved_provenance"
+    },
+    {
+      "id": "pgvector",
+      "kind": "oci_archive",
+      "policy": "payload/config/pragna.conf",
+      "destination_key": "DAIA_PGVECTOR_IMAGE",
+      "reference_key": "DAIA_PGVECTOR_IMAGE_REF",
+      "digest_key": "DAIA_PGVECTOR_IMAGE_DIGEST",
+      "archive_hash_key": "DAIA_PGVECTOR_ARCHIVE_SHA256",
+      "method": "pinned_oci",
+      "status": "verification_defined"
+    },
+    {
+      "id": "tika",
+      "kind": "oci_archive",
+      "policy": "payload/config/pragna.conf",
+      "destination_key": "DAIA_TIKA_IMAGE",
+      "reference_key": "DAIA_TIKA_IMAGE_REF",
+      "digest_key": "DAIA_TIKA_IMAGE_DIGEST",
+      "archive_hash_key": "DAIA_TIKA_ARCHIVE_SHA256",
+      "method": "pinned_oci",
+      "status": "verification_defined"
+    },
+    {
+      "id": "whichllm",
+      "kind": "prepared_runtime",
+      "policy": "build/prepare-whichllm-runtime.py",
+      "destination": "build/assets/whichllm-runtime",
+      "method": "none",
+      "status": "blocked_unresolved_provenance"
+    }
+  ]
+}
