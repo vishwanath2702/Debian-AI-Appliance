@@ -87,17 +87,33 @@ baseline and explains differences in measurement methodology.
 
 ## Building the DAIA Laptop ISO
 
-The intended one-command interface for a fresh clone is:
+Loom provides a preparation workflow and a laptop ISO build entry point.
+
+To inspect the development host's build prerequisites and available offline assets without starting an ISO build:
+
+```bash
+bash builder.sh prepare laptop
+```
+
+To initiate the laptop ISO build workflow:
 
 ```bash
 bash builder.sh build laptop
 ```
 
-**Status (November 2026): planned interface; not yet verified as an end-to-end command.** Do not assume this command currently selects the laptop profile or builds an ISO successfully. The existing build scripts and Rust ISO engine are being integrated and tested to support this workflow.
+**Status (November 18, 2026): Preparation verified; complete ISO build and physical laptop validation pending.**
 
-The completed interface will validate build prerequisites and required offline assets, select the laptop configuration, create an isolated workspace, assemble the payload, build the bootable Live/Install ISO, and report the output path and SHA-256 checksum. Required large offline artifacts may need to be supplied separately from a Git clone; the build must not silently download them or overwrite existing outputs.
+The preparation workflow checks required build tools, offline assets, integrity metadata, Debian source ISO provenance, and offline Rust dependency resolution. The verified development-desktop checkpoint completed successfully.
 
-The current validation target is a CPU-compatible Debian/KDE laptop ISO. Booting that ISO on other hardware, including NVIDIA RTX systems using Nouveau, is a separate test goal and is not yet verified. Future RTX-specific software-stack decisions will use a separate profile rather than impose KDE or laptop requirements on every appliance.
+The build workflow uses a pinned Debian 13.7.0 (Trixie) amd64 netinst ISO. When that ISO is missing, its acquisition requires locally available signed release evidence and explicit, per-invocation user approval. Network access and automatic upgrades are not silently authorized.
+
+Acquisition of other missing application assets is not yet implemented. Those assets must already be available and pass the applicable verification checks.
+
+The laptop ISO build path remains subject to end-to-end validation. A successful preparation check does not establish that the resulting ISO boots, installs correctly, or runs every integrated application.
+
+The current validation target is a CPU-compatible Debian/KDE laptop appliance, including Open WebUI, Ollama, PostgreSQL/pgvector, Apache Tika, and WhichLLM. Live USB boot, installation, networking, and application integration must be verified on physical laptop hardware.
+
+The operating system is intended to be rebuildable, with user data and configuration recoverable independently of the installed system.
 
 ## Documentation
 
