@@ -1,40 +1,43 @@
 # Loom / DAIA Repository Testing Playbook
 
-**Status: active development — November 15, 2026.** This is a tester-oriented guide, not a released or fully validated installation procedure. The first appliance is DAIA/Pragna. Other Loom appliance families are planned.
+**Status: active development — November 18, 2026.** This is a tester-oriented guide, not a released or fully validated installation procedure. The first appliance is DAIA/Pragna. Other Loom appliance families are planned.
 
 ## 1. What you need
 
-- An **amd64** Linux build host, preferably a supported Debian environment, with an initial internet connection, sufficient free disk space, and a USB drive or spare test disk.
-- Git, Rust/Cargo, and the Debian ISO/build utilities required by the repository's build scripts. Exact host dependency versions and a fresh-clone bootstrap command are **not yet verified**; review build/check.sh and the build scripts before proceeding.
-- A **supported Debian amd64 base ISO**, downloaded in advance. The current `builder.sh` looks for a single `debian-*-amd64-netinst.iso` in `iso/` unless `DAIA_SOURCE_ISO` is set. A matching filename alone does **not** establish that an arbitrary Debian ISO is compatible with the build pipeline.
-- Separately obtained offline packages, pinned Ollama archive, and any required container images or other payload artifacts. **A Git clone alone may not contain these large assets.** Consult `payload/config/pragna.conf`, `build/check.sh`, and the payload manifests; asset acquisition and cache reuse are still being standardized.
+- An **amd64** Linux development host with sufficient disk space, a USB drive or spare test disk, and any network access needed to obtain approved missing assets.
+- Git, Rust/Cargo, and Debian ISO/build utilities required by the repository. Check the actual host and asset prerequisites before building:
+
+  ```bash
+  bash builder.sh prepare laptop
+  ```
+
+- The **pinned Debian 13.7.0 (Trixie) amd64 netinst ISO** and its signed release evidence. The November 18 development-desktop checkpoint verified the locally available source ISO's checksum and Debian signature provenance; do not substitute an arbitrary matching filename.
+- Separately available offline payload artifacts, including the required Ollama archive, Open WebUI, PostgreSQL/pgvector and Apache Tika images, and WhichLLM components. A Git clone alone does **not** supply all large artifacts.
 
 **Safety:** Use a dedicated test disk or VM. The installer can erase selected storage. Back up important data and confirm the target disk before any destructive step. Never test installation on your only copy of important data.
 
-## 2. Online preparation (do once, then reuse assets)
+## 2. Online preparation and offline asset verification
 
 1. Clone the repository: `git clone https://github.com/vishwanath2702/Debian-AI-Appliance.git` and enter the directory.
-2. Record the Git commit under test: `git rev-parse HEAD`.
-3. Install the documented host prerequisites using your distribution's trusted package sources.
-4. Obtain a **project-compatible** Debian base ISO from an official source; place it in `iso/` or explicitly configure its path. Verify the checksum against the publisher's authenticated checksum information.
-5. Obtain the offline artifacts required by the selected payload/profile. Verify checksums, versions, and provenance; retain downloaded originals in a reusable cache. Do not assume the current scripts can automatically populate every cache on a fresh machine.
-6. Check free disk space and review build configuration. Keep source downloads separate from disposable build workspaces.
+2. Record the exact commit: `git rev-parse HEAD`.
+3. Run `bash builder.sh prepare laptop` to inspect required tools, source ISO, offline payload assets, and relevant verification results **without building an ISO**.
+4. Supply missing host tools or offline artifacts through trusted, independently verified sources. Review the preparation report before deciding whether to acquire anything.
+5. The laptop build entry point uses a pinned Debian 13.7.0 source. If that ISO is absent, the implemented Debian acquisition gate requires signed release evidence and **explicit consent for that invocation**. Do not assume the command may download other missing artifacts: their automatic acquisition is not yet implemented.
+6. Preserve verified downloads and evidence for reuse. Keep disposable build workspaces separate, and review available disk space before any build.
 
-The aim is to prepare all assets while internet access is available, then build and install without unexpected network downloads. **A fully offline fresh-clone build is a goal, not yet a verified guarantee.**
+The November 18, 2026 preparation checkpoint **passed on the development desktop**: host prerequisites, pinned Debian source verification, offline Rust resolution, and required local payload asset checks. This is not a fresh-clone or laptop-hardware certification, and it does not establish a fully offline build guarantee.
 
 ## 3. Build the laptop ISO
 
-The intended public interface is:
+After reviewing preparation results and obtaining **separate explicit approval for the build**, the intended public entry point is:
 
 ```bash
-./builder.sh build laptop
+bash builder.sh build laptop
 ```
 
-**Not yet end-to-end verified:** At this checkpoint, `builder.sh` forwards a capability to the Rust engine and expects existing rootfs/payload workspaces. It does **not** yet reliably perform the entire fresh-clone preparation and laptop-profile build. The separate `build/build.sh` pipeline performs more stages but requires an explicit fresh workspace and is still being integrated with the public entry point.
+The builder now includes a laptop preparation and pinned Debian source acquisition gate. **The complete build path has not yet been validated end to end at this checkpoint.** Do not treat successful preparation, a successful command exit, or an existing ISO filename as proof that the intended laptop profile, payload, boot menu, and installer are correct.
 
-Until integration is verified, **do not interpret a successful command exit or an existing ISO filename as proof that the laptop profile, payload, or boot menu was correctly assembled**. Follow repository development instructions or a verified release-specific build procedure instead. Do not run cleanup or rebuild scripts blindly against existing workspaces.
-
-For every build, record the exact command, exit status, Git commit, profile, source ISO checksum, output ISO path/checksum, and relevant logs. Never overwrite an existing candidate ISO without deliberate authorization.
+For each build, capture visible timestamped stage progress in the invoking terminal, with contemporaneous logs where practical. Record the exact command, exit status, Git commit, profile, source ISO checksum, output ISO path and SHA-256 checksum, and relevant build logs. Do not silently download artifacts, install host packages, or overwrite existing ISO candidates without deliberate authorization.
 
 ## 4. Live USB smoke test — non-destructive first
 
@@ -69,9 +72,10 @@ Open a GitHub issue with:
 
 ## 7. Current verification boundaries
 
-- The laptop payload has been assembled and its staged recovery helpers checked in development; this does not by itself validate a new ISO.
-- The one-command laptop builder and fresh-clone offline bootstrap still need implementation and end-to-end verification.
-- Laptop physical installation/reboot recovery and RTX/Nouveau boot compatibility remain separate hardware test milestones.
-- Other Loom appliance profiles and the RTX software stack are not specified by this playbook.
+- The November 18 development-desktop preparation and pinned Debian source verification passed; the scoped changes were committed and pushed as `162a59a4`.
+- The public laptop builder now has preparation and consent-gated pinned Debian acquisition, but **a new complete ISO build is not yet verified**.
+- Automatic acquisition of other missing offline application artifacts is not implemented; verified local copies are still required.
+- Physical laptop Live USB boot, installation, application integration, and post-reboot persistence/recovery remain separate test milestones.
+- RTX/Nouveau compatibility and other Loom appliance profiles are outside the confirmed laptop validation scope.
 
-See the repository [README](../../README.md) for project scope and status. This playbook will be updated as the public build interface and download/bootstrap process become reproducible.
+See the repository [README](../../README.md) for project scope and status. Update this playbook as the public build interface and physical laptop test results are verified.
