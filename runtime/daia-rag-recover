@@ -112,7 +112,11 @@ if [[ "$audit_mode" == "full" ]]; then
 else
     /usr/libexec/daia-pgvector-audit-auth.py --postgres-only "$pg_id"
 fi
-/usr/libexec/daia-pgvector-init-extension.py "$pg_id"
+# Only cold staging uses PostgreSQL-only authorization.
+# Warm recovery already has the complete registered RAG network.
+if [[ "$audit_mode" == "postgres-only" ]]; then
+    /usr/libexec/daia-pgvector-init-extension.py "$pg_id"
+fi
 
 if [[ "$tika_state" == "stopped" ]]; then
     tika_start_registered "$tika_id"

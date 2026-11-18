@@ -31,6 +31,9 @@ failure = os.environ.get("MOCK_FAILURE", "")
 if name == "daia-pgvector-audit-auth.py" and args[:1] == ["--postgres-only"]:
     if os.environ.get("MOCK_REJECT_WARM_POSTGRES_ONLY") == "1":
         sys.exit(1)
+if name == "daia-pgvector-init-extension.py" and len(args) == 1:
+    if os.environ.get("MOCK_REJECT_WARM_POSTGRES_ONLY") == "1":
+        sys.exit(1)
 if failure == "final-network" and name == "daia-rag-verify-network":
     if len(args) == 4:
         sys.exit(1)
@@ -272,6 +275,32 @@ class RecoveryBehaviorTests(unittest.TestCase):
             or event.startswith("webui-start ")
             for event in events
         ))
+
+    def test_cold_initializes_staged_then_full(self):
+        result, events = self.execute()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        calls = [e for e in events if e.startswith(
+            "daia-pgvector-init-extension.py "
+        )]
+        self.assertEqual(calls, [
+            "daia-pgvector-init-extension.py " + "a"*64,
+            "daia-pgvector-init-extension.py " + "a"*64
+            + " " + "c"*64 + " " + "b"*64,
+        ])
+
+    def test_warm_initializes_only_with_full_rag_identities(self):
+        result, events = self.execute(
+            pg_active=True, pg_state="running",
+            tika_state="running", web_state="running",
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        calls = [e for e in events if e.startswith(
+            "daia-pgvector-init-extension.py "
+        )]
+        self.assertEqual(calls, [
+            "daia-pgvector-init-extension.py " + "a"*64
+            + " " + "c"*64 + " " + "b"*64,
+        ])
 
     def test_warm_full_auth_audit_failure_blocks_recovery(self):
         result, events = self.execute(
