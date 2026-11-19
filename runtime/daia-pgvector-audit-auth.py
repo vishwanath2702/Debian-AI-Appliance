@@ -154,15 +154,28 @@ def audit(container_id, runner=subprocess.run):
     return True
 
 
-def main(expected_id=None, postgres_only=False):
+def main(expected_id=None, postgres_only=False,
+         explicit_peers=None):
     try:
         if os.geteuid() != 0:
             raise AuditError("Root privileges required")
         validate_identity(expected_id)
         if postgres_only:
-            # Startup requires PostgreSQL-only runtime authorization.
-            # Full peer authorization remains mandatory after recovery.
+            # Preserve original PostgreSQL-only startup contract.
             authorized_id = authorize()
+        elif explicit_peers is not None:
+            webui_id, tika_id = explicit_peers
+            if not webui_id and not tika_id:
+                raise AuditError("Explicit peers must not be empty")
+            if webui_id:
+                validate_identity(webui_id)
+            if tika_id:
+                validate_identity(tika_id)
+            if webui_id and webui_id == tika_id:
+                raise AuditError("Duplicate peer identities")
+            authorized_id = authorize(
+                webui_id=webui_id, tika_id=tika_id
+            )
         else:
             webui_id, tika_id = trusted_rag_identities()
             authorized_id = authorize(
@@ -185,6 +198,11 @@ def main(expected_id=None, postgres_only=False):
 if __name__ == "__main__":
     if len(sys.argv) == 3 and sys.argv[1] == "--postgres-only":
         sys.exit(main(sys.argv[2], postgres_only=True))
+    elif len(sys.argv) == 5 and sys.argv[1] == "--peers":
+        pg_id, webui_id, tika_id = sys.argv[2:]
+        sys.exit(main(
+            pg_id, explicit_peers=(webui_id, tika_id)
+        ))
     elif len(sys.argv) == 2:
         sys.exit(main(sys.argv[1]))
     else:

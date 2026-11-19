@@ -38,10 +38,10 @@ if failure == "final-network" and name == "daia-rag-verify-network":
     if len(args) == 4:
         sys.exit(1)
 if failure == "reject-staged-network" and name == "daia-rag-verify-network":
-    if len(args) == 2:
+    if len(args) != 4:
         sys.exit(1)
 if failure == "reject-staged-network" and name == "daia-pgvector-authorize-start":
-    if args == ["runtime"]:
+    if args != ["runtime", "c"*64, "--tika-id", "b"*64]:
         sys.exit(1)
 if failure == name or failure == name + ":" + ":".join(args[:2]):
     sys.exit(1)
@@ -351,6 +351,51 @@ class RecoveryBehaviorTests(unittest.TestCase):
             or event.startswith("webui-start ")
             for event in events
         ))
+
+    def test_mixed_state_pg_and_tika_running_recovers(self):
+        result, events = self.execute(
+            pg_active=True,
+            pg_state="running",
+            tika_state="running",
+            web_state="stopped",
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse(any(
+            event.startswith("tika-start ") for event in events
+        ))
+        self.assertTrue(any(
+            event.startswith("webui-start ") for event in events
+        ))
+        self.assertIn(
+            "daia-pgvector-audit-auth.py --peers "
+            + "a"*64 + "  " + "b"*64,
+            events,
+        )
+        self.assertIn(
+            "daia-tika-register-container --verify-recovery-running "
+            + "b"*64,
+            events,
+        )
+
+    def test_mixed_state_pg_and_webui_running_recovers(self):
+        result, events = self.execute(
+            pg_active=True,
+            pg_state="running",
+            tika_state="stopped",
+            web_state="running",
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue(any(
+            event.startswith("tika-start ") for event in events
+        ))
+        self.assertFalse(any(
+            event.startswith("webui-start ") for event in events
+        ))
+        self.assertIn(
+            "daia-pgvector-audit-auth.py --peers "
+            + "a"*64 + " " + "c"*64 + " ",
+            events,
+        )
 
     def test_mixed_state_pg_and_tika_running_fails_closed(self):
         result, events = self.execute(

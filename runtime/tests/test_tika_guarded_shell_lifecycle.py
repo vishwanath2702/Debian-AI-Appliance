@@ -28,13 +28,15 @@ class TikaGuardedShellLifecycleTests(unittest.TestCase):
             'if mode == "--authorize-start" and '
             'os.environ.get("FAIL_AUTH") == "1":\n'
             '    sys.exit(1)\n'
-            'if mode == "--verify-running" and '
+            'if mode in ("--verify-running", '
+            '"--verify-recovery-running") and '
             'os.environ.get("FAIL_RUNNING") == "1":\n'
             '    sys.exit(1)\n'
             'if mode == "--verify-identity" and '
             'os.environ.get("FAIL_IDENTITY") == "1":\n'
             '    sys.exit(1)\n'
-            'if mode == "--verify-running" and '
+            'if mode in ("--verify-running", '
+            '"--verify-recovery-running") and '
             'os.environ.get("MISMATCH") == "1":\n'
             '    print("b" * 64)\n'
             'else:\n'
@@ -104,9 +106,23 @@ docker() {
         )
         self.assertLess(
             events.index("docker:start"),
-            events.index("helper:--verify-running"),
+            events.index("helper:--verify-recovery-running"),
         )
         self.assertNotIn("docker:stop", events)
+
+    def test_recovery_uses_distinct_verification(self):
+        result, events = self.execute(
+            'tika_start_registered "$CID"'
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("helper:--authorize-start", events)
+        self.assertIn("helper:--verify-recovery-running", events)
+        self.assertNotIn(
+            "helper:--authorize-provisioning-start", events
+        )
+        self.assertNotIn(
+            "helper:--verify-provisioning-running", events
+        )
 
     def test_authorization_failure_never_starts(self):
         result, events = self.execute(

@@ -99,6 +99,9 @@ docker() {
     return 0
 }
 openwebui_validate() { return 0; }
+openwebui_trusted_ollama_url() {
+    printf '%s\n' 'http://127.0.0.1:11434'
+}
 openwebui_prepare_rag() {
     echo prepare-rag >> "$ACTION_LOG"
     return 0

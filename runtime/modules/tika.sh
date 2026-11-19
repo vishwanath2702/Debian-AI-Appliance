@@ -165,7 +165,7 @@ tika_start_registered() {
     local container_id="${1:-}"
     local phase="${2:-recovery}"
     local authorize_mode="--authorize-start"
-    local verify_mode="--verify-running"
+    local verify_mode="--verify-recovery-running"
 
     if [[ "$phase" == "provisioning" ]]; then
         authorize_mode="--authorize-provisioning-start"

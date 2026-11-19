@@ -238,6 +238,61 @@ def inspect_running(container_id):
         raise PermissionError("Tika container is not safely running")
 
 
+
+def verify_recovery_network(container_id):
+    """Require exact registered PG/Tika or PG/Tika/WebUI membership."""
+    container_id = validate_container_id(container_id)
+    pg_id = validate_container_id(
+        read_trusted_registration("/var/lib/daia/pgvector")
+    )
+    webui_id = validate_container_id(
+        read_trusted_registration("/var/lib/daia/openwebui")
+    )
+
+    if len({pg_id, container_id, webui_id}) != 3:
+        raise PermissionError("Duplicate RAG identity")
+
+    alternatives = (
+        ["runtime", webui_id, "--tika-id", container_id],
+        ["runtime", "--tika-id", container_id],
+    )
+    for arguments in alternatives:
+        try:
+            result = subprocess.run(
+                ["/usr/libexec/daia-pgvector-authorize-start",
+                 *arguments],
+                capture_output=True, text=True,
+                check=False, timeout=30,
+            )
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            raise PermissionError(
+                "Recovery network authorization unavailable"
+            ) from exc
+
+        if result.returncode == 0:
+            if result.stdout != pg_id + "\n":
+                raise PermissionError("PostgreSQL identity mismatch")
+            return
+
+    raise PermissionError("Unauthorized recovery network membership")
+
+
+def verify_recovery_running(container_id):
+    """Verify registered Tika and recovery network twice."""
+    container_id = validate_container_id(container_id)
+    inspect_identity(container_id)
+    inspect_security(container_id)
+    inspect_mounts(container_id)
+    inspect_running(container_id)
+    verify_registered_container(container_id)
+    verify_recovery_network(container_id)
+
+    inspect_identity(container_id)
+    inspect_running(container_id)
+    verify_recovery_network(container_id)
+    return container_id
+
+
 def verify_runtime_network(container_id):
     """Require all registered RAG peers on the runtime network."""
     container_id = validate_container_id(container_id)
@@ -462,6 +517,7 @@ def main():
         "--verify-identity",
         "--authorize-start",
         "--verify-running",
+        "--verify-recovery-running",
         "--authorize-provisioning-start",
         "--verify-provisioning-running",
     ):
@@ -478,6 +534,7 @@ def main():
             "--verify-identity": verify_registered_identity,
             "--authorize-start": authorize_registered_start,
             "--verify-running": verify_registered_running,
+            "--verify-recovery-running": verify_recovery_running,
             "--authorize-provisioning-start": authorize_provisioning_start,
             "--verify-provisioning-running": verify_provisioning_running,
         }
