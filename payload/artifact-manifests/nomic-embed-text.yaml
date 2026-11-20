@@ -1,0 +1,7 @@
+schema_version: 1
+name: nomic-embed-text
+artifacts:
+  - source: payload/images/nomic-embed-text-ollama.tar
+    destination: opt/daia/payload/images/nomic-embed-text-ollama.tar
+    sha256: c7c5ab21092400fe75137ed90efa931aaf804000c9fca6e04ac9d809575a3ebd
+    mode: "0644"

@@ -79,6 +79,35 @@ realize_models()
 }
 
 ############################################################
+# install_offline_embedding_model
+############################################################
+
+install_offline_embedding_model()
+{
+    local config="/opt/daia/config/pragna.conf"
+    local helper="/usr/libexec/daia-install-embedding-model.py"
+
+    if [[ ! -r "$config" ]]; then
+        printf "ERROR: Missing Pragna configuration: %s\n" "$config" >&2
+        return 1
+    fi
+
+    # shellcheck source=/dev/null
+    source "$config"
+
+    if [[ "${DAIA_ENABLE_EMBEDDING_MODEL:-false}" != "true" ]]; then
+        return 0
+    fi
+
+    if [[ ! -x "$helper" ]]; then
+        printf "ERROR: Missing embedding installer: %s\n" "$helper" >&2
+        return 1
+    fi
+
+    "$helper"
+}
+
+############################################################
 # mark_firstboot_complete
 ############################################################
 
@@ -129,6 +158,7 @@ main()
     prepare_model_directory "$DAIA_STATE_DIRECTORY"
     run_runtime
     realize_models
+    install_offline_embedding_model
     enable_rag_recovery_service
     mark_firstboot_complete
     queue_rag_proxy_start

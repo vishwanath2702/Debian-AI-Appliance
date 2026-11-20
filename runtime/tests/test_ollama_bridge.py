@@ -159,6 +159,49 @@ class OllamaBridgeTests(unittest.TestCase):
             with self.assertRaises(PermissionError):
                 module.docker_json(["network", "inspect", module.NETWORK])
 
+    def test_authorized_relay_has_no_30_second_idle_timeout(self):
+        class FakeSocket:
+            def __init__(self):
+                self.timeouts = []
+                self.shutdowns = []
+                self.closed = False
+
+            def settimeout(self, value):
+                self.timeouts.append(value)
+
+            def recv(self, size):
+                return b""
+
+            def sendall(self, data):
+                pass
+
+            def shutdown(self, how):
+                self.shutdowns.append(how)
+
+            def close(self):
+                self.closed = True
+
+        client = FakeSocket()
+        upstream = FakeSocket()
+
+        with patch.object(
+            module, "trusted_endpoint",
+            return_value=("172.25.0.1", "172.25.0.4")
+        ), patch.object(
+            module.socket, "create_connection",
+            return_value=upstream
+        ) as connect:
+            module.Relay(
+                client,
+                ("172.25.0.4", 12345),
+                object(),
+            )
+
+        connect.assert_called_once_with(module.OLLAMA, timeout=10)
+        self.assertEqual(client.timeouts, [None])
+        self.assertEqual(upstream.timeouts, [None])
+        self.assertTrue(upstream.closed)
+
     def test_unauthorized_peer_never_reaches_ollama(self):
         class DummyRequest:
             pass

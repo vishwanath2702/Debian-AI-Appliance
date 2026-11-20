@@ -151,8 +151,11 @@ class Relay(socketserver.BaseRequestHandler):
             return
         sockets = (self.request, upstream)
         try:
+            # The upstream connect timeout is intentionally short.
+            # Established Ollama requests may legitimately remain idle
+            # for more than 30 seconds while a model processes input.
             for sock in sockets:
-                sock.settimeout(30)
+                sock.settimeout(None)
 
             def forward(source, destination):
                 try:

@@ -482,6 +482,17 @@ stage_runtime()
         "$DAIA_WORKSPACE/usr/libexec/daia-ollama-bridge.py" \
         0755 || return 1
 
+    if [[ ! -f "$DAIA_RUNTIME_SOURCE/daia-install-embedding-model.py" ]] ||
+       [[ -L "$DAIA_RUNTIME_SOURCE/daia-install-embedding-model.py" ]]; then
+        log_error "Required offline embedding installer is missing or unsafe"
+        return 1
+    fi
+
+    copy_file \
+        "$DAIA_RUNTIME_SOURCE/daia-install-embedding-model.py" \
+        "$DAIA_WORKSPACE/usr/libexec/daia-install-embedding-model.py" \
+        0755 || return 1
+
     copy_file \
         "$DAIA_RUNTIME_SOURCE/openwebui_trusted_imports.py" \
         "$DAIA_WORKSPACE/usr/libexec/openwebui_trusted_imports.py" \
@@ -1178,6 +1189,18 @@ stage_offline_components()
             "payload/images/tika-3.3.3.0.tar" \
             "opt/daia/payload/images/tika.tar" \
             "Apache Tika container image staged successfully." || return 1
+    fi
+
+    if [[ "$DAIA_ENABLE_EMBEDDING_MODEL" == "true" ]]
+    then
+        stage_verified_artifact \
+            "Nomic embedding model" \
+            "$PROJECT_ROOT/payload/artifact-manifests/nomic-embed-text.yaml" \
+            "$DAIA_EMBEDDING_MODEL_ARCHIVE_ABS" \
+            "$DAIA_EMBEDDING_MODEL_ARCHIVE_SHA256" \
+            "payload/images/nomic-embed-text-ollama.tar" \
+            "opt/daia/payload/images/nomic-embed-text-ollama.tar" \
+            "Nomic embedding model staged successfully." || return 1
     fi
 
     stage_directory_component \
