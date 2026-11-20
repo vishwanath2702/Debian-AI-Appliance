@@ -3,6 +3,12 @@ set -euo pipefail
 
 ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 
+# Interactive setup is available only for direct terminal use.
+# The build pipeline remains strictly noninteractive.
+if [[ "${DAIA_PREPARE_NONINTERACTIVE:-0}" != 1 && -t 0 && -t 1 ]]; then
+    exec python3 "$ROOT/build/prepare-laptop-wizard.py"
+fi
+
 # Read-only acquisition inventory; never grants consent.
 python3 "$ROOT/build/plan-laptop-acquisition.py"
 
