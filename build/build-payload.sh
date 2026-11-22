@@ -535,6 +535,40 @@ stage_runtime()
         "$DAIA_WORKSPACE/usr/libexec/daia-openwebui-rag-entrypoint.py" \
         0755
 
+    # Stage pinned Open WebUI middleware without modifying the image.
+    python3 "$PROJECT_ROOT/build/verify-openwebui-middleware.py" \
+        "$PROJECT_ROOT/payload/patches/open-webui/v0.13.0/patched-middleware.py" \
+        "$PROJECT_ROOT/payload/patches/open-webui/v0.13.0/builtin-tools-opt-in.json" \
+        || return 1
+
+    copy_file \
+        "$PROJECT_ROOT/payload/patches/open-webui/v0.13.0/patched-middleware.py" \
+        "$DAIA_WORKSPACE/usr/libexec/daia-openwebui-middleware.py" \
+        0644 || return 1
+
+    python3 "$PROJECT_ROOT/build/verify-openwebui-middleware.py" \
+        "$DAIA_WORKSPACE/usr/libexec/daia-openwebui-middleware.py" \
+        "$PROJECT_ROOT/payload/patches/open-webui/v0.13.0/builtin-tools-opt-in.json" \
+        || return 1
+
+    # Stage the independently pinned Open WebUI retrieval correction.
+    # This does not modify the original immutable Docker image.
+    python3 "$PROJECT_ROOT/build/verify-openwebui-rag-module.py" \
+        "$PROJECT_ROOT/payload/patches/open-webui/v0.13.0/patched-utils.py" \
+        "$PROJECT_ROOT/payload/patches/open-webui/v0.13.0/patched-utils.json" \
+        || return 1
+
+    copy_file \
+        "$PROJECT_ROOT/payload/patches/open-webui/v0.13.0/patched-utils.py" \
+        "$DAIA_WORKSPACE/usr/libexec/daia-openwebui-retrieval-utils.py" \
+        0644 || return 1
+
+    python3 "$PROJECT_ROOT/build/verify-openwebui-rag-module.py" \
+        "$DAIA_WORKSPACE/usr/libexec/daia-openwebui-retrieval-utils.py" \
+        "$PROJECT_ROOT/payload/patches/open-webui/v0.13.0/patched-utils.json" \
+        || return 1
+
+
     copy_file \
         "$DAIA_RUNTIME_SOURCE/daia-openwebui-rag-authorize" \
         "$DAIA_WORKSPACE/usr/libexec/daia-openwebui-rag-authorize" \

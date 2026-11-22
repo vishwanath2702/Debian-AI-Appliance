@@ -474,6 +474,24 @@ openwebui_install() {
         return 1
     fi
 
+    # Verify the pinned host retrieval module before creation.
+    # Registration and startup repeat the independent verification.
+    local retrieval_verifier="/usr/libexec/daia-openwebui-register-container"
+    if [[ "$EUID" -ne 0 ]] ||
+       [[ ! -f "$retrieval_verifier" || -L "$retrieval_verifier" ||
+          ! -x "$retrieval_verifier" ]] ||
+       ! "$retrieval_verifier" --verify-retrieval; then
+        echo "Open WebUI retrieval module verification failed" >&2
+        return 1
+    fi
+
+    # Verify the independently pinned middleware before container creation.
+    # Registration and startup repeat this check.
+    if ! "$retrieval_verifier" --verify-middleware; then
+        echo "Open WebUI middleware module verification failed" >&2
+        return 1
+    fi
+
     # Create only. Never start an unregistered container.
     if ! container_id="$(docker container create \
         --network daia-rag-internal \
@@ -486,6 +504,8 @@ openwebui_install() {
         --volume "${volume_name}:/app/backend/data" \
         --mount "type=bind,src=/var/lib/daia/pgvector/openwebui-password,dst=/run/secrets/daia-openwebui-pgvector-password,readonly" \
         --mount "type=bind,src=/usr/libexec/daia-openwebui-rag-entrypoint.py,dst=/usr/local/bin/daia-openwebui-rag-entrypoint.py,readonly" \
+        --mount "type=bind,src=/usr/libexec/daia-openwebui-retrieval-utils.py,dst=/app/backend/open_webui/retrieval/utils.py,readonly" \
+        --mount "type=bind,src=/usr/libexec/daia-openwebui-middleware.py,dst=/app/backend/open_webui/utils/middleware.py,readonly" \
         --env "OLLAMA_BASE_URL=${ollama_url}" \
         --name "$container_name" \
         --restart no \

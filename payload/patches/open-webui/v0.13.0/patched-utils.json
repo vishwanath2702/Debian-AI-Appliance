@@ -1,0 +1,13 @@
+{
+  "component": "open-webui-rag-retrieval",
+  "container_destination": "/app/backend/open_webui/retrieval/utils.py",
+  "installation_policy": "verified-readonly-bind-mount",
+  "patch_path": "payload/patches/open-webui/v0.13.0/retrieval-utils.patch",
+  "patch_sha256": "1e5eff168d385c34cc6e3938b6ad7b698b5b82436225f7e129adef92a265dc9c",
+  "patched_module_path": "payload/patches/open-webui/v0.13.0/patched-utils.py",
+  "patched_module_sha256": "13def3f76610d4e641f22866ef986b3842192f52ec3c241c02be8e51b3e0d932",
+  "schema_version": 1,
+  "upstream_source_path": "app/backend/open_webui/retrieval/utils.py",
+  "upstream_source_sha256": "a7ee18365d094a348839d85a77af259530693ba10dc4264f40c757e3755cadfa",
+  "upstream_version": "v0.13.0-slim"
+}

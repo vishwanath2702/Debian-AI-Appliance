@@ -38,10 +38,26 @@ ENTRYPOINT = (
 )
 
 
+RETRIEVAL = (
+    "bind||/usr/libexec/daia-openwebui-retrieval-utils.py|"
+    "/app/backend/open_webui/retrieval/utils.py|false"
+)
+
+
+MIDDLEWARE = (
+    "bind||/usr/libexec/daia-openwebui-middleware.py|"
+    "/app/backend/open_webui/utils/middleware.py|false"
+)
+
+
 class OpenWebUIMountInspectionTests(unittest.TestCase):
 
     def inspect(self, lines, *, fail=False, mountpoint=None,
-                volume_fail=False):
+                volume_fail=False, missing_retrieval=False,
+                 missing_middleware=False):
+        lines = list(lines)
+        if not missing_middleware:
+            lines.append(MIDDLEWARE)
         output = "\n".join(lines) + "\n"
         if mountpoint is None:
             mountpoint = "/var/lib/docker/volumes/open-webui/_data"
@@ -75,29 +91,97 @@ class OpenWebUIMountInspectionTests(unittest.TestCase):
             "run",
             side_effect=fake_run,
         ) as run:
-            registration.inspect_container_mounts(CONTAINER_ID)
+            import unittest.mock as integrity_mock
+            with integrity_mock.patch.object(
+                registration,
+                "verify_retrieval_module_integrity",
+                return_value=True,
+            ) as integrity_check:
+                with integrity_mock.patch.object(
+                    registration,
+                    "verify_middleware_module_integrity",
+                    return_value=True,
+                ) as middleware_check:
+                    registration.inspect_container_mounts(CONTAINER_ID)
+                    middleware_check.assert_called_once_with()
+                integrity_check.assert_called_once_with()
             self.assertEqual(run.call_count, 2)
 
-    def test_accepts_exact_three_mounts(self):
-        self.inspect([DATA, SECRET, ENTRYPOINT])
+    def test_accepts_exact_five_mounts(self):
+        self.inspect([DATA, SECRET, ENTRYPOINT, RETRIEVAL])
+
+    def test_rejects_missing_middleware(self):
+        with self.assertRaises(PermissionError):
+            self.inspect(
+                [DATA, SECRET, ENTRYPOINT, RETRIEVAL],
+                missing_middleware=True,
+            )
+
+    def test_rejects_writable_middleware(self):
+        with self.assertRaises(PermissionError):
+            self.inspect([
+                DATA, SECRET, ENTRYPOINT, RETRIEVAL,
+                MIDDLEWARE.replace("|false", "|true"),
+            ], missing_middleware=True)
+
+    def test_rejects_wrong_middleware_destination(self):
+        with self.assertRaises(PermissionError):
+            self.inspect([
+                DATA, SECRET, ENTRYPOINT, RETRIEVAL,
+                MIDDLEWARE.replace(
+                    "/open_webui/utils/middleware.py",
+                    "/open_webui/utils/other.py",
+                ),
+            ], missing_middleware=True)
+
+    def test_rejects_duplicate_middleware(self):
+        with self.assertRaises(PermissionError):
+            self.inspect([
+                DATA, SECRET, ENTRYPOINT, RETRIEVAL,
+                MIDDLEWARE, MIDDLEWARE,
+            ], missing_middleware=True)
 
     def test_accepts_different_mount_order(self):
-        self.inspect([ENTRYPOINT, DATA, SECRET])
+        self.inspect([ENTRYPOINT, DATA, SECRET, RETRIEVAL])
+
+    def test_rejects_missing_retrieval_module(self):
+        with self.assertRaises(PermissionError):
+            self.inspect(
+                [DATA, SECRET, ENTRYPOINT],
+                missing_retrieval=True,
+            )
+
+    def test_rejects_writable_retrieval_module(self):
+        with self.assertRaises(PermissionError):
+            self.inspect([
+                DATA, SECRET, ENTRYPOINT,
+                RETRIEVAL.replace("|false", "|true"),
+            ])
+
+    def test_rejects_wrong_retrieval_destination(self):
+        with self.assertRaises(PermissionError):
+            self.inspect([
+                DATA, SECRET, ENTRYPOINT,
+                RETRIEVAL.replace(
+                    "/open_webui/retrieval/utils.py",
+                    "/open_webui/retrieval/other.py",
+                ),
+            ])
 
     def test_rejects_missing_mount(self):
         with self.assertRaises(PermissionError):
-            self.inspect([DATA, SECRET])
+            self.inspect([DATA, SECRET, RETRIEVAL])
 
     def test_rejects_extra_mount(self):
         with self.assertRaises(PermissionError):
             self.inspect([
                 DATA, SECRET, ENTRYPOINT,
                 "bind||/tmp/extra|/tmp/extra|false",
-            ])
+             RETRIEVAL])
 
     def test_rejects_duplicate_mount(self):
         with self.assertRaises(PermissionError):
-            self.inspect([DATA, SECRET, SECRET])
+            self.inspect([DATA, SECRET, SECRET, RETRIEVAL])
 
     def test_rejects_writable_secret(self):
         with self.assertRaises(PermissionError):
@@ -105,28 +189,28 @@ class OpenWebUIMountInspectionTests(unittest.TestCase):
                 DATA,
                 SECRET.replace("|false", "|true"),
                 ENTRYPOINT,
-            ])
+             RETRIEVAL])
 
     def test_rejects_writable_entrypoint(self):
         with self.assertRaises(PermissionError):
             self.inspect([
                 DATA, SECRET,
                 ENTRYPOINT.replace("|false", "|true"),
-            ])
+             RETRIEVAL])
 
     def test_rejects_readonly_data_volume(self):
         with self.assertRaises(PermissionError):
             self.inspect([
                 DATA.replace("|true", "|false"),
                 SECRET, ENTRYPOINT,
-            ])
+             RETRIEVAL])
 
     def test_rejects_wrong_volume_name(self):
         with self.assertRaises(PermissionError):
             self.inspect([
                 DATA.replace("volume|open-webui|", "volume|other|"),
                 SECRET, ENTRYPOINT,
-            ])
+             RETRIEVAL])
 
     def test_rejects_wrong_volume_source(self):
         with self.assertRaises(PermissionError):
@@ -136,7 +220,7 @@ class OpenWebUIMountInspectionTests(unittest.TestCase):
                     "/tmp/untrusted",
                 ),
                 SECRET, ENTRYPOINT,
-            ])
+             RETRIEVAL])
 
     def test_rejects_wrong_secret_source(self):
         with self.assertRaises(PermissionError):
@@ -147,7 +231,7 @@ class OpenWebUIMountInspectionTests(unittest.TestCase):
                     "/tmp/password",
                 ),
                 ENTRYPOINT,
-            ])
+             RETRIEVAL])
 
     def test_rejects_wrong_entrypoint_source(self):
         with self.assertRaises(PermissionError):
@@ -157,17 +241,17 @@ class OpenWebUIMountInspectionTests(unittest.TestCase):
                     "/usr/libexec/daia-openwebui-rag-entrypoint.py",
                     "/tmp/entrypoint.py",
                 ),
-            ])
+             RETRIEVAL])
 
     def test_rejects_malformed_data_mount(self):
         with self.assertRaises(PermissionError):
             self.inspect([
                 DATA + "|extra", SECRET, ENTRYPOINT,
-            ])
+             RETRIEVAL])
 
     def test_rejects_docker_inspection_failure(self):
         with self.assertRaises(subprocess.CalledProcessError):
-            self.inspect([DATA, SECRET, ENTRYPOINT], fail=True)
+            self.inspect([DATA, SECRET, ENTRYPOINT, RETRIEVAL], fail=True)
 
     def test_accepts_nondefault_docker_storage_root(self):
         alternate = "/srv/daia-docker/volumes/open-webui/_data"
@@ -175,21 +259,21 @@ class OpenWebUIMountInspectionTests(unittest.TestCase):
             [DATA.replace(
                 "/var/lib/docker/volumes/open-webui/_data",
                 alternate,
-            ), SECRET, ENTRYPOINT],
+            ), SECRET, ENTRYPOINT, RETRIEVAL],
             mountpoint=alternate,
         )
 
     def test_rejects_mountpoint_mismatch(self):
         with self.assertRaises(PermissionError):
             self.inspect(
-                [DATA, SECRET, ENTRYPOINT],
+                [DATA, SECRET, ENTRYPOINT, RETRIEVAL],
                 mountpoint="/srv/untrusted/open-webui",
             )
 
     def test_rejects_volume_inspection_failure(self):
         with self.assertRaises(subprocess.CalledProcessError):
             self.inspect(
-                [DATA, SECRET, ENTRYPOINT],
+                [DATA, SECRET, ENTRYPOINT, RETRIEVAL],
                 volume_fail=True,
             )
 
@@ -199,7 +283,7 @@ class OpenWebUIMountInspectionTests(unittest.TestCase):
                 [DATA.replace(
                     "/var/lib/docker/volumes/open-webui/_data",
                     "/",
-                ), SECRET, ENTRYPOINT],
+                ), SECRET, ENTRYPOINT, RETRIEVAL],
                 mountpoint="/",
             )
 

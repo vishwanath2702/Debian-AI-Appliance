@@ -26,6 +26,20 @@ class OpenWebUIRAGLaunchTests(unittest.TestCase):
             self.source,
         )
 
+    def test_retrieval_module_mounted_read_only(self):
+        self.assertIn(
+            "src=/usr/libexec/daia-openwebui-retrieval-utils.py,"
+            "dst=/app/backend/open_webui/retrieval/utils.py,readonly",
+            self.source,
+        )
+
+    def test_middleware_module_mounted_read_only(self):
+        self.assertIn(
+            "src=/usr/libexec/daia-openwebui-middleware.py,"
+            "dst=/app/backend/open_webui/utils/middleware.py,readonly",
+            self.source,
+        )
+
     def test_wrapper_replaces_original_command(self):
         self.assertIn(
             '"$expected_image" \\\n'

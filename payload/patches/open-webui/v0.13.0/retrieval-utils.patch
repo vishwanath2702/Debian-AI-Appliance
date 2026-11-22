@@ -1,0 +1,162 @@
+--- a/app/backend/open_webui/retrieval/utils.py
++++ b/app/backend/open_webui/retrieval/utils.py
+@@ -64,13 +64,121 @@
+ from langchain_core.retrievers import BaseRetriever
+ 
+ 
++
++def daia_bm25_tokens(text: str) -> list[str]:
++    """Normalize lexical tokens, preserving technical identifiers."""
++    import re
++    return re.findall(
++        r"[^\W_]+(?:[-_.][^\W_]+)*",
++        text.casefold(),
++    )
++
++
++
++def daia_bm25_query_tokens(query: str) -> list[str]:
++    """Focus explicit exact-term requests; preserve normal queries."""
++    import re
++
++    patterns = (
++        r"\bexact\s+(?:word|term|identifier)\s+"
++        r"['\"`]?([A-Za-z][A-Za-z0-9_.-]*)",
++        r"\bfind\s+(?:the\s+)?(?:word|term|identifier)\s+"
++        r"['\"`]?([A-Za-z][A-Za-z0-9_.-]*)",
++    )
++    for pattern in patterns:
++        match = re.search(pattern, query, re.IGNORECASE)
++        if match:
++            return daia_bm25_tokens(match.group(1))
++    return daia_bm25_tokens(query)
++
++
++
++def daia_prioritize_exact_matches(docs_with_scores, query, original_text_by_hash):
++    """Preserve literal evidence without changing scores or result limits."""
++    import re
++
++    if not original_text_by_hash:
++        return docs_with_scores
++
++    patterns = (
++        r"\bexact\s+(?:word|term|identifier)\s+",
++        r"\bfind\s+(?:the\s+)?(?:word|term|identifier)\s+",
++    )
++    identifier = None
++
++    for pattern in patterns:
++        match = re.search(
++            pattern + r"['\x22`]?([A-Za-z][A-Za-z0-9_.-]*)",
++            query,
++            re.IGNORECASE,
++        )
++        if match:
++            identifier = match.group(1).casefold()
++            break
++
++    if identifier is None:
++        return docs_with_scores
++
++    def matches_original(item):
++        document, _score = item
++        chunk_hash = document.metadata.get(CHUNK_HASH_KEY)
++        original = original_text_by_hash.get(chunk_hash, "")
++        return identifier in daia_bm25_tokens(original)
++
++    matching = [item for item in docs_with_scores if matches_original(item)]
++    others = [item for item in docs_with_scores if not matches_original(item)]
++
++    # Only quotation/sentence requests need passage-quality ordering.
++    # Preserve the existing similarity ordering for other exact searches.
++    wants_passage = bool(
++        re.search(r"\b(?:quote|quotation|sentence)\b", query, re.IGNORECASE)
++    )
++    if not wants_passage:
++        return matching + others
++
++    def passage_quality(item):
++        document, _score = item
++        original = original_text_by_hash.get(
++            document.metadata.get(CHUNK_HASH_KEY), ""
++        )
++        # Find identifier occurrences with technical-token boundaries.
++        occurrences = list(re.finditer(
++            r"(?<![\w.-])" + re.escape(identifier) + r"(?![\w.-])",
++            original,
++            re.IGNORECASE,
++        ))
++        if not occurrences:
++            return 0
++
++        best = 0
++        for occurrence in occurrences:
++            left = max(0, occurrence.start() - 120)
++            right = min(len(original), occurrence.end() + 120)
++            context = original[left:right]
++            words = re.findall(r"\b[\w]+\b", context)
++            prose_words = [
++                word for word in words
++                if len(word) >= 3 and word.casefold() != identifier
++            ]
++            # Substantive surrounding prose is more useful for a quote
++            # than a bare identifier, link, or index entry.
++            quality = min(len(prose_words), 20)
++            if re.search(r"[.!?]", context):
++                quality += 5
++            best = max(best, quality)
++        return best
++
++    matching = sorted(matching, key=passage_quality, reverse=True)
++    return matching + others
++
++
+ class BM25Retriever(BaseRetriever):
+     docs: list[Document]
+     vectorizer: Any
+     k: int
+ 
+     def _get_relevant_documents(self, query: str, *, run_manager: CallbackManagerForRetrieverRun) -> list[Document]:
+-        return self.vectorizer.get_top_n(query.split(), self.docs, n=self.k)
++        return self.vectorizer.get_top_n(daia_bm25_query_tokens(query), self.docs, n=self.k)
+ 
+ 
+ def is_youtube_url(url: str) -> bool:
+@@ -532,7 +640,7 @@
+ 
+     bm25_retriever = BM25Retriever(
+         docs=[Document(page_content=text, metadata=meta) for text, meta in zip(bm25_texts, bm25_metadatas)],
+-        vectorizer=BM25Okapi([text.split() for text in bm25_texts]),
++        vectorizer=BM25Okapi([daia_bm25_tokens(text) for text in bm25_texts]),
+         k=k,
+     )
+ 
+@@ -567,6 +675,9 @@
+         top_n=k_reranker,
+         reranking_function=reranking_function,
+         r_score=r,
++        original_text_by_hash={
++            _content_hash(text): text for text in original_texts
++        },
+     )
+ 
+     compression_retriever = ContextualCompressionRetriever(
+@@ -1823,6 +1934,7 @@
+     top_n: int
+     reranking_function: Any
+     r_score: float
++    original_text_by_hash: Optional[dict[str, str]] = None
+ 
+     class Config:
+         extra = 'forbid'
+@@ -1879,6 +1991,9 @@
+                 docs_with_scores = [(d, s) for d, s in docs_with_scores if s >= self.r_score]
+ 
+             result = sorted(docs_with_scores, key=operator.itemgetter(1), reverse=True)
++            result = daia_prioritize_exact_matches(
++                result, query, self.original_text_by_hash
++            )
+             final_results = []
+             for doc, doc_score in result[: self.top_n]:
+                 metadata = doc.metadata

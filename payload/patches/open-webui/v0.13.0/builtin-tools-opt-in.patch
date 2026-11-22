@@ -1,0 +1,11 @@
+--- a/app/backend/open_webui/utils/middleware.py
++++ b/app/backend/open_webui/utils/middleware.py
+@@ -2110,7 +2110,7 @@
+     use_builtin_tools = is_note_chat or (
+         bool(metadata.get('session_id'))
+         and metadata.get('params', {}).get('function_calling') != 'legacy'
+-        and (model.get('info', {}).get('meta', {}).get('capabilities') or {}).get('builtin_tools', True)
++        and (model.get('info', {}).get('meta', {}).get('capabilities') or {}).get('builtin_tools', False)
+     )
+     metadata['include_file_context'] = bool(
+         chat and chat.user_id == user.id and payload_tools is None and use_builtin_tools

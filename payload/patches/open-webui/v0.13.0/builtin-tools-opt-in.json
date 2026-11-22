@@ -1,0 +1,14 @@
+{
+  "component": "open-webui-builtin-tools-opt-in",
+  "deployment_status": "staged-not-active",
+  "explicit_model_capability_preserved": true,
+  "internal_note_exception_preserved": true,
+  "patch_path": "payload/patches/open-webui/v0.13.0/builtin-tools-opt-in.patch",
+  "patch_sha256": "a0722a91b10086bea53a86b4ca37dca68c7be699de9c2be134e55b661f1e0aa4",
+  "patched_module_sha256": "a8b1bb595fdbb0bc3cfeb8600e16b59c694f88b2163244fed0342cee46ad93b8",
+  "policy": "unspecified-builtin-tools-disabled",
+  "schema_version": 1,
+  "upstream_source_path": "app/backend/open_webui/utils/middleware.py",
+  "upstream_source_sha256": "4690426bc77f0626cfe5781f333a7fa05725d6d21b7f4cbbe6c192124854b602",
+  "upstream_version": "v0.13.0-slim"
+}
