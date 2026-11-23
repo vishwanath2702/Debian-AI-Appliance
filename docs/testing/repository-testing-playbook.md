@@ -79,3 +79,19 @@ Open a GitHub issue with:
 - RTX/Nouveau compatibility and other Loom appliance profiles are outside the confirmed laptop validation scope.
 
 See the repository [README](../../README.md) for project scope and status. Update this playbook as the public build interface and physical laptop test results are verified.
+
+## November 23, 2026 — Pragna documentation checkpoint
+
+The SearXNG source-control checkpoint is `cb27b8df`.
+Selected automated verification passed 599 tests across 51 suites.
+
+Before declaring the integration deployment-verified, build a
+new ISO only after explicit approval, then test Live USB boot,
+installation, networking, firstboot completion, SearXNG search,
+Open WebUI, PostgreSQL/pgvector, Tika, and recovery after reboot.
+
+Verify that internal RAG isolation is maintained and that
+web-search access does not bypass the intended trust boundary.
+
+Repository tests and local offline-archive presence are not
+substitutes for installed-laptop verification.

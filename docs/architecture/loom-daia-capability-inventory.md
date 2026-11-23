@@ -119,3 +119,22 @@ The next source review should establish:
 - [Engineering Blueprint](https://github.com/vishwanath2702/Debian-AI-Appliance/blob/master/docs/architecture/engineering-blueprint.md)
 
 **Conclusion:** Loom and DAIA have substantial source-level implementation across construction, installation and runtime management. A complete capability maturity assessment requires further evidence, particularly tests, physical installation results and operational integration checks.
+
+## November 23, 2026 — Pragna documentation checkpoint
+
+Loom supplies the shared appliance-building and installation
+foundation. Pragna is the AI appliance built using that foundation.
+
+Pragna's RAG stack combines Open WebUI, Ollama,
+PostgreSQL/pgvector, Apache Tika, and embeddings. SearXNG adds
+a separate web-search capability.
+
+The SearXNG integration uses trusted configuration, registered
+container identity, firstboot provisioning, network verification,
+and recovery checks. Firstboot provisioning precedes the
+completion marker.
+
+These capabilities have repository-level verification, but
+the newly integrated stack still requires ISO and physical-laptop
+validation. Backup and restore remain architectural requirements,
+not capabilities certified by this checkpoint.

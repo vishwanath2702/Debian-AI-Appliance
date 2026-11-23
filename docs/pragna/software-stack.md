@@ -130,3 +130,68 @@ Passing source-level tests does not replace these checks.
 
 See the [main README](../../README.md) for Loom and
 its appliance ecosystem.
+
+## November 23, 2026 — Pragna documentation checkpoint
+
+Pragna combines a Debian desktop with local AI, document retrieval,
+and separately controlled web search. The descriptions below explain
+each component's purpose. Declared configuration does not by itself
+prove successful deployment on a newly installed laptop.
+
+### Operating system and appliance construction
+
+| Software | Purpose in Pragna |
+| --- | --- |
+| **Debian 13** | Provides the Linux operating system, packages, and stable base for the appliance. |
+| **KDE Plasma** | Provides the graphical desktop, system settings, and everyday user interface. |
+| **Loom** | Builds and installs Pragna from appliance definitions and reusable installation components. |
+| **systemd** | Manages system services, firstboot initialization, and recovery startup. |
+| **NetworkManager** | Manages wired and wireless network connections on supported hardware. |
+
+### Local AI and model management
+
+| Software | Purpose in Pragna |
+| --- | --- |
+| **Ollama** | Runs local language and embedding models, allowing inference without a cloud AI service. |
+| **Open WebUI** | Provides the browser-based interface for chatting with models and working with documents. |
+| **Model Manager** | Provides graphical workflows for importing, managing, and benchmarking local models. |
+| **WhichLLM** | Helps assess which models suit the available hardware; model selection remains user-controlled. |
+
+### Documents, knowledge retrieval, and web search
+
+| Software | Purpose in Pragna |
+| --- | --- |
+| **PostgreSQL 17** | Provides persistent database storage for the document-retrieval infrastructure. |
+| **pgvector** | Extends PostgreSQL with vector similarity search for finding semantically relevant information. |
+| **Apache Tika 3.3.3.0** | Extracts text and metadata from documents before they enter retrieval workflows. |
+| **nomic-embed-text** | Converts text into numerical embeddings used to compare document meaning. |
+| **SearXNG** | Provides web-search results through a separately controlled service, without merging web access into the internal RAG network. |
+| **Docker** | Runs and isolates containerized components such as Open WebUI, PostgreSQL/pgvector, Tika, and SearXNG. |
+
+### How the components work together
+
+For document-based questions, Tika extracts document text, an
+embedding model represents that text numerically, and pgvector
+supports similarity retrieval from PostgreSQL. Open WebUI presents
+the interaction while Ollama runs local AI models.
+
+For web-based questions, SearXNG provides a separate search path.
+Web search and private document retrieval have different trust and
+network boundaries. The secure full-page web-fetch proxy remains
+deferred; the working configuration uses search-result snippets.
+
+### Versions and verification
+
+The declared build configuration targets Debian 13, amd64, KDE,
+Open WebUI `v0.13.0-slim`, pgvector `pg17`, Tika `3.3.3.0`,
+and a pinned SearXNG image. Exact versions of other components
+should be confirmed from package manifests or installed-system
+evidence rather than assumed.
+
+SearXNG firstboot provisioning and registered recovery are
+implemented. The selected integration verification passed
+599 tests across 51 suites. Fresh ISO construction, USB boot,
+installation, and complete laptop validation remain outstanding.
+
+This is a **declared software-stack description**, not a certified
+installed-system software bill of materials.

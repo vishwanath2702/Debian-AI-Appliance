@@ -127,3 +127,18 @@ The operating system is intended to be rebuildable, with user data and configura
 **One Loom engine. One shared installation foundation. Many independent appliances.**
 
 The goal is not another general-purpose Linux distribution, but a practical way to build reproducible, purpose-built Debian appliances.
+
+## November 23, 2026 — Pragna documentation checkpoint
+
+Pragna is Loom's Debian 13 / KDE AI appliance. Its declared stack
+includes Ollama, Open WebUI, PostgreSQL/pgvector, Apache Tika,
+SearXNG, and an offline embedding-model artifact.
+
+SearXNG firstboot and recovery integration passed 599 selected
+automated tests across 51 suites. A newly built ISO has not yet
+been validated on the laptop.
+
+For a plain-English explanation of the components, see the
+[Pragna software stack](docs/pragna/software-stack.md).
+The [engineering census](docs/project-census.md) records build
+artifacts and verification evidence.

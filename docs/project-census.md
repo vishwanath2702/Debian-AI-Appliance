@@ -297,3 +297,32 @@ a separately executed, documented measurement.
 
 Publish a new dated census at major milestones. Preserve older
 snapshots rather than silently rewriting historical measurements.
+
+## November 23, 2026 — Pragna documentation checkpoint
+
+This checkpoint records the SearXNG integration and the
+subsequent read-only repository inventory.
+
+- Git commit: `cb27b8df`, verified on `origin/master`.
+- SearXNG commit: 83 files changed.
+- Selected verification: 599 tests passed across 51 suites.
+- Documentation inventory: 39 files in the inspection scope.
+- Five declared offline artifacts were present locally.
+- Six unrelated untracked development files were preserved.
+
+### Offline artifact inventory
+
+| Artifact | Observed size (bytes) |
+| --- | ---: |
+| `open-webui-v0.13.0-slim.tar` | 624,397,824 |
+| `pgvector-pg17.tar` | 450,816,000 |
+| `tika-3.3.3.0.tar` | 401,518,080 |
+| `searxng-amd64.tar` | 284,349,440 |
+| `nomic-embed-text-ollama.tar` | 274,309,120 |
+
+The archive manifests declare checksums. The inventory recorded
+presence and size but did not independently recompute every hash.
+
+These are repository and build-workspace observations, not an
+installed-laptop software census. Historical census measurements
+above remain unchanged.
