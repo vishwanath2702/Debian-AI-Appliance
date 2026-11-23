@@ -146,3 +146,49 @@ files at two historical revisions.
   25,451 insertions and 115 deletions.
 - These measurements do not establish installed-laptop behavior
   or ISO validation status.
+
+## November 24, 2026 — Timestamped engineering census
+
+**Measurement timestamp:** `2026-11-24T03:00:46.172332+05:30` (IST)
+
+**Git revision:** `6bbebd965d5927ce11c29c43c63373695ac307e7` (`master`)
+
+**Method:** Read-only scan of tracked, existing, nonsymlink source/config files
+using selected filename extensions. Counts are approximate where based on
+regular-expression matching. Untracked files and generated build outputs
+are excluded. Tracked working tree was clean; no files were skipped.
+
+| Metric | November 24 measurement |
+|---|---:|
+| Tracked source/config files | 474 |
+| Total lines | 165,987 |
+| Nonblank lines | 135,276 |
+| Python functions (approx.) | 2,758 |
+| Rust functions (approx.) | 3,261 |
+| Shell functions (approx.) | 254 |
+| Python test definitions | 1,874 |
+| Rust test attributes | 1,674 |
+| Test-related files | 207 |
+
+### File-type breakdown
+
+| Type | Files | Lines |
+|---|---:|---:|
+| JSON | 5 | 127 |
+| JavaScript | 1 | 172 |
+| Markdown | 39 | 26,486 |
+| Python | 251 | 51,369 |
+| Rust | 102 | 73,768 |
+| Shell | 43 | 13,464 |
+| Systemd | 7 | 166 |
+| TOML | 14 | 264 |
+| YAML | 12 | 171 |
+
+**Comparability note:** This snapshot uses the Step 1423 scanner.
+Its extension selection and Rust-function matching are not identical
+to the November 18–23 comparison scanner. Differences in totals,
+including the 474-versus-475 file count, must not be interpreted as
+code changes without a like-for-like recount.
+
+**Verification:** Step 1423 PASS; skipped files: 0.
+No ISO build, source edit, commit, or push was performed by the census scan.
