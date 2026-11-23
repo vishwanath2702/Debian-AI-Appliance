@@ -83,6 +83,7 @@ The operating system is intended to be rebuildable, with user data and configura
 
 ## Documentation
 
+- [Architecture documentation index](docs/architecture/README.md)
 - [Repository testing playbook — online preparation, offline assets, Live USB and installation tests](docs/testing/repository-testing-playbook.md)
 - [Product overview and architecture](docs/architecture/loom-daia-product-overview.md)
 - [Capability inventory and verification status](docs/architecture/loom-daia-capability-inventory.md)
