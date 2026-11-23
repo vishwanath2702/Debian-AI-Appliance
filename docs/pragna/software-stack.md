@@ -9,69 +9,205 @@ component has passed physical laptop integration testing.
 
 ## Operating system and desktop
 
-| Component | Role |
-| --- | --- |
-| Debian 13 (Trixie) | Operating system foundation |
-| KDE Plasma | Graphical desktop environment |
-| NetworkManager / Plasma NM | Network connectivity |
-| Debian firmware packages | Hardware and wireless support |
-| APT and Debian backports | Package management and updates |
+### Debian 13 (Trixie)
+Debian is the Linux operating system on which Pragna is built.
+It supplies the core system, security updates, package repositories,
+and compatibility foundation for the appliance.
 
-## Installation wizard
+### KDE Plasma
+KDE Plasma provides Pragna's graphical desktop. It gives users
+windows, application launchers, system settings, and a familiar
+environment for everyday computing and AI applications.
 
-| Component | Role |
-| --- | --- |
-| Rust | Implementation language for the installation wizard and installer engine |
-| Ratatui 0.29 | Terminal-based installation wizard interface |
-| Crossterm 0.28 | Terminal interaction and keyboard input |
-| Loom / DAIA TUI crate | Wizard screens, navigation and input handling |
-| Loom application crate | Installer application state and configuration |
-| Loom model crate | Appliance identity and configuration models |
-| Loom installation engine | Installation planning and execution |
+### NetworkManager and Plasma NM
+NetworkManager manages wired and wireless network connections.
+Plasma NM integrates those controls into KDE so users can select
+Wi-Fi networks and manage connections from the desktop.
 
-The installer uses a keyboard-driven terminal interface rather
-than a GTK or Qt graphical wizard. Its Rust implementation is
-separate from the KDE Plasma desktop environment.
+### Debian firmware packages
+Firmware provides low-level code needed by supported hardware,
+including some Wi-Fi and Bluetooth devices. Pragna includes
+firmware support to improve hardware compatibility, although
+individual devices still require testing.
 
-## AI inference and model management
+### APT and Debian backports
+APT installs, updates, and manages Debian software packages.
+Backports can provide selected newer packages while retaining
+Debian stable as the operating-system foundation. Availability
+and use of backports depend on the build configuration.
 
-| Component | Role |
-| --- | --- |
-| Ollama | Local language-model inference |
-| Open WebUI | Browser-based AI interface |
-| DAIA Model Manager | Local model management and importing |
-| WhichLLM | Hardware-aware model selection support |
-| GGUF | Portable model format supported by the importer |
+### SDDM
+SDDM is the graphical login manager used with KDE Plasma.
+It presents the login screen and starts the selected desktop
+session.
 
-Model benchmarking and model portability are part of the
-Pragna appliance design.
+## Appliance construction and installation
 
-## Document processing and RAG
+### Loom
+Loom is the Rust-based appliance builder. It combines package
+definitions, configuration, services, installation workflows,
+and reusable capabilities to construct Pragna and other planned
+Debian appliances.
 
-| Component | Role |
-| --- | --- |
-| PostgreSQL 17 | Persistent database |
-| pgvector | Vector similarity search |
-| Apache Tika | Document text and metadata extraction |
-| Open WebUI Slim | User-facing document and AI interaction |
+### Rust
+Rust is the programming language used for Loom's engine and
+installation wizard. Its type and memory-safety features support
+the development of reliable system-management software.
 
-The intended integration supports document ingestion,
-retrieval-augmented generation and local inference.
+### Ratatui 0.29
+Ratatui is the terminal user-interface library used by the
+installation wizard. It renders interactive screens without
+requiring a graphical desktop to be running.
 
-End-to-end document ingestion and retrieval must be verified
-on the installed appliance.
+### Crossterm 0.28
+Crossterm handles terminal input and interaction for the
+installer, including keyboard events and terminal behavior.
+It works alongside Ratatui.
 
-## Appliance runtime
+### Loom TUI crate
+This project component implements the installation wizard's
+screens, navigation, and user interaction. It is internal Loom
+software rather than a separate third-party application.
 
-| Component | Role |
-| --- | --- |
-| Docker | Containerized application services |
-| systemd | Service lifecycle management |
-| Loom / DAIA Rust engine | Appliance build and installation |
-| Firstboot runtime modules | Provisioning and registration |
+### Loom application crate
+The application crate coordinates installer state and
+configuration, connecting user decisions with the underlying
+installation workflow.
 
-Pragna uses guarded provisioning and recovery boundaries
-for managed services.
+### Loom model crate
+The model crate defines the data structures used to represent
+appliance identity, configuration, and other installation inputs.
+
+### Loom installation engine
+The installation engine plans and executes the work needed
+to install the selected appliance. Its implementation and
+verification are separate from the terminal interface.
+
+## Local AI and model management
+
+### Ollama
+Ollama runs AI models locally on Pragna. It supplies model
+inference to applications such as Open WebUI and can operate
+without a cloud AI service when the required models are present.
+
+### Open WebUI
+Open WebUI is the browser-based interface for interacting with
+local AI models. It supports conversations and document-related
+workflows and connects to services such as Ollama and Pragna's
+retrieval infrastructure.
+
+### DAIA Model Manager
+Model Manager is Pragna's graphical tool for working with local
+AI models. Its development includes importing, inventory
+management, and benchmarking so users can manage models without
+relying entirely on terminal commands.
+
+### WhichLLM
+WhichLLM helps assess whether AI models are suitable for the
+available hardware. Its role is advisory: users retain control
+over model selection rather than having models chosen
+automatically.
+
+### GGUF
+GGUF is a model-file format, not a running service. It is
+important to Pragna because the model importer supports
+portable GGUF model files for local use and transfer.
+
+## Documents, knowledge retrieval, and web search
+
+### PostgreSQL 17
+PostgreSQL is a relational database system. Pragna uses it as
+persistent storage for its document-retrieval infrastructure,
+rather than treating all knowledge data as disposable
+container state.
+
+### pgvector
+pgvector is a PostgreSQL extension that stores and searches
+numerical vectors. It supports similarity searches used to
+find document passages related to a user's question.
+
+### Apache Tika 3.3.3.0
+Apache Tika extracts text and metadata from documents.
+It helps turn supported document formats into content that
+can be processed for indexing and retrieval.
+
+### nomic-embed-text
+nomic-embed-text is an embedding model supplied as an offline
+Ollama artifact. It converts text into numerical representations
+that can be compared during semantic document retrieval.
+
+### SearXNG
+SearXNG is a metasearch engine that gathers web-search results
+from search providers. Pragna uses it for web-search capability
+through a separately controlled service, keeping that path
+distinct from private document retrieval.
+
+The currently tested web-search arrangement uses result
+snippets. A secure full-page fetching proxy is deferred.
+
+## Container and system services
+
+### Docker
+Docker runs application services in containers. Pragna uses
+containerized deployment for components such as Open WebUI,
+PostgreSQL/pgvector, Apache Tika, and SearXNG, with controlled
+network and storage configuration.
+
+### containerd
+containerd is part of the container runtime infrastructure
+used by Docker. It helps manage the underlying container
+execution lifecycle.
+
+### systemd
+systemd manages Linux services and their startup ordering.
+Pragna uses it to control services, firstboot operations,
+and recovery-related dependencies.
+
+### Firstboot runtime modules
+These are Pragna's own initialization programs rather than
+a third-party product. They configure and register managed
+services after installation and enforce startup prerequisites.
+
+### RAG recovery services
+Pragna's recovery helpers check registered service identities
+and required dependencies before restoring managed RAG
+services. Their purpose is to recover safely without blindly
+trusting arbitrary containers.
+
+## How the software works together
+
+For local AI conversations, Open WebUI provides the interface
+and Ollama runs the selected model.
+
+For document questions, Apache Tika extracts text, an embedding
+model converts text into vectors, and PostgreSQL with pgvector
+supports similarity retrieval. The retrieved information can
+then help the AI model answer the question.
+
+For web questions, SearXNG supplies a separate search path.
+Private retrieval and external web search must retain their
+respective security and network boundaries.
+
+Loom builds and installs the appliance, while Debian, KDE,
+Docker, and systemd provide its operating environment.
+
+## Declared versions and verification
+
+The Pragna configuration declares Debian 13 on amd64 with KDE,
+Open WebUI `v0.13.0-slim`, pgvector `pg17`, Apache Tika
+`3.3.3.0`, a pinned SearXNG image, and an offline
+nomic-embed-text artifact.
+
+Other exact versions must be verified from their respective
+package definitions or installed-system evidence.
+
+The SearXNG integration checkpoint `cb27b8df` passed
+599 selected tests across 51 suites. That is repository-level
+verification, not proof of complete operation after installing
+a newly built ISO on the physical laptop.
+
+This document explains the declared application and platform
+stack. It is not a complete installed-system package inventory.
 
 ## Persistence and recovery
 
@@ -130,68 +266,3 @@ Passing source-level tests does not replace these checks.
 
 See the [main README](../../README.md) for Loom and
 its appliance ecosystem.
-
-## November 23, 2026 — Pragna documentation checkpoint
-
-Pragna combines a Debian desktop with local AI, document retrieval,
-and separately controlled web search. The descriptions below explain
-each component's purpose. Declared configuration does not by itself
-prove successful deployment on a newly installed laptop.
-
-### Operating system and appliance construction
-
-| Software | Purpose in Pragna |
-| --- | --- |
-| **Debian 13** | Provides the Linux operating system, packages, and stable base for the appliance. |
-| **KDE Plasma** | Provides the graphical desktop, system settings, and everyday user interface. |
-| **Loom** | Builds and installs Pragna from appliance definitions and reusable installation components. |
-| **systemd** | Manages system services, firstboot initialization, and recovery startup. |
-| **NetworkManager** | Manages wired and wireless network connections on supported hardware. |
-
-### Local AI and model management
-
-| Software | Purpose in Pragna |
-| --- | --- |
-| **Ollama** | Runs local language and embedding models, allowing inference without a cloud AI service. |
-| **Open WebUI** | Provides the browser-based interface for chatting with models and working with documents. |
-| **Model Manager** | Provides graphical workflows for importing, managing, and benchmarking local models. |
-| **WhichLLM** | Helps assess which models suit the available hardware; model selection remains user-controlled. |
-
-### Documents, knowledge retrieval, and web search
-
-| Software | Purpose in Pragna |
-| --- | --- |
-| **PostgreSQL 17** | Provides persistent database storage for the document-retrieval infrastructure. |
-| **pgvector** | Extends PostgreSQL with vector similarity search for finding semantically relevant information. |
-| **Apache Tika 3.3.3.0** | Extracts text and metadata from documents before they enter retrieval workflows. |
-| **nomic-embed-text** | Converts text into numerical embeddings used to compare document meaning. |
-| **SearXNG** | Provides web-search results through a separately controlled service, without merging web access into the internal RAG network. |
-| **Docker** | Runs and isolates containerized components such as Open WebUI, PostgreSQL/pgvector, Tika, and SearXNG. |
-
-### How the components work together
-
-For document-based questions, Tika extracts document text, an
-embedding model represents that text numerically, and pgvector
-supports similarity retrieval from PostgreSQL. Open WebUI presents
-the interaction while Ollama runs local AI models.
-
-For web-based questions, SearXNG provides a separate search path.
-Web search and private document retrieval have different trust and
-network boundaries. The secure full-page web-fetch proxy remains
-deferred; the working configuration uses search-result snippets.
-
-### Versions and verification
-
-The declared build configuration targets Debian 13, amd64, KDE,
-Open WebUI `v0.13.0-slim`, pgvector `pg17`, Tika `3.3.3.0`,
-and a pinned SearXNG image. Exact versions of other components
-should be confirmed from package manifests or installed-system
-evidence rather than assumed.
-
-SearXNG firstboot provisioning and registered recovery are
-implemented. The selected integration verification passed
-599 tests across 51 suites. Fresh ISO construction, USB boot,
-installation, and complete laptop validation remain outstanding.
-
-This is a **declared software-stack description**, not a certified
-installed-system software bill of materials.
