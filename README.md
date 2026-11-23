@@ -51,39 +51,6 @@ Loom builds on Debian and its established package, boot, and system-management t
 
 The project follows an **offline-first** approach. Another core requirement is **recoverability**: the operating system should be replaceable while user data and configuration can be restored. These are design goals, not claims that every recovery workflow is already complete.
 
-## Project Status
-
-Loom's Rust engine, capability framework, ISO workflow, and installer have implementations in the repository and are under development and verification. DAIA/Pragna is the current physical-laptop validation platform.
-
-Not every planned integration or appliance capability is operational. Source availability, passing tests, and successful real-hardware operation are separate verification milestones.
-
-## Pragna Engineering Census
-
-For the appliance components and integration status, see the [Pragna software stack](docs/pragna/software-stack.md).
-
-The [Pragna engineering census](docs/project-census.md) records
-a dated snapshot of the project's development, including its
-original Shell implementation and subsequent Rust migration.
-
-At the November 17, 2026 engineering checkpoint (`4586d9a7`):
-**835 commits**, **212,324 cumulative line changes**,
-**384 source/configuration files**, and **143,023 total lines**.
-Static test measurements identified **1,170 Python test definitions**
-and **1,674 Rust test attributes**.
-
-The measurements were recorded in the census on
-**November 18, 2026 at 02:55:01 IST (UTC+05:30)**.
-They reflect locally available Git history and include nonignored
-untracked source/configuration files. They are **not live counters**,
-and static test counts are not executed test results.
-Measurement methods differ between snapshots; see the full census.
-
-The November 17 checkpoint also records the RAG recovery correction,
-its automated verification, and the remaining physical laptop tests.
-The next ISO build requires separate approval.
-The [full census](docs/project-census.md) preserves the November 15
-baseline and explains differences in measurement methodology.
-
 ## Building the DAIA Laptop ISO
 
 Loom provides a preparation workflow and a laptop ISO build entry point.
