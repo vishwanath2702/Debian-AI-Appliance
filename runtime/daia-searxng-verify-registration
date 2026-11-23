@@ -1,0 +1,40 @@
+#!/usr/bin/env python3
+"""Root-only, read-only SearXNG registration verification CLI."""
+
+import os
+import sys
+from pathlib import Path
+
+# Installed runtime modules are staged under /opt/daia.
+# The source-tree fallback is used only for local development tests.
+MODULE_DIR = Path("/opt/daia")
+if not (MODULE_DIR / "searxng_registration.py").is_file():
+    MODULE_DIR = Path(__file__).resolve().parent / "modules"
+
+sys.path.insert(0, str(MODULE_DIR))
+
+from searxng_registration import read_registration, verify_registration
+
+
+def main():
+    if os.geteuid() != 0:
+        raise PermissionError("Root required")
+    if sys.argv[1:] != ["--resolve-registered"]:
+        raise ValueError("Expected --resolve-registered")
+
+    expected_id = read_registration()
+    verified_id = verify_registration(expected_id)
+    if verified_id != expected_id:
+        raise PermissionError("Registered identity changed")
+
+    print(verified_id)
+    return 0
+
+
+if __name__ == "__main__":
+    try:
+        raise SystemExit(main())
+    except (OSError, ValueError, RuntimeError) as error:
+        print("SearXNG registration refused: " + str(error),
+              file=sys.stderr)
+        raise SystemExit(1)

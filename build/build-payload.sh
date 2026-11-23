@@ -530,6 +530,178 @@ stage_runtime()
         "$DAIA_WORKSPACE/usr/libexec/daia-tika-register-container" \
         0755 || return 1
 
+    # Stage trusted SearXNG registration and identity verification.
+    # No container creation or service activation occurs here.
+    if [[ "${DAIA_ENABLE_SEARXNG:-false}" == "true" ]]; then
+        for helper in \
+            modules/searxng_registration.py \
+            daia-searxng-verify-container \
+            daia-searxng-verify-registration
+        do
+            if [[ ! -f "$DAIA_RUNTIME_SOURCE/$helper" ]] ||
+               [[ -L "$DAIA_RUNTIME_SOURCE/$helper" ]]; then
+                log_error "Required SearXNG runtime component missing or unsafe: $helper"
+                return 1
+            fi
+        done
+
+        copy_file \
+            "$DAIA_RUNTIME_SOURCE/modules/searxng_registration.py" \
+            "$DAIA_ROOT_TARGET/searxng_registration.py" \
+            0644 || return 1
+
+        copy_file \
+            "$DAIA_RUNTIME_SOURCE/daia-searxng-verify-container" \
+            "$DAIA_WORKSPACE/usr/libexec/daia-searxng-verify-container" \
+            0755 || return 1
+
+        copy_file \
+            "$DAIA_RUNTIME_SOURCE/daia-searxng-verify-registration" \
+            "$DAIA_WORKSPACE/usr/libexec/daia-searxng-verify-registration" \
+            0755 || return 1
+
+        copy_file \
+            "$DAIA_RUNTIME_SOURCE/daia-searxng-publish-registration" \
+            "$DAIA_WORKSPACE/usr/libexec/daia-searxng-publish-registration" \
+            0755 || return 1
+
+
+        if [[ ! -f "$DAIA_RUNTIME_SOURCE/daia-searxng-assess-recovery" ]] ||
+           [[ -L "$DAIA_RUNTIME_SOURCE/daia-searxng-assess-recovery" ]]; then
+            log_error "Required SearXNG recovery assessor missing or unsafe"
+            return 1
+        fi
+
+        copy_file \
+            "$DAIA_RUNTIME_SOURCE/daia-searxng-assess-recovery" \
+            "$DAIA_WORKSPACE/usr/libexec/daia-searxng-assess-recovery" \
+            0755 || return 1
+
+        # Stage the read-only observation adapter and its retry policy.
+        # These modules do not activate SearXNG or authorize mutations.
+        for helper in \
+            modules/searxng_observation.py \
+            modules/searxng_retry_policy.py \
+            modules/searxng_initialize.py \
+            modules/searxng_bootstrap.py \
+            modules/searxng_config.py \
+            modules/searxng_firstboot_policy.py \
+            modules/searxng_firstboot_decision.py \
+            modules/searxng_firstboot_adapter.py \
+            modules/searxng_firstboot_plan.py \
+            modules/searxng_firstboot_authority.py \
+            modules/searxng_firstboot_execution.py \
+            modules/searxng_firstboot_initializer.py \
+            modules/searxng_firstboot_authorization.py
+        do
+            if [[ ! -f "$DAIA_RUNTIME_SOURCE/$helper" ]] ||
+               [[ -L "$DAIA_RUNTIME_SOURCE/$helper" ]]; then
+                log_error "Required SearXNG observation module missing or unsafe: $helper"
+                return 1
+            fi
+        done
+
+        copy_file \
+            "$DAIA_RUNTIME_SOURCE/modules/searxng_observation.py" \
+            "$DAIA_ROOT_TARGET/searxng_observation.py" \
+            0644 || return 1
+
+        copy_file \
+            "$DAIA_RUNTIME_SOURCE/modules/searxng_retry_policy.py" \
+            "$DAIA_ROOT_TARGET/searxng_retry_policy.py" \
+            0644 || return 1
+
+        copy_file \
+            "$DAIA_RUNTIME_SOURCE/modules/searxng_initialize.py" \
+            "$DAIA_ROOT_TARGET/searxng_initialize.py" \
+            0644 || return 1
+
+        copy_file \
+            "$DAIA_RUNTIME_SOURCE/modules/searxng_bootstrap.py" \
+            "$DAIA_ROOT_TARGET/searxng_bootstrap.py" \
+            0644 || return 1
+
+        copy_file \
+            "$DAIA_RUNTIME_SOURCE/modules/searxng_config.py" \
+            "$DAIA_ROOT_TARGET/searxng_config.py" \
+            0644 || return 1
+
+        copy_file \
+            "$DAIA_RUNTIME_SOURCE/modules/searxng_firstboot_policy.py" \
+            "$DAIA_ROOT_TARGET/searxng_firstboot_policy.py" \
+            0644 || return 1
+
+        copy_file \
+            "$DAIA_RUNTIME_SOURCE/modules/searxng_firstboot_decision.py" \
+            "$DAIA_ROOT_TARGET/searxng_firstboot_decision.py" \
+            0644 || return 1
+
+        copy_file \
+            "$DAIA_RUNTIME_SOURCE/modules/searxng_firstboot_adapter.py" \
+            "$DAIA_ROOT_TARGET/searxng_firstboot_adapter.py" \
+            0644 || return 1
+
+        copy_file \
+            "$DAIA_RUNTIME_SOURCE/modules/searxng_firstboot_plan.py" \
+            "$DAIA_ROOT_TARGET/searxng_firstboot_plan.py" \
+            0644 || return 1
+
+        copy_file \
+            "$DAIA_RUNTIME_SOURCE/modules/searxng_firstboot_authority.py" \
+            "$DAIA_ROOT_TARGET/searxng_firstboot_authority.py" \
+            0644 || return 1
+
+        copy_file \
+            "$DAIA_RUNTIME_SOURCE/modules/searxng_firstboot_execution.py" \
+            "$DAIA_ROOT_TARGET/searxng_firstboot_execution.py" \
+            0644 || return 1
+
+        copy_file \
+            "$DAIA_RUNTIME_SOURCE/modules/searxng_firstboot_initializer.py" \
+            "$DAIA_ROOT_TARGET/searxng_firstboot_initializer.py" \
+            0644 || return 1
+
+        copy_file \
+            "$DAIA_RUNTIME_SOURCE/modules/searxng_firstboot_authorization.py" \
+            "$DAIA_ROOT_TARGET/searxng_firstboot_authorization.py" \
+            0644 || return 1
+
+        # Stage the fixed firstboot execution boundary without activation.
+        # All three components are mandatory when SearXNG is enabled.
+        for helper in \
+            modules/searxng_firstboot_lock.py \
+            modules/searxng_firstboot_runner.py \
+            daia-searxng-firstboot-provision
+        do
+            if [[ ! -f "$DAIA_RUNTIME_SOURCE/$helper" ]] ||
+               [[ -L "$DAIA_RUNTIME_SOURCE/$helper" ]]; then
+                log_error "Required SearXNG firstboot component missing or unsafe: $helper"
+                return 1
+            fi
+        done
+
+        copy_file \
+            "$DAIA_RUNTIME_SOURCE/modules/searxng_firstboot_lock.py" \
+            "$DAIA_ROOT_TARGET/searxng_firstboot_lock.py" \
+            0644 || return 1
+
+        copy_file \
+            "$DAIA_RUNTIME_SOURCE/modules/searxng_firstboot_runner.py" \
+            "$DAIA_ROOT_TARGET/searxng_firstboot_runner.py" \
+            0644 || return 1
+
+        copy_file \
+            "$DAIA_RUNTIME_SOURCE/daia-searxng-firstboot-provision" \
+            "$DAIA_WORKSPACE/usr/libexec/daia-searxng-firstboot-provision" \
+            0755 || return 1
+
+        record_staged_component \
+            "SearXNG firstboot lock, runner, and provisioning entrypoint staged without activation."
+
+        record_staged_component \
+            "Trusted SearXNG registration, identity, and recovery assessment helpers staged."
+    fi
+
     copy_file \
         "$DAIA_RUNTIME_SOURCE/daia-openwebui-rag-entrypoint.py" \
         "$DAIA_WORKSPACE/usr/libexec/daia-openwebui-rag-entrypoint.py" \
@@ -1225,6 +1397,18 @@ stage_offline_components()
             "Apache Tika container image staged successfully." || return 1
     fi
 
+    if [[ "$DAIA_ENABLE_SEARXNG" == "true" ]]
+    then
+        stage_verified_artifact \
+            "SearXNG" \
+            "$PROJECT_ROOT/payload/artifact-manifests/searxng.yaml" \
+            "$DAIA_SEARXNG_IMAGE_ABS" \
+            "$DAIA_SEARXNG_ARCHIVE_SHA256" \
+            "payload/images/searxng-amd64.tar" \
+            "opt/daia/payload/images/searxng.tar" \
+            "SearXNG container image staged successfully." || return 1
+    fi
+
     if [[ "$DAIA_ENABLE_EMBEDDING_MODEL" == "true" ]]
     then
         stage_verified_artifact \
@@ -1450,7 +1634,8 @@ prepare_artifact_planner()
 {
     if [[ "$DAIA_ENABLE_TIKA" != "true" &&
           "$DAIA_ENABLE_PGVECTOR" != "true" &&
-          "$DAIA_ENABLE_OPEN_WEBUI" != "true" ]]
+          "$DAIA_ENABLE_OPEN_WEBUI" != "true" &&
+          "$DAIA_ENABLE_SEARXNG" != "true" ]]
     then
         return 0
     fi

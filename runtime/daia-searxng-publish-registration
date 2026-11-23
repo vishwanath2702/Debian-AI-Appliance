@@ -1,0 +1,70 @@
+#!/usr/bin/env python3
+"""Root-only, create-only SearXNG registration publication."""
+
+import importlib.util
+import os
+import re
+import sys
+from pathlib import Path
+
+ID_PATTERN = re.compile(r"[0-9a-f]{64}\Z")
+
+
+def main():
+    if os.geteuid() != 0:
+        raise PermissionError(
+            "SearXNG registration publication requires root"
+        )
+
+    if len(sys.argv) != 2 or ID_PATTERN.fullmatch(sys.argv[1]) is None:
+        raise ValueError("Expected exactly one immutable container ID")
+
+    container_id = sys.argv[1]
+
+    installed = Path("/opt/daia/searxng_registration.py")
+    local = (
+        Path(__file__).resolve().parent
+        / "modules/searxng_registration.py"
+    )
+    module_path = installed if installed.exists() else local
+
+    if module_path.is_symlink() or not module_path.is_file():
+        raise RuntimeError(
+            "Trusted SearXNG registration module unavailable"
+        )
+
+    spec = importlib.util.spec_from_file_location(
+        "searxng_registration", module_path
+    )
+    if spec is None or spec.loader is None:
+        raise RuntimeError(
+            "Cannot load SearXNG registration module"
+        )
+
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    # The existing module independently verifies the container
+    # and publishes its immutable ID using exclusive creation.
+    module.publish_registration(
+        container_id,
+        module.DEFAULT_DIRECTORY,
+    )
+
+    return 0
+
+
+if __name__ == "__main__":
+    try:
+        raise SystemExit(main())
+    except (
+        ValueError,
+        PermissionError,
+        RuntimeError,
+        OSError,
+    ) as error:
+        print(
+            f"SearXNG registration rejected: {error}",
+            file=sys.stderr,
+        )
+        raise SystemExit(1)

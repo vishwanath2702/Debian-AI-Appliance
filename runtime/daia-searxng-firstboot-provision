@@ -1,0 +1,58 @@
+#!/usr/bin/env bash
+# Fixed-purpose SearXNG firstboot provisioning entrypoint.
+# Invoked only by the exclusive-lock runner; not activated yet.
+set -euo pipefail
+
+(( EUID == 0 )) || exit 1
+
+readonly DAIA_SEARXNG_ROOT="/opt/daia"
+readonly DAIA_SEARXNG_INITIALIZER="${DAIA_SEARXNG_ROOT}/searxng_firstboot_initializer.py"
+readonly DAIA_SEARXNG_MODULE="${DAIA_SEARXNG_ROOT}/modules/searxng.sh"
+readonly DAIA_SEARXNG_PROVISION_MODULE="${DAIA_SEARXNG_ROOT}/modules/searxng_provision.sh"
+
+for trusted_file in \
+    "$DAIA_SEARXNG_INITIALIZER" \
+    "$DAIA_SEARXNG_MODULE" \
+    "$DAIA_SEARXNG_PROVISION_MODULE"
+do
+    [[ -f "$trusted_file" && ! -L "$trusted_file" ]] || exit 1
+    [[ "$(stat -c '%u:%g:%a' -- "$trusted_file")" == "0:0:644" ]] || exit 1
+done
+
+# Parse the trusted configuration without executing it as shell code.
+python3 - <<'SEARXNG_FEATURE_CHECK'
+import sys
+sys.path.insert(0, "/opt/daia")
+import searxng_config
+if searxng_config.enabled() is not True:
+    raise SystemExit(1)
+SEARXNG_FEATURE_CHECK
+
+# Initialize only when the registration directory and Docker
+# resources satisfy the existing create-only security contract.
+python3 - <<'SEARXNG_INITIALIZER'
+import sys
+sys.path.insert(0, "/opt/daia")
+import searxng_firstboot_initializer
+searxng_firstboot_initializer.initialize_from_firstboot()
+SEARXNG_INITIALIZER
+
+# Reuse existing, separately verified provisioning operations.
+# shellcheck source=/dev/null
+source "$DAIA_SEARXNG_MODULE"
+# shellcheck source=/dev/null
+source "$DAIA_SEARXNG_PROVISION_MODULE"
+
+DAIA_ENABLE_SEARXNG=true
+DAIA_SEARXNG_DOCKER_IMAGE_ID="sha256:be131d45cb5daf22a1f47c530b6d11063c76e53bf0efa99d047b07e4b3d4274d"
+DAIA_SEARXNG_ARCHIVE_SHA256="fbd19b12819ae924f5b4bc52cc51e1e05fed244be29f17dfc6cb81fae2139c1b"
+
+export DAIA_ENABLE_SEARXNG
+export DAIA_SEARXNG_DOCKER_IMAGE_ID
+export DAIA_SEARXNG_ARCHIVE_SHA256
+
+searxng_firstboot_provision_registered
+
+# Never report success without independently verifying registration.
+/usr/libexec/daia-searxng-verify-registration \
+    --resolve-registered >/dev/null

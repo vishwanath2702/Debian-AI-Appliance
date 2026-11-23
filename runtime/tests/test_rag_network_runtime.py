@@ -15,7 +15,9 @@ NETWORK_ID = "b" * 64
 class RAGNetworkRuntimeTests(unittest.TestCase):
     def verify(self, members, attachment=NETWORK_ID,
                network_id=NETWORK_ID, mode="runtime", webui_id=None,
-               webui_attachment=NETWORK_ID):
+               webui_attachment=NETWORK_ID,
+               tika_id=None, searxng_id=None,
+               searxng_attachment=NETWORK_ID):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             docker = root / "docker"
@@ -43,7 +45,10 @@ case "${1:-}" in
     ;;
   container)
     [[ "${2:-}" == inspect ]] || exit 99
-    if [[ "${*: -1}" == "$DAIA_TEST_WEBUI_ID" ]]; then
+    if [[ -n "$DAIA_TEST_SEARXNG_ID" &&
+          "${*: -1}" == "$DAIA_TEST_SEARXNG_ID" ]]; then
+      printf '%s\n' "$DAIA_TEST_SEARXNG_ATTACHMENT"
+    elif [[ "${*: -1}" == "$DAIA_TEST_WEBUI_ID" ]]; then
       printf '%s\n' "$DAIA_TEST_WEBUI_ATTACHMENT"
     else
       printf '%s\n' "$DAIA_TEST_ATTACHMENT"
@@ -63,6 +68,8 @@ esac
                 "DAIA_TEST_NETWORK_ID": network_id,
                 "DAIA_TEST_WEBUI_ID": webui_id or "",
                 "DAIA_TEST_WEBUI_ATTACHMENT": webui_attachment,
+                "DAIA_TEST_SEARXNG_ID": searxng_id or "",
+                "DAIA_TEST_SEARXNG_ATTACHMENT": searxng_attachment,
             })
 
             # Create a test-only copy with the root check bypassed.
@@ -79,7 +86,15 @@ esac
             command = [
                 "bash", str(verifier_copy), mode, PG_ID,
             ]
-            if webui_id is not None:
+            if searxng_id is not None:
+                command.extend([
+                    webui_id or "",
+                    tika_id or "",
+                    searxng_id,
+                ])
+            elif tika_id is not None:
+                command.extend([webui_id or "", tika_id])
+            elif webui_id is not None:
                 command.append(webui_id)
 
             result = subprocess.run(
@@ -192,6 +207,66 @@ esac
 
     def test_rejects_invalid_network_identity(self):
         result, _ = self.verify(PG_ID, network_id="invalid")
+        self.assertNotEqual(result.returncode, 0)
+
+
+    def test_accepts_postgresql_and_registered_searxng(self):
+        searxng = "f" * 64
+        result, _ = self.verify(
+            PG_ID + "\n" + searxng,
+            searxng_id=searxng,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_accepts_all_four_registered_members(self):
+        webui, tika, searxng = "d" * 64, "e" * 64, "f" * 64
+        result, _ = self.verify(
+            "\n".join((PG_ID, webui, tika, searxng)),
+            webui_id=webui,
+            tika_id=tika,
+            searxng_id=searxng,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_rejects_missing_registered_searxng(self):
+        result, _ = self.verify(PG_ID, searxng_id="f" * 64)
+        self.assertNotEqual(result.returncode, 0)
+
+    def test_rejects_unregistered_searxng(self):
+        result, _ = self.verify(PG_ID + "\n" + "f" * 64)
+        self.assertNotEqual(result.returncode, 0)
+
+    def test_rejects_wrong_searxng_attachment(self):
+        searxng = "f" * 64
+        result, _ = self.verify(
+            PG_ID + "\n" + searxng,
+            searxng_id=searxng,
+            searxng_attachment="c" * 64,
+        )
+        self.assertNotEqual(result.returncode, 0)
+
+    def test_rejects_duplicate_searxng_identity(self):
+        webui, tika = "d" * 64, "e" * 64
+        for duplicate in (PG_ID, webui, tika):
+            with self.subTest(duplicate=duplicate):
+                result, _ = self.verify(
+                    PG_ID,
+                    webui_id=webui,
+                    tika_id=tika,
+                    searxng_id=duplicate,
+                )
+                self.assertNotEqual(result.returncode, 0)
+
+    def test_rejects_invalid_searxng_identity(self):
+        result, _ = self.verify(PG_ID, searxng_id="invalid")
+        self.assertNotEqual(result.returncode, 0)
+
+    def test_rejects_extra_rag_member_with_searxng(self):
+        searxng = "f" * 64
+        result, _ = self.verify(
+            PG_ID + "\n" + searxng + "\n" + "9" * 64,
+            searxng_id=searxng,
+        )
         self.assertNotEqual(result.returncode, 0)
 
 

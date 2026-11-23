@@ -1,0 +1,7 @@
+schema_version: 1
+name: searxng
+artifacts:
+  - source: payload/images/searxng-amd64.tar
+    destination: opt/daia/payload/images/searxng.tar
+    sha256: fbd19b12819ae924f5b4bc52cc51e1e05fed244be29f17dfc6cb81fae2139c1b
+    mode: "0644"

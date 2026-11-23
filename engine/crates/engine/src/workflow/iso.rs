@@ -2415,6 +2415,28 @@ mod tests {
         );
     }
 
+    fn create_desktop_public_directory_fixtures(rootfs: &std::path::Path) {
+        use std::os::unix::fs::PermissionsExt;
+
+        for relative in [
+            "usr/share/daia",
+            "usr/share/daia/package-manifests",
+            "usr/share/daia/providers",
+            "usr/share/daia/appliance-profiles",
+            "usr/share/daia/content-repositories",
+            "usr/share/daia/assets",
+        ] {
+            let directory = rootfs.join(relative);
+            fs::create_dir_all(&directory)
+                .expect("create public directory fixture");
+            fs::set_permissions(
+                &directory,
+                fs::Permissions::from_mode(0o755),
+            )
+            .expect("set public directory fixture permissions");
+        }
+    }
+
     fn create_desktop_grub_module_fixtures(rootfs: &std::path::Path) {
         for (target, modules) in [
             (
@@ -2454,6 +2476,7 @@ mod tests {
         let rootfs = temp.path().join("rootfs");
         let dpkg = rootfs.join("var/lib/dpkg");
 
+        create_desktop_public_directory_fixtures(&rootfs);
         create_desktop_grub_module_fixtures(&rootfs);
 
         let nvidia_directory = rootfs.join("usr/share/nvidia");
@@ -2526,6 +2549,7 @@ mod tests {
         let rootfs = temp.path().join("rootfs");
         let dpkg = rootfs.join("var/lib/dpkg");
 
+        create_desktop_public_directory_fixtures(&rootfs);
         create_desktop_grub_module_fixtures(&rootfs);
 
         let nvidia_directory = rootfs.join("usr/share/nvidia");

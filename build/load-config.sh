@@ -518,6 +518,20 @@ DAIA_TIKA_IMAGE_ABS="$(
     make_project_absolute "$DAIA_TIKA_IMAGE"
 )"
 
+if [[ "${DAIA_SEARXNG_DOCKER_IMAGE_ID:-}" != "sha256:be131d45cb5daf22a1f47c530b6d11063c76e53bf0efa99d047b07e4b3d4274d" ]]; then
+    config_log_error "Unexpected SearXNG Docker image ID"
+    return 1 2>/dev/null || exit 1
+fi
+
+if [[ "${DAIA_SEARXNG_ARCHIVE_SHA256:-}" != "fbd19b12819ae924f5b4bc52cc51e1e05fed244be29f17dfc6cb81fae2139c1b" ]]; then
+    config_log_error "Unexpected SearXNG archive SHA-256"
+    return 1 2>/dev/null || exit 1
+fi
+
+DAIA_SEARXNG_IMAGE_ABS="$(
+    make_project_absolute "$DAIA_SEARXNG_IMAGE"
+)"
+
 DAIA_DEFAULT_MODEL_SOURCE_ABS="$(
     make_project_absolute "$DAIA_DEFAULT_MODEL_SOURCE"
 )"

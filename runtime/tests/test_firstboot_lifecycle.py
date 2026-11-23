@@ -47,6 +47,17 @@ realize_models() {
     [[ "$FAILURE" != models ]]
 }
 
+install_offline_embedding_model() {
+    record embedding
+    [[ "$FAILURE" != embedding ]]
+}
+
+
+provision_searxng_firstboot() {
+    record searxng
+    [[ "$FAILURE" != searxng ]]
+}
+
 mark_firstboot_complete() {
     record marker
     [[ "$FAILURE" != marker ]]
@@ -90,7 +101,7 @@ main
     def test_success(self):
         self.assert_case(
             "none",
-            ["root", "prepare", "runtime", "models", "recovery", "marker", "queue", "disable"],
+            ["root", "prepare", "runtime", "models", "embedding", "searxng", "recovery", "marker", "queue", "disable"],
         )
 
     def test_root_failure(self):
@@ -107,27 +118,46 @@ main
             "models", ["root", "prepare", "runtime", "models"],
         )
 
+    def test_embedding_installation_failure(self):
+        self.assert_case(
+            "embedding",
+            ["root", "prepare", "runtime", "models", "embedding"],
+        )
+
+    def test_searxng_provisioning_deferred(self):
+        source = SOURCE.read_text()
+        main = source[source.index("\nmain()\n"):]
+        self.assertIn(
+            "\n    provision_searxng_firstboot\n", main
+        )
+
+    def test_searxng_failure_prevents_completion(self):
+        self.assert_case(
+            "searxng",
+            ["root", "prepare", "runtime", "models", "embedding", "searxng"],
+        )
+
     def test_completion_marker_failure(self):
         self.assert_case(
-            "marker", ["root", "prepare", "runtime", "models", "recovery", "marker"],
+            "marker", ["root", "prepare", "runtime", "models", "embedding", "searxng", "recovery", "marker"],
         )
 
     def test_recovery_activation_failure(self):
         self.assert_case(
             "recovery",
-            ["root", "prepare", "runtime", "models", "recovery"],
+            ["root", "prepare", "runtime", "models", "embedding", "searxng", "recovery"],
         )
 
     def test_queue_failure(self):
         self.assert_case(
             "queue",
-            ["root", "prepare", "runtime", "models", "recovery", "marker", "queue"],
+            ["root", "prepare", "runtime", "models", "embedding", "searxng", "recovery", "marker", "queue"],
         )
 
     def test_disable_failure(self):
         self.assert_case(
             "disable",
-            ["root", "prepare", "runtime", "models", "recovery", "marker", "queue", "disable"],
+            ["root", "prepare", "runtime", "models", "embedding", "searxng", "recovery", "marker", "queue", "disable"],
         )
 
 

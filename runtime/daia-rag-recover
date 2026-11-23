@@ -153,4 +153,48 @@ tika_verify_registered
 /usr/libexec/daia-pgvector-audit-auth.py "$pg_id"
 /usr/libexec/daia-pgvector-init-extension.py "$pg_id" "$webui_id" "$tika_id"
 
+# SearXNG recovery is optional and requires trusted configuration.
+# Never source the configuration as shell code in this recovery path.
+searxng_enabled_status=0
+python3 - <<'SEARXNG_RECOVERY_FEATURE' || searxng_enabled_status=$?
+import sys
+sys.path.insert(0, "/opt/daia")
+import searxng_config
+value = searxng_config.enabled()
+if type(value) is not bool:
+    raise SystemExit(1)
+raise SystemExit(0 if value else 2)
+SEARXNG_RECOVERY_FEATURE
+
+case "$searxng_enabled_status" in
+    2) ;;
+    0)
+        searxng_module="${MODULE_ROOT}/searxng.sh"
+        [[ -f "$searxng_module" && ! -L "$searxng_module" ]] ||
+            exit 1
+        # shellcheck source=/dev/null
+        source "$searxng_module"
+
+        searxng_id="$(
+            /usr/libexec/daia-searxng-verify-registration                 --resolve-registered
+        )" || exit 1
+        [[ "$searxng_id" =~ ^[0-9a-f]{64}$ ]] || exit 1
+
+        searxng_state="$(docker container inspect --format             '{{.State.Running}}|{{.State.Paused}}|{{.State.Restarting}}|{{.State.Status}}'             "$searxng_id")" || exit 1
+
+        case "$searxng_state" in
+            false\|false\|false\|created|false\|false\|false\|exited)
+                searxng_start_registered "$searxng_id" || exit 1
+                ;;
+            true\|false\|false\|running)
+                searxng_verify_network_contract || exit 1
+                ;;
+            *) exit 1 ;;
+        esac
+
+        searxng_wait_ready "$searxng_id" 60 || exit 1
+        ;;
+    *) echo "Untrusted SearXNG feature configuration" >&2; exit 1 ;;
+esac
+
 echo "DAIA registered RAG containers recovered"

@@ -1,0 +1,269 @@
+#!/usr/bin/env python3
+"""Read-only, fail-closed SearXNG recovery assessment."""
+
+import importlib.util
+import json
+import os
+import re
+import subprocess
+import sys
+from pathlib import Path
+
+NAME = "daia-searxng"
+IMAGE = "sha256:be131d45cb5daf22a1f47c530b6d11063c76e53bf0efa99d047b07e4b3d4274d"
+INTERNAL = "daia-rag-internal"
+EGRESS = "daia-searxng-egress"
+
+VALID_ID = re.compile(r"[0-9a-f]{64}\Z")
+
+
+class Untrusted(Exception):
+    pass
+
+
+def require(condition, message):
+    if not condition:
+        raise Untrusted(message)
+
+
+def docker(*arguments):
+    result = subprocess.run(
+        ["docker", *arguments],
+        capture_output=True,
+        text=True,
+        timeout=20,
+        check=False,
+    )
+    require(result.returncode == 0, "Docker inspection failed")
+    return result.stdout
+
+
+def registration_module():
+    installed = Path("/opt/daia/searxng_registration.py")
+    local = Path(__file__).resolve().parent / "modules/searxng_registration.py"
+
+    path = installed if installed.exists() else local
+
+    require(
+        path.is_file() and not path.is_symlink(),
+        "Registration module unavailable",
+    )
+
+    spec = importlib.util.spec_from_file_location(
+        "searxng_registration", path
+    )
+    require(
+        spec is not None and spec.loader is not None,
+        "Registration module cannot be loaded",
+    )
+
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def registered_identity(module):
+    # A missing directory is not a missing registration file.
+    # Reuse the registration module's root-owned, symlink-safe
+    # directory and file descriptor validation.
+    try:
+        directory_fd = module._open_trusted_directory(
+            module.DEFAULT_DIRECTORY
+        )
+    except FileNotFoundError as error:
+        raise Untrusted("Registration directory missing") from error
+
+    try:
+        try:
+            return module._read_registration_fd(directory_fd)
+        except FileNotFoundError as error:
+            # Only the exact registration filename may be absent.
+            require(
+                error.filename == module.REGISTRATION_NAME,
+                "Ambiguous missing registration path",
+            )
+            return None
+    finally:
+        os.close(directory_fd)
+
+
+def inspect_container():
+    result = json.loads(docker("container", "inspect", NAME))
+    require(
+        isinstance(result, list) and len(result) == 1,
+        "Malformed container inspection",
+    )
+    require(isinstance(result[0], dict), "Malformed container")
+    return result[0]
+
+
+def inspect_internal_network():
+    result = json.loads(docker("network", "inspect", INTERNAL))
+    require(
+        isinstance(result, list) and len(result) == 1,
+        "Malformed internal network inspection",
+    )
+    network = result[0]
+    require(isinstance(network, dict), "Malformed internal network")
+    require(network.get("Name") == INTERNAL, "Internal network mismatch")
+    require(network.get("Driver") == "bridge", "Internal driver mismatch")
+    require(network.get("Internal") is True, "Internal isolation mismatch")
+    labels = network.get("Labels") or {}
+    require(
+        labels.get("org.daia.component") == "rag"
+        and labels.get("org.daia.managed") == "true",
+        "Internal network ownership mismatch",
+    )
+    require(
+        isinstance(network.get("Id"), str)
+        and VALID_ID.fullmatch(network["Id"]) is not None,
+        "Invalid internal network identity",
+    )
+    return network
+
+
+def incomplete_stopped_container(container):
+    """Recognize only the narrow, non-adopted pre-egress state."""
+    identity = container.get("Id")
+    require(
+        isinstance(identity, str)
+        and VALID_ID.fullmatch(identity) is not None,
+        "Invalid container identity",
+    )
+    require(container.get("Name") == "/" + NAME, "Container name mismatch")
+    require(container.get("Image") == IMAGE, "Container image mismatch")
+
+    config = container.get("Config") or {}
+    labels = config.get("Labels") or {}
+    require(
+        labels.get("org.daia.component") == "searxng"
+        and labels.get("org.daia.managed") == "true",
+        "Container ownership mismatch",
+    )
+
+    host = container.get("HostConfig") or {}
+    require(host.get("Privileged") is False, "Privileged container")
+    require(
+        host.get("SecurityOpt") == ["no-new-privileges:true"],
+        "Security options mismatch",
+    )
+    require(
+        host.get("NetworkMode") == INTERNAL,
+        "Primary network mismatch",
+    )
+    require(
+        not host.get("PortBindings")
+        and not host.get("Binds")
+        and not host.get("Mounts")
+        and not container.get("Mounts"),
+        "Unexpected ports or mounts",
+    )
+    require(
+        (host.get("RestartPolicy") or {}).get("Name") in ("no", ""),
+        "Unexpected restart policy",
+    )
+
+    state = container.get("State") or {}
+    require(
+        state.get("Running") is False
+        and state.get("Paused") is False
+        and state.get("Restarting") is False
+        and state.get("Status") == "created",
+        "Container is not in the expected created state",
+    )
+
+    attachments = (
+        (container.get("NetworkSettings") or {}).get("Networks")
+    )
+    require(
+        isinstance(attachments, dict)
+        and set(attachments) == {INTERNAL},
+        "Unexpected incomplete network attachments",
+    )
+
+    network = inspect_internal_network()
+    require(
+        attachments[INTERNAL].get("NetworkID") == network["Id"],
+        "Internal network identity mismatch",
+    )
+
+    # Recheck immutable identity after network inspection.
+    again = inspect_container()
+    require(
+        again == container,
+        "Container configuration changed during assessment",
+    )
+
+    return identity
+
+
+def assess(module=None):
+    require(os.geteuid() == 0, "Root required")
+    module = module if module is not None else registration_module()
+
+    # A failed Docker query must never be mistaken for absence.
+    docker("info")
+    inventory = docker("container", "ls", "-a", "--format", "{{.Names}}")
+    names = inventory.splitlines()
+    require(
+        len(names) == len(set(names)),
+        "Malformed container inventory",
+    )
+
+    registration = registered_identity(module)
+
+    if NAME not in names:
+        require(
+            registration is None,
+            "Registration exists without its container",
+        )
+        return "ABSENT"
+
+    container = inspect_container()
+    identity = container.get("Id")
+
+    require(
+        isinstance(identity, str)
+        and VALID_ID.fullmatch(identity) is not None,
+        "Invalid container identity",
+    )
+
+    if registration is not None:
+        require(
+            registration == identity,
+            "Registration identity mismatch",
+        )
+        verified = module.verify_registration(identity)
+        require(
+            verified == identity,
+            "Registered container verification failed",
+        )
+        return "REGISTERED_VERIFIED"
+
+    incomplete_stopped_container(container)
+    return "UNREGISTERED_STOPPED"
+
+
+def main():
+    try:
+        print(assess())
+        return 0
+    except (
+        Untrusted,
+        PermissionError,
+        OSError,
+        ValueError,
+        TypeError,
+        KeyError,
+        subprocess.SubprocessError,
+    ) as error:
+        print("UNTRUSTED")
+        print(
+            "SearXNG recovery assessment refused: " + str(error),
+            file=sys.stderr,
+        )
+        return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

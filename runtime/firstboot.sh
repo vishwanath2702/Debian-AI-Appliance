@@ -119,6 +119,106 @@ prepare_model_directory()
     install -d -o root -g root -m 0755 "$state_directory/content"
 }
 
+
+############################################################
+# initialize_searxng_registration
+# Create-only initialization; invocation deliberately deferred.
+############################################################
+
+initialize_searxng_registration()
+{
+    local config="/opt/daia/config/pragna.conf"
+    local initializer="/opt/daia/searxng_initialize.py"
+
+    (( EUID == 0 )) || return 1
+
+    [[ -f "$config" && ! -L "$config" && -r "$config" ]] ||
+        return 1
+
+    # shellcheck source=/dev/null
+    source "$config"
+
+    if [[ "${DAIA_ENABLE_SEARXNG:-false}" != "true" ]]; then
+        return 0
+    fi
+
+    [[ -f "$initializer" && ! -L "$initializer" && -r "$initializer" ]] ||
+        return 1
+
+    local identity
+    identity="$(stat -c '%u:%g:%a' -- "$initializer")" || return 1
+    [[ "$identity" == "0:0:644" ]] || return 1
+
+    python3 - "$initializer" <<'SEARXNG_INITIALIZE_PY'
+import importlib.util
+import sys
+
+path = sys.argv[1]
+spec = importlib.util.spec_from_file_location(
+    "daia_searxng_initialize", path
+)
+if spec is None or spec.loader is None:
+    raise SystemExit("SearXNG initializer unavailable")
+
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+module.initialize()
+SEARXNG_INITIALIZE_PY
+}
+
+
+############################################################
+# provision_searxng_firstboot
+# Provision only after the canonical runtime has established
+# the trusted internal RAG network.
+############################################################
+
+provision_searxng_firstboot()
+{
+    (( EUID == 0 )) || return 1
+
+    local status=0
+
+    # Trusted fixed-path configuration parser; never source config.
+    python3 - <<'SEARXNG_FEATURE_CHECK' || status=$?
+import sys
+sys.path.insert(0, "/opt/daia")
+import searxng_config
+enabled = searxng_config.enabled()
+if type(enabled) is not bool:
+    raise SystemExit(1)
+raise SystemExit(0 if enabled else 2)
+SEARXNG_FEATURE_CHECK
+
+    if (( status == 2 )); then
+        return 0
+    fi
+
+    (( status == 0 )) || return 1
+
+    local runner="/opt/daia/searxng_firstboot_runner.py"
+    local lock="/opt/daia/searxng_firstboot_lock.py"
+    local entry="/usr/libexec/daia-searxng-firstboot-provision"
+
+    local file
+    for file in "$runner" "$lock"; do
+        [[ -f "$file" && ! -L "$file" ]] || return 1
+        [[ "$(stat -c '%u:%g:%a' -- "$file")" == "0:0:644" ]] ||
+            return 1
+    done
+
+    [[ -f "$entry" && ! -L "$entry" ]] || return 1
+    [[ "$(stat -c '%u:%g:%a' -- "$entry")" == "0:0:755" ]] ||
+        return 1
+
+    PYTHONPATH=/opt/daia python3 -I - <<'SEARXNG_RUNNER'
+import sys
+sys.path.insert(0, "/opt/daia")
+import searxng_firstboot_runner
+searxng_firstboot_runner.run()
+SEARXNG_RUNNER
+}
+
 mark_firstboot_complete()
 {
     : > "$DAIA_FIRSTBOOT_COMPLETE"
@@ -159,6 +259,8 @@ main()
     run_runtime
     realize_models
     install_offline_embedding_model
+    # Provision SearXNG through the exclusive-lock runner.
+    provision_searxng_firstboot
     enable_rag_recovery_service
     mark_firstboot_complete
     queue_rag_proxy_start

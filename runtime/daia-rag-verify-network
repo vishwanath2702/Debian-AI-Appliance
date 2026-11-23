@@ -137,6 +137,10 @@ case "$mode" in
         fi
         ;;
     runtime)
+        if [[ "$#" -gt 5 ]]; then
+            echo "Unexpected RAG runtime arguments" >&2
+            exit 1
+        fi
         # Runtime membership is checked against the immutable
         # PostgreSQL container ID supplied by its authorizer.
         expected_container_id="${2:-}"
@@ -223,9 +227,36 @@ case "$mode" in
             fi
         fi
 
+        expected_searxng_id="${5:-}"
+
+        if [[ -n "$expected_searxng_id" ]]; then
+            if [[ ! "$expected_searxng_id" =~ ^[0-9a-f]{64}$ ]] ||
+               [[ "$expected_searxng_id" == "$expected_container_id" ]] ||
+               [[ -n "$expected_webui_id" &&
+                  "$expected_searxng_id" == "$expected_webui_id" ]] ||
+               [[ -n "$expected_tika_id" &&
+                  "$expected_searxng_id" == "$expected_tika_id" ]]; then
+                echo "Invalid SearXNG container identity" >&2
+                exit 1
+            fi
+
+            if ! searxng_network_id="$(docker container inspect \
+                --format '{{with index .NetworkSettings.Networks "daia-rag-internal"}}{{.NetworkID}}{{end}}' \
+                "$expected_searxng_id")"; then
+                echo "Cannot inspect SearXNG network attachment" >&2
+                exit 1
+            fi
+
+            if [[ "$searxng_network_id" != "$network_id" ]]; then
+                echo "SearXNG network identity mismatch" >&2
+                exit 1
+            fi
+        fi
+
         seen_pgvector=0
         seen_webui=0
         seen_tika=0
+        seen_searxng=0
 
         while IFS= read -r attached_id; do
             [[ -z "$attached_id" ]] && continue
@@ -250,6 +281,13 @@ case "$mode" in
                     exit 1
                 fi
                 seen_tika=1
+            elif [[ -n "$expected_searxng_id" ]] &&
+                 [[ "$attached_id" == "$expected_searxng_id" ]]; then
+                if [[ "$seen_searxng" -ne 0 ]]; then
+                    echo "Duplicate SearXNG network member" >&2
+                    exit 1
+                fi
+                seen_searxng=1
             else
                 echo "Unauthorized RAG network member" >&2
                 exit 1
@@ -268,6 +306,12 @@ case "$mode" in
 
         if [[ -n "$expected_tika_id" ]] && [[ "$seen_tika" -ne 1 ]]; then
             echo "Registered Tika network member missing" >&2
+            exit 1
+        fi
+
+        if [[ -n "$expected_searxng_id" ]] &&
+           [[ "$seen_searxng" -ne 1 ]]; then
+            echo "Registered SearXNG network member missing" >&2
             exit 1
         fi
         ;;
