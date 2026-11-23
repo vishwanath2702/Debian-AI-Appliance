@@ -94,3 +94,55 @@ presence and size but did not independently recompute every hash.
 These are repository and build-workspace observations, not an
 installed-laptop software census. The November 18 quantitative
 measurement remains a separate historical snapshot.
+
+## November 18–23, 2026 — Quantitative engineering comparison
+
+This comparison was measured on November 24, 2026, using
+Step 1419. It compares the Git-tracked source/configuration
+files at two historical revisions.
+
+- November 18 baseline: `4586d9a73ad39794294f69e9fea9ebd25f4e482c`
+- November 23 SearXNG checkpoint: `cb27b8df92f2b6404719926f64db34e7643eab00`
+- Commits between revisions: **16**
+
+| Metric | Nov 18 | Nov 23 | Change |
+| --- | ---: | ---: | ---: |
+| Tracked source/config files | 378 | 475 | +97 |
+| Total lines | 142,036 | 166,211 | +24,175 |
+| Nonblank lines | 115,027 | 135,447 | +20,420 |
+| Approximate Python functions | 1,708 | 2,758 | +1,050 |
+| Approximate Rust functions | 3,299 | 3,300 | +1 |
+| Approximate Shell functions | 235 | 254 | +19 |
+| Python test definitions | 1,164 | 1,874 | +710 |
+| Rust test attributes | 1,674 | 1,674 | 0 |
+| Test-related files | 144 | 207 | +63 |
+
+### Language breakdown
+
+| Language | Nov 18 files | Nov 23 files | Nov 18 lines | Nov 23 lines | Line change |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Rust | 102 | 102 | 73,744 | 73,768 | +24 |
+| Python | 163 | 251 | 28,861 | 51,369 | +22,508 |
+| Markdown | 39 | 39 | 26,539 | 26,697 | +158 |
+| Shell | 40 | 43 | 12,112 | 13,464 | +1,352 |
+| Systemd | 8 | 8 | 179 | 179 | 0 |
+| TOML | 14 | 14 | 264 | 264 | 0 |
+| YAML | 10 | 12 | 157 | 171 | +14 |
+| JSON | 1 | 5 | 8 | 127 | +119 |
+| JavaScript | 1 | 1 | 172 | 172 | 0 |
+
+### Measurement notes
+
+- Both revisions were measured with the same Git-tracked-file
+  methodology, using selected file extensions.
+- The historical November 18 census included nonignored untracked
+  files. Its original figures are preserved above and must not
+  be directly subtracted from these tracked-file figures.
+- Function and test counts are regular-expression approximations,
+  not semantic code analysis.
+- File and line changes are net differences between snapshots,
+  not necessarily newly authored code.
+- `git diff --shortstat` reported 133 files changed,
+  25,451 insertions and 115 deletions.
+- These measurements do not establish installed-laptop behavior
+  or ISO validation status.
