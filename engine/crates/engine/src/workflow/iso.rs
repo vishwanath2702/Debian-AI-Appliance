@@ -179,10 +179,11 @@ Conflicts=graphical.target
 
 [Service]
 Type=simple
+Environment=TERM=linux
 ExecStart=/usr/bin/daia-tui
-StandardInput=tty
+StandardInput=tty-force
 StandardOutput=tty
-StandardError=tty
+StandardError=journal
 TTYPath=/dev/tty1
 TTYReset=yes
 TTYVHangup=yes
@@ -1924,6 +1925,20 @@ mod tests {
             installer_service.contains("ConditionKernelCommandLine=daia.mode=install"),
             "installer service must run only when Install DAIA is selected"
         );
+
+        for requirement in [
+            "StandardInput=tty-force",
+            "StandardOutput=tty",
+            "StandardError=journal",
+            "Environment=TERM=linux",
+            "TTYPath=/dev/tty1",
+            "Restart=no",
+        ] {
+            assert!(
+                installer_service.lines().any(|line| line == requirement),
+                "installer service missing startup requirement: {requirement}"
+            );
+        }
 
         let recovery_target =
             fs::read_to_string(rootfs.join("etc/systemd/system/daia-recovery.target"))
