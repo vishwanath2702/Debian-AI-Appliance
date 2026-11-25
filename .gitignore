@@ -22,6 +22,8 @@ build/*
 !/build/fetch-oci-image.py
 !/build/tests/
 build/tests/*
+!build/tests/test_cleanup.py
+!build/tests/test_cleanup_privileged.py
 !/build/tests/test_oci_digest_reference.py
 !/build/tests/test_oci_manifest_integrity.py
 !/build/tests/test_oci_manifest_bounds.py

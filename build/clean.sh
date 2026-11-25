@@ -76,6 +76,7 @@ def usage():
     print("  ./builder.sh clean --workspace ABSOLUTE_PATH")
     print("  ./builder.sh clean --workspace ABSOLUTE_PATH --execute --confirm DELETE")
     print("  ./builder.sh clean --execute --confirm DELETE")
+    print("  sudo bash build/clean.sh --workspace ABSOLUTE_PATH --privileged --execute --confirm DELETE")
     raise SystemExit(2)
 
 try:
@@ -84,6 +85,7 @@ try:
     selected = None
     lock_held = False
     auto_cleanup = False
+    privileged = False
     i = 0
     while i < len(args):
         arg = args[i]
@@ -91,6 +93,8 @@ try:
             pass
         elif arg == "--lock-held":
             lock_held = True
+        elif arg == "--privileged":
+            privileged = True
         elif arg == "--auto-clean":
             auto_cleanup = True
         elif arg == "--workspace":
@@ -116,19 +120,49 @@ try:
     if auto_cleanup and execute and not lock_held:
         refuse("automatic deletion requires inherited build lock")
 
+    if privileged:
+        if not execute or not confirmed or selected is None:
+            refuse("privileged cleanup requires one confirmed workspace")
+        if auto_cleanup or lock_held:
+            refuse("privileged cleanup cannot be automatic or inherited")
+        if os.geteuid() != 0:
+            refuse("privileged cleanup requires explicit administrator authorization")
+        sudo_uid = os.environ.get("SUDO_UID", "")
+        if not sudo_uid.isdecimal() or int(sudo_uid) == 0:
+            refuse("privileged cleanup requires a non-root sudo caller")
+        expected_uid = int(sudo_uid)
+    else:
+        if os.geteuid() == 0:
+            refuse("root cleanup requires explicit --privileged")
+        expected_uid = os.geteuid()
+
+    if not shutil.rmtree.avoids_symlink_attacks:
+        refuse("symlink-resistant deletion is unavailable")
+
     safe_directory(root)
     safe_directory(work)
 
+    if privileged:
+        for directory in (root, work):
+            metadata = directory.lstat()
+            if metadata.st_uid != expected_uid:
+                refuse("unexpected project directory ownership")
+            if metadata.st_mode & 0o022:
+                refuse("unsafe project directory permissions")
+
     lock_path = work / ".daia-build-cleanup.lock"
+    lock_flags = os.O_RDWR | os.O_NOFOLLOW | os.O_CLOEXEC
+    if not privileged:
+        lock_flags |= os.O_CREAT
     lock_fd = os.open(
         lock_path,
-        os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_CLOEXEC,
+        lock_flags,
         0o600,
     )
     lock_stat = os.fstat(lock_fd)
     if not stat.S_ISREG(lock_stat.st_mode):
         refuse("cleanup lock is not a regular file")
-    if lock_stat.st_uid != os.geteuid():
+    if lock_stat.st_uid != expected_uid:
         refuse("cleanup lock has unexpected ownership")
     if lock_stat.st_mode & 0o077:
         refuse("cleanup lock permissions are unsafe")
@@ -302,6 +336,11 @@ try:
 
         target = approved[0]
         validate(target, mounts())
+
+        if privileged:
+            if target.lstat().st_uid != expected_uid:
+                refuse("unexpected workspace ownership")
+            print("PRIVILEGED_CLEANUP=YES")
 
         work_fd = os.open(
             work,
