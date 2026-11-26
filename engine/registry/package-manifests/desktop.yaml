@@ -35,6 +35,8 @@ packages:
   - pipewire-pulse
   - wireplumber
   - libspa-0.2-bluetooth
+  - bluez
+  - bluedevil
   - plasma-pa
   - alsa-utils
 

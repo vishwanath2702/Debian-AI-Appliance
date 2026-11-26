@@ -190,6 +190,8 @@ packages:
                 "pipewire-pulse".to_owned(),
                 "wireplumber".to_owned(),
                 "libspa-0.2-bluetooth".to_owned(),
+                "bluez".to_owned(),
+                "bluedevil".to_owned(),
                 "plasma-pa".to_owned(),
                 "alsa-utils".to_owned(),
                 "nano".to_owned(),
